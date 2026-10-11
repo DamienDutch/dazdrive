@@ -1,0 +1,37 @@
+# Local development extras: never part of the public tree (a release build compiles without them)
+plugin/dazdrive/core/dev.cpp
+plugin/dazdrive/core/dev.h
+docs/ha-koppeling.md
+
+# Private working notes and reading-version pages: local only
+CLAUDE.md
+notes/
+docs/artifacts/
+
+# Build output and snapshots of earlier builds
+*.dll
+plugin/dazdrive-0.*
+plugin/probe/
+plugin/suite/
+plugin/src/
+plugin/test.cfg
+plugin/dazdrive/core/preset_standard.inc
+plugins_off/
+tools/sim/sim
+tools/sim/sim_creep
+tools/sim/sim_cruise
+tools/sim/sim_lane
+tools/sim-0.2/
+__pycache__/
+
+# Release folders and zips: published as GitHub Releases, not in the tree
+release/dazdrive-*/
+release/*.zip
+release/setup-preview/
+
+# Ride logs and test data
+runs/
+*.csv
+
+# Local tools that read ride logs into other systems
+tools/import_runs.py

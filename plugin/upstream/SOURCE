@@ -1,0 +1,2 @@
+deppelover/car_automatic_transmission @ 254a2f6 (2026-09-10), MIT
+README.md: only change = the Releases link on line 13 made absolute (was ../../releases, which is broken in this repo).

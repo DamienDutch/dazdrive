@@ -1,0 +1,139 @@
+// Shared declarations for the suite: DazDrive, one in-game plugin DLL for ETS2/ATS with
+// several modules (TrueShift now, ACC and lane keeping later).
+// MIT license. The hook layer is derived from car_automatic_transmission
+// (MIT, (c) 2026 Deppelover, github.com/deppelover/car_automatic_transmission).
+#pragma once
+
+#define SUITE_NAME "dazdrive"  // DazDrive: DLL, ini and output folder
+#define SUITE_VERSION "0.6.0-beta.1"
+
+#include <windows.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+
+#include "scssdk_telemetry.h"
+
+// ---------------------------------------------------------------- log.cpp
+
+extern char g_dir[MAX_PATH];  // output folder (plugins\SUITE_NAME\), trailing backslash
+void log_open();
+void logline(const char *fmt, ...);  // one timestamped line in SUITE_NAME.log
+double wall_s();                  // seconds since the DLL started
+double sim_s();                   // simulation time in seconds (stops while paused)
+FILE *open_out(const char *name, const char *mode);
+// A csv trace past csv_max_mb moves to <name>.1 (one generation) and starts again with the same header line.
+void csv_cap(FILE **f, const char *name);
+extern double g_csv_max_mb;
+// A new incident file <output>\<dir>\<prefix>_<local date_time>.csv; the folder is first trimmed to max_mb (oldest first).
+// stamp gets the local date_time part of the name (yyyy-mm-dd_hh-mm-ss). NULL if it cannot be made.
+FILE *open_incident(const char *dir, const char *prefix, double max_mb, char *stamp, size_t n);  // NULL for *.csv below log_level 2
+
+// log_level (ini [core]): 0 = events only (start, hooks, errors, mode changes, AEB incidents), 1 = + every shift and the
+// modules' detail lines, 2 = + periodic traces and the csv trace files.
+extern int g_log_level;
+extern double g_log_max_mb;
+// LOG_BOOST: an experimental module defines it as 1 before including this file, so its detail lines already show one
+// log level lower (the more experimental, the more logging by default)
+#ifndef LOG_BOOST
+#define LOG_BOOST 0
+#endif
+#define logv(lvl, ...) do { if (g_log_level + LOG_BOOST >= (lvl)) logline(__VA_ARGS__); } while (0)
+
+// ---------------------------------------------------------------- config.cpp
+
+// A module parameter. Values live in the module as floats; ints and booleans
+// are stored as floats too, which keeps the table simple.
+struct param {
+    const char *key;
+    float *val;
+    float def;
+    const char *help;  // one line, written into the default ini
+};
+
+struct module {
+    const char *name;   // ini section
+    const char *title;  // for the log
+    param *params;
+    int n_params;
+    void (*start)();                                          // after config and discovery
+    void (*frame)();                                          // SDK frame_end
+    void (*config)(const scs_telemetry_configuration_t *c);   // SDK configuration event
+    void (*stop)();                                           // telemetry shutdown
+    // Optional (NULL = none). reset: something broke continuity (see RESET_*): clear timers, filters, rate limits
+    // (and with RESET_HARD learned values and cached game pointers). status: one line for the log at start.
+    void (*reset)(int level, const char *why);
+    const char *(*status)();
+};
+
+enum { RESET_SOFT = 0,   // pause menu / long hitch / engine on: timers, filters, hold states
+       RESET_LOAD = 1,   // trailer (de)coupled: mass dependent values
+       RESET_HARD = 2 }; // other truck, save/load, teleport (ferry, train, quick travel): everything
+void session_reset(int level, const char *why);  // telemetry.cpp: logs and calls every module's reset
+extern const char *g_truck_unsupported;  // NULL, or why this truck is left to the game's own automatic (TrueShift sets it)
+
+
+extern module *g_modules[];
+extern int g_n_modules;
+void config_load();  // reads SUITE_NAME.ini, writes it with defaults first if missing
+
+// ---------------------------------------------------------------- telemetry.cpp
+
+struct telemetry {
+    // channels
+    float rpm, in_thr, eff_thr, in_brake, eff_brake, in_clutch, eff_clutch, speed, cruise, speed_limit, air_psi;
+    float in_steer;    // steering input -1..1, + = left (counterclockwise)
+    float yaw;         // yaw rate, rotations per second, + = turning left
+    int gear, dgear, motor_brake, parking_brake, engine_on, trailer, paused, wipers, air_warning;
+    unsigned retarder, retarder_steps;
+    scs_value_dplacement_t place;
+    scs_value_fvector_t acc;
+    scs_timestamp_t sim_time;
+    // truck configuration
+    int fwd_gears, rev_gears, wheels;
+    float ratio[32], diff, rpm_limit;
+    float wheel_radius[16];
+    int wheel_powered[16];
+    char shifter[32];
+    float cargo_mass;
+    // derived
+    float accel;       // longitudinal acceleration from speed, m/s2, filtered
+};
+extern telemetry T;
+void telemetry_register(const scs_telemetry_init_params_v101_t *p);
+void telemetry_frame();  // derived values, called first in frame_end
+
+// ---------------------------------------------------------------- shared between modules
+
+// sound.cpp: short tones (freqs in Hz, 0 = pause), async; g_volume 0..1 (0 = silent)
+void play_tones(const float *freqs, int n, int ms);
+// input.cpp: wheel/joystick buttons (numbered from 1); input_pressed = went down since the last poll
+void input_poll();
+int input_pressed(int button, int modifier);
+const char *input_wheel_name();  // winmm name of the most button-rich present joystick ("" = none found yet)
+int input_held(int button);  // down right now (any device)
+extern float g_volume;
+extern volatile float g_creep_brake;  // Creep: brake request it wants (crawl held on a descent; Cruise applies it)
+extern volatile int g_crawl_on;       // Creep: the driver has crawl switched on
+extern volatile int g_rolling;        // TrueShift has the truck in neutral (eco-roll)
+extern volatile float g_creep_thr;     // Creep asks the merged throttle for this much (0..~0.15): Cruise's stub maxes it in
+extern volatile float g_pcc_need_kmh;  // TrueShift: extra speed over the set speed the next climb on the route needs (NAN = unknown)
+extern volatile int g_cruise_smooth;  // the Cruise module drives the cruise throttle itself
+extern volatile char g_dash_flash;    // a letter to show on the dashboard for a moment (ACC C/N/F/O, limit S/X, lane L/X)
+extern volatile char g_dash_status;   // a letter shown while something holds (B hill-start brake, K creep); 0 = none
+extern double g_dash_flash_until;     // wall_s() until which it shows
+float wheel_radius();    // powered wheels, meters (0 if unknown)
+
+// ---------------------------------------------------------------- optional local build extras
+// A local build may add core/dev.cpp + core/dev.h (build.sh then defines DAZDRIVE_DEV). A release never has them: there
+// DEV_INIT(), DEV_SECTION() and every DEV_NOTE(...) are empty and their arguments are not even compiled.
+#ifdef DAZDRIVE_DEV
+#include "dev.h"
+#define DEV_INIT() dev_init()
+#define DEV_SECTION(name) dev_section(name)
+#define DEV_NOTE(call) do { if (dev_on()) dev_##call; } while (0)
+#else
+#define DEV_INIT() do { } while (0)
+#define DEV_SECTION(name) 0
+#define DEV_NOTE(call) do { } while (0)
+#endif
