@@ -22,7 +22,7 @@
 
 // ---------------------------------------------------------------- settings
 
-static float p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_hint_hold, p_min_gap, p_dwell_ud, p_dwell_du,
+static float p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, p_min_gap, p_dwell_ud, p_dwell_du,
     p_max_skip, p_skip_acc, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
     p_eb_down, p_eb_light, p_eb_skip, p_m_manual, p_m_assist, p_m_lug, p_letter, p_start_fix, p_slip_s, p_launch_torque, p_launch_rpm,
@@ -32,6 +32,7 @@ static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = TrueShift on, 0 = the game's own automatic" },
     { "takeover", &p_takeover, 1, "1 = TrueShift picks the gears, 0 = only log what it would do" },
     { "takeover_kmh", &p_on_kmh, 7, "TrueShift takes over from the game's automatic above this speed" },
+    { "takeover_rpm", &p_on_rpm, 1250, "TrueShift takes over as soon as the engine has reached this rpm with the clutch closed in any gear (the clutch is locked then, so the rpm is real); 0 = by speed only (takeover_kmh)" },
     { "handback_kmh", &p_off_kmh, 4, "and hands back below this speed (starting, stopping, maneuvering)" },
     { "hint_hold_s", &p_hint_hold, 10, "seconds a gear chosen with the shift-hint buttons is held (0 = off)" },
     { "min_gap_s", &p_min_gap, 0.5f, "minimum time between two shifts" },
@@ -528,7 +529,7 @@ static void refresh(void *self)
     float v = fabsf(T.speed), kmh = v * 3.6f;
     int was = S.ours;
     if (T.parking_brake || kmh < p_off_kmh) S.ours = 0;
-    else if (kmh >= p_on_kmh) S.ours = 1;
+    else if (p_on_rpm > 0 ? (T.rpm >= p_on_rpm && T.gear > 0 && T.eff_clutch < 0.1f && kmh >= 3) : kmh >= p_on_kmh) S.ours = 1;
     if (S.ours && !was) S.ours_at = now;
 
     // Learn the rpm correction while the clutch is closed and the speed steady.

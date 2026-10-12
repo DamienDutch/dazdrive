@@ -26,7 +26,7 @@ static const struct { const char *sec, *key; float v; } k_standard[] = {
 // a brake request above 1, a log that rotates every line). Everything else only has to be finite and sane in size.
 static const struct { const char *sec, *key; float lo, hi; } k_bounds[] = {
     { "core", "log_level", 0, 2 }, { "core", "incident_mb", 0, 500 }, { "core", "csv_max_mb", 0.5f, 200 }, { "core", "log_max_mb", 0.2f, 100 },
-    { "trueshift", "takeover_kmh", 0, 60 }, { "trueshift", "handback_kmh", 0, 60 }, { "trueshift", "hint_hold_s", 0, 120 },
+    { "trueshift", "takeover_kmh", 0, 60 }, { "trueshift", "handback_kmh", 0, 60 }, { "trueshift", "takeover_rpm", 0, 3000 }, { "trueshift", "hint_hold_s", 0, 120 },
     { "trueshift", "min_gap_s", 0, 10 }, { "trueshift", "max_skip", 0, 6 }, { "trueshift", "kickdown_pedal", 0.3f, 1 },
     { "trueshift", "power_from", 0.05f, 1 }, { "trueshift", "power_full", 0.1f, 1 }, { "trueshift", "eco_reserve", 1, 5 },
     { "trueshift", "power_reserve", 1, 5 }, { "trueshift", "reserve", 1, 5 }, { "trueshift", "launch_torque", 0.1f, 1 },

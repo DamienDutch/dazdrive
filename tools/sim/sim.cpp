@@ -409,6 +409,7 @@ int main(int argc, char **argv)
 {
     verbose = argc > 1 && !strcmp(argv[1], "-v");
     for (int i = 0; i < m_trueshift.n_params; i++) *m_trueshift.params[i].val = m_trueshift.params[i].def;
+    set_param("takeover_rpm", 0);   // the simulator takes over by speed (its clutch and rpm model is not detailed enough for the rpm rule)
     T.fwd_gears = 12; T.diff = 2.85f; T.wheels = 4; T.retarder_steps = 5;
     for (int i = 0; i < 12; i++) T.ratio[i] = RATIO[i];
     G.tail_site = 5; G.decide_site = 1; G.n_choose = 1; G.choose_sites[0] = 2; G.n_start = 1; G.start_sites[0] = 4;
