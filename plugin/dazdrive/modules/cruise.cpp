@@ -61,7 +61,7 @@ static param g_params[] = {
     { "emergency_off_decel", &p_ess_off, 2.5f, "below this deceleration (m/s2) before the truck stops, the hazards go off again (real trucks: 2.5)" },
     { "emergency_kmh", &p_ess_kmh, 50, "only above this speed (km/h)" },
     { "air_min_psi", &p_air_min, 75, "below this brake air pressure (psi) the module stops its own brake requests (bends, crawl descent) and leaves descents to the engine brake" },
-    { "curve_lat", &p_curve_lat, 3.25f, "sideways acceleration (m/s2) allowed in bends, the same in every mode (higher = faster through bends)" },
+    { "curve_lat", &p_curve_lat, 3.25f, "sideways acceleration (m/s2) allowed in bends at about 92 km/h, the same in every mode (higher = faster through bends). Slower bends get more, up to 1.23x (4 m/s2), like the allowance in a Mercedes-Benz patent" },
     { "junctions", &p_junc, 1, "1 = with navigation: also slow down before junctions where the route turns, and before roundabouts (needs curves = 1; always on with own_acc = 1)" },
     { "junction_lat", &p_junc_lat, 2.0f, "sideways acceleration (m/s2) allowed in a junction turn (v = sqrt(this x turn radius), at least 15 km/h)" },
     { "junction_min_deg", &p_junc_deg, 25, "turns smaller than this (degrees) are not slowed for" },
@@ -854,11 +854,19 @@ static float lead_rel_speed(char *g, float lead, float dt)
 }
 
 // The gap we want to keep (m): a standstill gap plus the time gap of the player's distance level (and mode).
+// (Damien 12-10: in a queue it may close up, whatever the distance level, not onto the bumper: from walking pace the gap grows
+// from 4.5 m to own_acc_stop_m and the time gap fades in, both full at 30 km/h)
+static float stop_gap(float v_ms)
+{
+    float lo = fminf(4.5f, p_own_stop_m), fade = fminf(1.0f, v_ms / 8.33f);
+    return lo + (p_own_stop_m - lo) * fade;
+}
 static float desired_gap(float v_ms)
 {
     float mx = fmaxf(p_max_m, p_own_stop_m);
+    float fade = fminf(1.0f, v_ms / 8.33f);
     // level 1: the standstill gap only matters at low speed (max, not sum); 2 and 3 keep the margin on top
-    float m = g_level == 0 ? fmaxf(p_own_stop_m, gap_s() * v_ms) : p_own_stop_m + gap_s() * v_ms;
+    float m = g_level == 0 ? fmaxf(stop_gap(v_ms), gap_s() * v_ms) : stop_gap(v_ms) + gap_s() * v_ms * fade;
     return m > mx ? mx : m;
 }
 
@@ -877,6 +885,7 @@ static void own_acc(char *g, float dt)
     if (p_own_acc <= 0 || !*(unsigned char *)(g + GA_ON) || g_level < 0 || !(lv == lv) || !(dt > 0 && dt < 0.5f)) { OA.on = 0; s_want_acc = 0; s_lv_prev = NAN; s_a_lead = 0; return; }
     float set = *(float *)(g + GA_SET), v = fabsf(T.speed), kmh = v * 3.6f;
     float dstar = desired_gap(v);
+    float stopm = stop_gap(v);
     s_dstar = dstar;
     // Heavier = slower to stop (Damien: "start braking earlier at 60 t"): from 30 t up the planned deceleration shrinks
     // and the same need asks for more brake, up to 2.5x at 75 t.
@@ -892,7 +901,7 @@ static void own_acc(char *g, float dt)
     // braking emptied the brake air, 135 → 25 psi in 4 s): never faster than the speed from which a comfortable
     // deceleration still ends at the lead's speed at the wanted gap.
     if (p_own_plan > 0) {
-        float room = fmaxf(0, lead - fmaxf(p_own_stop_m, 0.6f * dstar));
+        float room = fmaxf(0, lead - fmaxf(stopm, 0.6f * dstar));
         float v_ok = sqrtf(fmaxf(0, lv) * fmaxf(0, lv) + 2 * (p_own_plan / heavy) * room) * 3.6f;
         if (v_ok < want) want = v_ok;
     }
@@ -939,7 +948,7 @@ static void own_acc(char *g, float dt)
     }
     float dn = p_own_dec * 3.6f, up = p_own_up * 3.6f;
     if (closing > 0.3f) {  // deceleration it takes to be at the lead's speed before the standstill gap: above 0.5 m/s2 the target falls faster (up to 8x)
-        float a_req = heavy * closing * closing / (2 * fmaxf(lead - p_own_stop_m, 2.0f));
+        float a_req = heavy * closing * closing / (2 * fmaxf(lead - stopm, 2.0f));
         if (a_req > 0.5f) dn *= 1 + fminf(7.0f, (a_req - 0.5f) * 4);
     }
     // Brake ourselves, early and gently, when easing off is not enough (Damien, ts4p 308-314 s: a cut-in at 27 m that
@@ -951,7 +960,7 @@ static void own_acc(char *g, float dt)
         // (lv - old lv) / dt, audit 11-10: a 0.35 brake request for 1.5 s)
         if (s_lv_prev == s_lv_prev && dt > 0) s_a_lead += ((lv - s_lv_prev) / dt - s_a_lead) * fminf(1, dt / 0.5f);
         s_lv_prev = lv;
-        float gmin = fmaxf(p_own_stop_m, 0.5f * dstar), room = fmaxf(1.0f, lead - gmin);
+        float gmin = fmaxf(stopm, 0.5f * dstar), room = fmaxf(1.0f, lead - gmin);
         float need = closing > 0 ? closing * closing / (2 * room) : 0;
         // the lead's own braking only counts when it is near: ts4t 444-458 s a car 99 m ahead (radar range edge, 31 m
         // wanted) braked to a junction and we mirrored it 78 -> 4 km/h with 0.30 requests; far away the closing term
@@ -968,7 +977,7 @@ static void own_acc(char *g, float dt)
         // psi). Plan the stop at stop_m - 1 m from the lead's bumper, with an offset that beats the idle creep, and
         // keep a light hold at a standstill until the lead pulls away (then Stop&Go drives off).
         if (p_own_brake > 0 && lv < 1.5f && v > 0.05f && lead < gmin + 15) {
-            float s = lead - fmaxf(4.0f, p_own_stop_m - 1);
+            float s = lead - fmaxf(3.5f, stopm - 2);
             float a_t = v * v / (2 * fmaxf(0.3f, s));
             // only when the stop really needs it: ts4r 213-215 s stopped at 16.6 m behind a stopped car (a_t 0.2) with
             // our throttle fighting it; with room to spare the idle creep closes in by itself (Damien liked that)

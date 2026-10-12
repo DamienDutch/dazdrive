@@ -456,6 +456,24 @@ float route_curve_speed(float a_lat, float a_dec, float a_dec_jn)
     return vj == vj && (vb != vb || vj < vb) ? vj : vb;
 }
 
+// Sideways acceleration allowed against the speed through the bend, in the shape of the permissible lateral acceleration in
+// a Mercedes-Benz patent (US12139138: 5 m/s2 at 25 km/h, 4 at 51, 3.5 at 67, 3.25 at 92, 3.2 from 111 km/h), as a factor on the
+// curve_lat of the ini (= the value at about 92 km/h). Capped at 4/3.25: a laden truck rolls over from about 3 m/s2 for real.
+static float lat_scale(float v_ms)
+{
+    static const float kmh[] = { 25, 51, 67, 92, 111 }, a[] = { 5.0f, 4.0f, 3.5f, 3.25f, 3.2f };
+    float k = v_ms * 3.6f, r;
+    if (k <= kmh[0]) r = a[0];
+    else if (k >= kmh[4]) r = a[4];
+    else {
+        int i = 0;
+        while (k > kmh[i + 1]) i++;
+        r = a[i] + (a[i + 1] - a[i]) * (k - kmh[i]) / (kmh[i + 1] - kmh[i]);
+    }
+    r /= 3.25f;
+    return r > 4.0f / 3.25f ? 4.0f / 3.25f : r;
+}
+
 static float route_bend_speed(float a_lat, float a_dec)
 {
     if (!R.ok || R.n < 5) return NAN;
@@ -476,6 +494,7 @@ static float route_bend_speed(float a_lat, float a_dec)
         if (ang < 0.02f) continue;                      // straight enough
         float radius = 0.5f * (la + lb) / ang;
         float v_bend = sqrtf(a_lat * radius);
+        for (int it = 0; it < 3; it++) v_bend = sqrtf(a_lat * lat_scale(v_bend) * radius);  // the allowance depends on the speed it gives
         float d = (float)(i * STEP) - 1.5f * STEP;      // distance to the bend (its window starts earlier)
         float v_now = sqrtf(v_bend * v_bend + 2 * a_dec * (d > 0 ? d : 0));
         if (best != best || v_now < best) best = v_now;
