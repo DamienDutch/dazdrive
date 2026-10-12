@@ -1,39 +1,53 @@
 # DazDrive
 
-One in-game plugin for Euro Truck Simulator 2 that makes the game's own driver-assistance systems
-behave like the real thing. It draws nothing on screen and changes nothing in your save: it only
-changes *how* the automatic gearbox, the cruise control and the lane assist decide. Remove the DLL
-and everything is stock again. Lekker rijden.
+A plugin for Euro Truck Simulator 2 that makes the game's automatic gearbox, cruise control and lane
+assist behave like the real thing. Lekker rijden.
 
+**[Download the latest release](https://github.com/DamienDutch/dazdrive/releases)** ·
+[Problems? Open an issue](https://github.com/DamienDutch/dazdrive/issues/new/choose) ·
 **Status: beta.** Built and tested by one driver with one wheel.
 
-Project: <https://github.com/DamienDutch/dazdrive> · Downloads: [Releases](https://github.com/DamienDutch/dazdrive/releases)
-· Problems: [open an issue](https://github.com/DamienDutch/dazdrive/issues/new/choose)
+## Read this first
 
-## Please read first
+You **must** know these before you install it:
 
-- DazDrive patches the game's code in memory. It can crash the game, and there is no guarantee that
-  it works on your setup. You use it at your own risk.
-- The DLL is not signed, so Windows Defender or SmartScreen may warn about it. `BUILD-INFO.txt` in
-  the zip has the version and the SHA-256 of the DLL, so you can check you have the real file.
+- **ETS2 1.60 only.** It works on the Steam beta branch `temporary_1_60`, not on the regular version
+  (1.61) yet. Steam > right-click Euro Truck Simulator 2 > Properties > Betas > `temporary_1_60`. A save
+  made with a newer game version may not load in an older one, so copy your profile folder
+  (`Documents\Euro Truck Simulator 2`) somewhere safe first. American Truck Simulator is not supported.
+- **Do not use it on TruckersMP.** Its rules forbid tools that change gameplay and its client scans
+  memory, so you risk a ban. Remove the DLL before you join. It is made for singleplayer. SCS Convoy is
+  not tested yet: host your own session and tell the people you drive with.
+- **Use at your own risk.** DazDrive patches the game's code in memory. It can crash the game and there
+  is no guarantee it works on your setup. On a game version it does not know it should find nothing to
+  hook and do nothing; it says so in `plugins\dazdrive\dazdrive.log`. That is not a guarantee either.
+- **The DLL is not signed**, so Windows Defender or SmartScreen may warn about it. `BUILD-INFO.txt` in
+  the zip has the SHA-256 of the DLL, so you can check you have the real file.
 - Not affiliated with SCS Software.
 
-## Which game
+## Why I made this
 
-- **ETS2 only, and only the Steam beta branch `temporary_1_60`** (ETS2 1.60). The regular Steam
-  version (1.61) is **not supported yet**. To switch: Steam > right-click Euro Truck Simulator 2 >
-  Properties > Betas > pick `temporary_1_60`. A save made with a newer game version may not load in
-  an older one, so copy your profile folder (`Documents\Euro Truck Simulator 2`) somewhere safe first.
-- On any other version the plugin should find nothing to hook and do nothing. It says so in
-  `plugins\dazdrive\dazdrive.log` and in the game's own `game.log.txt`. That is not a guarantee.
-- American Truck Simulator is not supported in this release: the plugin logs "not supported" and
-  stays inactive.
-- **Multiplayer:** made for singleplayer. **Not on TruckersMP**: its rules forbid tools that change
-  gameplay and its client scans memory, so you would risk a ban; remove the DLL before you join.
-  **SCS Convoy** is not tested yet: host your own session and tell the people you drive with. The
-  project this one builds on (car_automatic_transmission) advises against using it in Convoy.
+I got tired of the game's automatic. It shifts at fixed rpm and does not care about load, grade or the
+road ahead. So I started with the gearbox and made it shift like a real truck. Once that worked, the cruise
+control and the lane assist were the next things that bothered me, and if I could change one, why not
+the rest. That is how it grew into one plugin.
 
-## What it does
+## Why you would use it
+
+The game already has an automatic, cruise control and lane assist. This changes how they decide:
+
+- **A gearbox that thinks.** It picks the gear from engine torque, weight and grade instead of fixed rpm:
+  lower rpm when it can, skipping gears, learning when an upshift did not pull, rolling in neutral on
+  gentle descents, opening the clutch near idle when you brake to a stop.
+- **Calmer cruise control.** No throttle bursts after a shift, it holds the set speed downhill with
+  the engine brake and retarder, and an emergency braking that does not empty the brake air like the
+  game's does.
+- **Nothing to set up.** Drop it in and drive; the standard setup has the proven features on and the
+  rest off. A setup page is there if you want more. Remove the DLL and everything is stock again.
+- **When something goes wrong it keeps the evidence**: the moment is saved as a file you can attach to a
+  bug report (see "Reporting a problem").
+
+## What is in it
 
 | Feature | Stage | Default | What it does |
 |---|---|---|---|
@@ -100,7 +114,9 @@ single features, detect your wheel buttons, save the ini next to the page and re
   hunt" under Logging on the setup page, drive again and zip the `.csv` files from the same folder
   (they only exist at log level 2).
 
-## Build from source
+## For developers
+
+### Build from source
 
 ```
 plugin/dazdrive/build.sh            # MinGW g++ in a throwaway Fedora container (podman), no host packages
@@ -115,7 +131,7 @@ The DLL finds the game's functions by byte patterns and hooks them at runtime. O
 does not know, it should find nothing, log that and do nothing, but that is no guarantee (see
 "Please read first").
 
-## Repository layout
+### Repository layout
 
 - `plugin/dazdrive/` – the plugin: `core/` (hooks, telemetry, route, input, config, log) and
   `modules/` (`trueshift.cpp`, `cruise.cpp`, `lane.cpp`, `creep.cpp`).
@@ -139,4 +155,4 @@ MIT, see [LICENSE](LICENSE).
   Deppelover (MIT): thanks.
 - [ets2la_plugin](https://gitlab.com/ETS2LA/ets2la_plugin) (MIT) was used as a reference for the
   route and memory layouts.
-- The SCS telemetry SDK is by SCS Software (MIT). DazDrive is not affiliated with SCS Software.
+- The SCS telemetry SDK is by SCS Software (MIT).
