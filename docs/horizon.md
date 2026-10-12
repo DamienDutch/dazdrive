@@ -174,7 +174,7 @@ Per candidate: what, the real-world counterpart, value, feasibility (data/hook, 
 8. **Input without FFB / without a wheel**: the lane module assumes FFB (assist = wheel target); with `c_ff_enabled` 0 or mouse/keyboard the assist adds up in `veh+0x640`
    (`docs/lka-roll-re.md` A1), which is a different behavior and is handled by falling back to the game's own law. Mode/crawl toggle: the game keybind works (the cvar as source), so keyboard users need nothing extra.
 9. **ETS2 1.61 and ATS 1.61**: `tools/check_suite.py` on a new exe; everything that is 1.60-only fails safe but silently, so the status line has to say so out loud (D4).
-10. **Small, known**: a second - tap during easing counts from the eased value; the `g_acc` +0.1 trick and the accmode wrapper are fragile on a game update; `curve_lat` 3.25 may need tuning; the
+10. **Small, known**: a second - tap during easing counts from the eased value; the `g_acc` +0.1 trick and the accmode wrapper are fragile on a game update; `curve_lat` 3.125 may need tuning; the
     `junction ahead` upshift block on ProMods (a prefab every 130 m).
 
 ## 3. Out of scope (and why)

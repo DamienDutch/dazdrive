@@ -186,7 +186,7 @@ SETUP_GROUPS = [
         ("trueshift", "tones", "b", "Short tone when the gearbox mode changes", False),
         ("trueshift", "hint_hold_s", "n", "Seconds a gear chosen with the shift-hint buttons is held", False)]},
     {"id": "cc", "title": "Cruise control and ACC", "advanced": "cruise",
-     "tuning": [{"name": "Close", "desc": "ACC gaps 1.0 / 1.25 / 1.5 s: busy traffic, feels normal at the game's scale; bends 3.25 m/s2", "over": {}},
+     "tuning": [{"name": "Close", "desc": "ACC gaps 1.0 / 1.25 / 1.5 s: busy traffic, feels normal at the game's scale; bends 3.125 m/s2", "over": {}},
                 {"name": "Relaxed", "desc": "ACC gaps 1.5 / 2.0 / 2.5 s: more room; bends 2.75 m/s2",
                  "over": {"cruise": {"acc_short_s": 1.5, "acc_middle_s": 2, "acc_long_s": 2.5, "curve_lat": 2.75}}},
                 {"name": "Real truck", "desc": "ACC gaps 2.4 / 3.0 / 3.6 s like Detroit and Bendix; Stop&Go drives off by itself only after < 2 s; bends 2.4 m/s2",
