@@ -32,7 +32,7 @@ static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = TrueShift on, 0 = the game's own automatic" },
     { "takeover", &p_takeover, 1, "1 = TrueShift picks the gears, 0 = only log what it would do" },
     { "takeover_kmh", &p_on_kmh, 7, "TrueShift takes over from the game's automatic above this speed" },
-    { "takeover_rpm", &p_on_rpm, 1250, "TrueShift takes over as soon as the engine has reached this rpm with the clutch closed in any gear (the clutch is locked then, so the rpm is real); 0 = by speed only (takeover_kmh)" },
+    { "takeover_rpm", &p_on_rpm, 1000, "TrueShift takes over as soon as the engine has reached this rpm with the clutch closed in any gear (the clutch is locked then, so the rpm is real); 0 = by speed only (takeover_kmh)" },
     { "handback_kmh", &p_off_kmh, 4, "and hands back below this speed (starting, stopping, maneuvering)" },
     { "hint_hold_s", &p_hint_hold, 10, "seconds a gear chosen with the shift-hint buttons is held (0 = off)" },
     { "min_gap_s", &p_min_gap, 0.5f, "minimum time between two shifts" },
@@ -126,6 +126,7 @@ static struct {
     int mode;
     int ours;               // above the takeover speed (with hysteresis)
     double ours_at;
+    int ours_launch;        // taken over while pulling away (below 25 km/h), not after a pause or a teleport at speed
     int last_gear;
     double shift_at;
     int shift_dir;
@@ -532,7 +533,7 @@ static void refresh(void *self)
     // By rpm: the engine has reached takeover_rpm with the clutch closed in a gear. Also above 20 km/h whatever the rpm: after a
     // pause, a load or a teleport the truck may already be cruising at 900 rpm in a high gear and never reach the rpm.
     else if (p_on_rpm > 0 ? ((T.rpm >= p_on_rpm && T.gear > 0 && T.eff_clutch < 0.1f && kmh >= 3) || kmh >= fmaxf(p_on_kmh, 20.0f)) : kmh >= p_on_kmh) S.ours = 1;
-    if (S.ours && !was) S.ours_at = now;
+    if (S.ours && !was) { S.ours_at = now; S.ours_launch = kmh < 25; }
 
     // Learn the rpm correction while the clutch is closed and the speed steady.
     int g = gb_gear(self);
@@ -1020,7 +1021,9 @@ static int decide_gear(void *self, const char **why)
     // in a high gear) or close above the takeover speed.
     // The launch is the exception (Damien 12-10: 1 -> 2 -> 3 -> 4 -> 5 one by one between 12 and 20 km/h, "skip one, also in Eco"): from
     // the takeover speed the first gears may be skipped; the rpm and pull checks below still decide.
-    if (!(cur <= 2 && v * 3.6f >= p_on_kmh) && (now - S.ours_at < 3 || v * 3.6f < p_on_kmh + 5)) skips = 0;
+    // (while pulling away only 1 s after the takeover, else 3: the game starts a light truck in 4 and the next two shifts come within
+    // seconds; after a pause or a teleport the gear may be wrong; the rpm and pull checks below still stop a skip that lands too low)
+    if (!(cur <= 2 && v * 3.6f >= p_on_kmh) && (now - S.ours_at < (S.ours_launch ? 1.0 : 3.0) || v * 3.6f < p_on_kmh + 5)) skips = 0;
     float v2 = fmaxf(0.5f, v - f_res / S.mass * S.eng.shift_time);
 
     // Early upshift: light load, the new gear lands on the torque plateau and

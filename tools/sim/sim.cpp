@@ -519,6 +519,8 @@ int main(int argc, char **argv)
     }
     float st;
     M.v = 0; T.speed = 0;  // the start-gear checks are from a standstill (else the engage-at-speed path answers)
+    run("L1 13.4 t, Eco, game starts in 4 at 12 km/h, full throttle (ride 12-10 1 > 4 > 5 > 6)", {13400, 12, 4, 50, 10.0f, 1.0f}, c_full);
+    run("L2 13.4 t, Eco, from 14 km/h in 3, light throttle 0.4", {13400, 14, 3, 50, 10.0f, 1.0f}, c_light);
     M.wet = 1; T.wipers = 1; m_trueshift.frame(); M.mass = 26000; M.grade_pct = 0; M.pedal = 0.5f; st = (float)s_start(SELF); printf("\nstart gear 26 t flat WET: %g (game 1)\n", st);
     M.wet = 0; T.wipers = 0; m_trueshift.frame(); st = (float)s_start(SELF); printf("start gear 26 t flat dry: %g (game 1)\n", st);
     M.mass = 40000; M.grade_pct = 8; M.pedal = 0.5f; st = (float)s_start(SELF); printf("\nstart gear 40 t on 8%%: %g (game 1)\n", st);
