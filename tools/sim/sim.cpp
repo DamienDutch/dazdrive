@@ -28,6 +28,7 @@ void incident(const char *kind, const char *fmt, ...)
 }
 const char *g_truck_unsupported;
 volatile float g_creep_brake;
+volatile float g_clutch_ours = __builtin_nanf("");
 volatile char g_dash_flash, g_dash_status;
 double g_dash_flash_until;
 void play_tones(const float *, int, int) {}

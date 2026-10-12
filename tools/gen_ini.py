@@ -81,6 +81,7 @@ STANDARD = {
     },
     "creep": {
         "enabled": 0,            # OFF: crawl / maneuver mode is experimental
+        "smooth_start": 0,       # OFF: the plugin's own clutch when pulling away is new (0.6.0-beta.2-dev), not ridden enough
         "start_on": 0,
         "trace": 0,
     },

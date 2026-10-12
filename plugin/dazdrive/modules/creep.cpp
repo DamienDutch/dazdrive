@@ -24,6 +24,7 @@
 #include <windows.h>
 
 static float p_enabled, p_creep, p_man, p_on, p_off, p_maxped, p_brake, p_rest, p_delay, p_rev, p_close, p_open, p_release, p_trace, p_letter, p_heavy_t, p_max_gear, p_heavy_gear, p_heavy_thr, p_arm, p_start_on, p_tog_hold, p_descent_brake, p_descent_kmh, p_tog_mode;
+static float p_crawl_rpm, p_launch, p_l_light, p_l_full, p_l_heavy, p_l_bite, p_l_gain, p_l_creep, p_l_final, p_l_rate, p_l_sync, p_l_max_s, p_l_end;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = crawl / maneuver mode on (automatic only; the clutch slips at idle in gears 1, 2 and R)" },
@@ -48,7 +49,20 @@ static param g_params[] = {
     { "heavy_t", &p_heavy_t, 20, "loads from this mass (metric tons, truck + trailer) are heavy: crawl in a low gear with a little throttle; lighter: clutch only, in a higher gear" },
     { "max_gear", &p_max_gear, 5, "light load: highest gear used for crawling (the lowest gear whose idle lock-up speed reaches creep_kmh)" },
     { "heavy_gear", &p_heavy_gear, 2, "heavy load: highest gear used for crawling" },
+    { "crawl_max_rpm", &p_crawl_rpm, 950, "heavy load: crawl in the lowest gear in which the engine stays at or under this speed (rpm) at the crawl speed: the clutch is closed there and the engine pulls from a higher speed with a little throttle. Lighter or when no gear fits: the clutch slips at idle in a higher gear as before. 0 = old rule (heavy_gear)" },
     { "heavy_throttle", &p_heavy_thr, 0.15f, "heavy load: most throttle the plugin adds when the clutch alone is not enough (0 = none; needs the Cruise module on)" },
+    { "smooth_start", &p_launch, 1, "1 = smooth start: pulling away (forward, from a standstill, automatic) the plugin closes the clutch itself, with or without crawl: the engine rises to a speed that follows the pedal, the clutch slips to hold it until the wheels catch up, then closes gently. 0 = the game's own clutch" },
+    { "smooth_start_rpm_light", &p_l_light, 200, "smooth start: engine speed above idle (rpm) the slip aims for with a light pedal" },
+    { "smooth_start_rpm_full", &p_l_full, 1200, "smooth start: engine speed (rpm) the slip aims for with the pedal flat" },
+    { "smooth_start_rpm_heavy", &p_l_heavy, 100, "smooth start: extra rpm for a heavy load (heavy_t), the engine needs more torque to get it going" },
+    { "smooth_start_bite", &p_l_bite, 0.96f, "smooth start: clutch position (1 = open) where the clutch starts to carry, the engine rises against it first" },
+    { "smooth_start_gain", &p_l_gain, 0.5f, "smooth start: how fast the clutch closes (per second) per 100 rpm the engine is above its aim; and opens when below" },
+    { "smooth_start_creep", &p_l_creep, 0.10f, "smooth start: the clutch always closes at least this fast (per second) so the slip ends; grows after 1 s" },
+    { "smooth_start_final", &p_l_final, 1.2f, "smooth start: closing speed (per second) of the last part, once engine and wheels are within smooth_start_sync_rpm; only used at the very end" },
+    { "smooth_start_max_rate", &p_l_rate, 2.0f, "smooth start: the fastest the clutch ever closes while it holds the engine at its aim (per second)" },
+    { "smooth_start_sync_rpm", &p_l_sync, 80, "smooth start: engine and wheel speed this close (rpm) = the clutch closes the rest" },
+    { "smooth_start_max_s", &p_l_max_s, 2.5f, "smooth start: longest slip time (s), then it closes at smooth_start_final whatever the engine does" },
+    { "smooth_start_end_kmh", &p_l_end, 14, "smooth start: at this speed (km/h) it is over, the clutch is closed and handed back to the game" },
     { "letter", &p_letter, 1, "1 = show C (crawl) on the dashboard while the mode is on" },
     { "trace", &p_trace, 1, "1 = write creep.csv (10 per second while the mode is on)" },
 };
@@ -208,6 +222,87 @@ static void creep_tick(const creep_in &in)
     }
 }
 
+// ---------------------------------------------------------------- launch (no game memory in here either)
+//
+// Pulling away without crawl (Damien 12-10: "the box hangs on a fixed rpm and then bangs the clutch shut"). A heavy-truck AMT
+// does it the other way round: the engine speed aimed for follows the pedal (idle + ~200 light, ~1200 flat), the clutch slips to
+// hold the engine there while the wheels speed up, and when engine and wheels are close it closes with a limited rate (jerk).
+struct launch_in {
+    float dt, speed, thr, brake, rpm, idle, rpm_per_ms;  // s, m/s forward, 0..1, 0..1, engine rpm, idle rpm, rpm of a locked clutch per m/s
+    int gear, heavy, blocked, shifting;
+    float handover;  // >= 0: the crawl just ended with this clutch value: carry on from it (rolling start), else only from a standstill
+};
+
+static int g_ln;            // the launch owns the clutch
+static float g_lc;          // clutch 0 (closed) .. 1 (open), what the drivetrain sees while g_ln
+static float g_ln_t, g_ln_rel, g_ln_shut, g_ln_ra, g_ln_rpm0, g_ln_rate;
+static int g_ln_up, g_ln_done;  // engine has risen to its aim; ended normally (clutch closed): the game's value is set to ours once
+static const char *g_ln_why = "";
+
+static float launch_aim(float thr, float idle, int heavy)
+{
+    float s = clampv((thr - 0.05f) / 0.85f, 0, 1);
+    s = s * s * (3 - 2 * s);
+    float lo = idle + p_l_light + (heavy ? p_l_heavy : 0), hi = fmaxf(p_l_full + (heavy ? p_l_heavy : 0), lo + 100);
+    return lo + (hi - lo) * s;
+}
+
+static void launch_end(const char *why, int normal)
+{
+    if (!g_ln) return;
+    logv(1, "Smooth start: over (%s) after %.1f s, clutch %.2f", why, g_ln_t, g_lc);
+    g_ln = 0; g_ln_done = normal; g_ln_why = why;
+}
+
+static void launch_tick(const launch_in &in)
+{
+    float vk = fabsf(in.speed) * 3.6f;
+    if (!g_ln) {
+        g_ln_done = 0;
+        int rest = vk < 1.2f && in.speed > -0.1f, roll = in.handover >= 0 && vk < p_l_end;
+        if (p_launch > 0 && !in.blocked && !in.shifting && in.gear > 0 && in.rpm_per_ms > 0 && in.thr > 0.06f && in.brake < 0.05f &&
+            (rest || roll) && in.idle > 200) {
+            g_ln = 1; g_ln_t = g_ln_rel = g_ln_shut = g_ln_rate = 0; g_ln_rpm0 = in.rpm;
+            g_ln_up = roll;
+            g_lc = roll ? fmaxf(in.handover, 0.02f) : p_l_bite;
+            g_ln_ra = launch_aim(in.thr, in.idle, in.heavy);
+            logv(1, "Smooth start: on (gear %d, %.1f km/h, pedal %.2f, aim %.0f rpm%s)", in.gear, vk, in.thr, g_ln_ra, roll ? ", from the crawl" : "");
+        }
+        return;
+    }
+    g_ln_t += in.dt;
+    g_ln_rel = in.thr < 0.03f ? g_ln_rel + in.dt : 0;
+    if (in.blocked) { launch_end("blocked", 0); return; }
+    if (in.shifting || in.gear <= 0) { launch_end("shift", 0); return; }
+    if (g_ln_rel > 0.4f) { launch_end("pedal released", 0); return; }
+    if (in.brake > 0.2f) { launch_end("brake", 0); return; }
+    if (vk > p_l_end + 4) { launch_end("speed", 0); return; }
+    float aim = launch_aim(in.thr, in.idle, in.heavy);
+    g_ln_ra += (aim - g_ln_ra) * fminf(1, in.dt / 0.25f);  // the aim follows the pedal, not jumps with it
+    // the engine speed 0.2 s from now (a flat pedal lifts it 1500+ rpm/s against a clutch that carries almost nothing at first):
+    // control that, not the speed of this moment, or the engine flares past its aim before the clutch has started to bite
+    if (in.dt > 0) g_ln_rate += ((in.rpm - g_ln_rpm0) / in.dt - g_ln_rate) * fminf(1, in.dt / 0.1f);
+    g_ln_rpm0 = in.rpm;
+    float rpm_p = in.rpm + clampv(g_ln_rate, 0, 3000) * 0.2f;
+    float lock = in.speed * in.rpm_per_ms, slip = in.rpm - lock, d;
+    if (!g_ln_up) {  // the engine rises against the bite point first (a real clutch pedal's first part)
+        g_lc = p_l_bite;
+        if (rpm_p >= g_ln_ra || g_ln_t > 1.2f) g_ln_up = 1;  // a little early: the engine is still rising when the clutch starts to carry
+        return;
+    }
+    // under its aim the engine is being dragged (24.9 t ride 12-10: 637 rpm against an aim of 932, 803 against 1299): open twice as hard
+    // as it closes, and never keep closing while it sags
+    float err = rpm_p - g_ln_ra;
+    d = -(p_l_creep * (1 + fmaxf(0, g_ln_t - 1.0f) * 3) + p_l_gain * (err < 0 ? 2.0f : 1.0f) * err / 100);
+    if (err < -150 && d < 0.3f) d = 0.3f;
+    d = fmaxf(d, -p_l_rate);
+    if (slip < p_l_sync || vk > p_l_end || g_ln_t > p_l_max_s) d = -p_l_final;
+    if (in.rpm > 100 && in.rpm < 0.92f * in.idle) d = 2.0f;  // never drag the engine down
+    d = clampv(d, -fmaxf(p_l_rate, p_l_final), 2.0f);
+    g_lc = clampv(g_lc + d * in.dt, 0, 1);
+    if (g_lc < 0.02f) { g_ln_shut += in.dt; if (g_ln_shut > 0.15f) launch_end("closed", 1); } else g_ln_shut = 0;
+}
+
 // ---------------------------------------------------------------- game side (1.60 layout only)
 
 enum { S_AMODE = 0x100, S_LATCH = 0x101, S_DRIVE = 0x110, I_DRIVE = 0x150, D_ENGINE = 0x360, D_IDLE_ADD = 0x2dc, E_IDLE = 0x228, GA_HILL = 0x1d00 };
@@ -221,6 +316,13 @@ static int pick_gear(int heavy, float idle)
     if (cap < 1) cap = 1;
     float r = wheel_radius();
     if (!(r > 0.1f && idle > 200 && T.diff > 0)) return 1;
+    // Heavy: the lowest gear that keeps the engine under crawl_max_rpm at the crawl speed (higher rpm = more torque); the clutch
+    // then sits closed and the speed controller adds a little throttle (creep_control). Below idle it is the slipping clutch again.
+    if (heavy && p_crawl_rpm > idle * 1.05f)
+        for (int g = 1; g <= n && g <= (int)p_max_gear; g++) {
+            float rpm_at = p_creep / 3.6f / r * T.ratio[g - 1] * T.diff * 9.5493f;
+            if (T.ratio[g - 1] > 0 && rpm_at <= p_crawl_rpm) return g;
+        }
     for (int g = 1; g <= cap; g++) {
         float ratio = T.ratio[g - 1] * T.diff;
         if (ratio > 0 && idle * 0.10472f * r / ratio * 3.6f >= p_creep * 1.05f) return g;
@@ -351,6 +453,7 @@ static void ck_reset(int level, const char *why)
     if (level >= RESET_HARD) {
         g_on = 0;
         g_hold = 0;
+        g_ln = 0; g_ln_done = 0; g_clutch_ours = NAN;
         g_f = g_cthr = g_cbrake = g_vt = 0;
         g_armed = 0;
         g_last_dir = 1;
@@ -369,13 +472,13 @@ static void ck_frame()
     float dt = (float)(now - last);
     last = now;
     if (!g_hooked) return;
-    crawl_toggle();
+    if (p_enabled > 0) crawl_toggle();
     g_crawl_on = p_enabled > 0 && g_user_on > 0;
     void *self = game_gearbox();
     char *inner = self ? gb_inner(self) : NULL;
     g_self = self;
     g_cf.inner = NULL;  // set below only while crawling: our clutch value then replaces the game's
-    if (!inner) { g_cf.floor = 0; g_f = 0; g_cthr = 0; g_creep_thr = 0; g_creep_brake = 0; g_cbrake = 0; g_on = 0; g_hold = 0; return; }
+    if (!inner) { g_cf.floor = 0; g_f = 0; g_cthr = 0; g_creep_thr = 0; g_creep_brake = 0; g_cbrake = 0; g_on = 0; g_hold = 0; g_ln = 0; g_clutch_ours = NAN; return; }
     if (dt > 0.5f) ck_reset(RESET_SOFT, "long frame");
     if (dt <= 0 || dt > 0.5f) return;  // paused or a long hitch: no time step
 
@@ -394,7 +497,7 @@ static void ck_frame()
     in.idle = idle_rpm(inner);
     in.gear = gear;
     in.engine_on = T.engine_on;
-    in.blocked = g_user_on <= 0 || g_truck_unsupported || T.paused || !T.engine_on || T.parking_brake || T.cruise > 0.1f || g_rolling || !amode || hill > 0 ||
+    in.blocked = p_enabled <= 0 || g_user_on <= 0 || g_truck_unsupported || T.paused || !T.engine_on || T.parking_brake || T.cruise > 0.1f || g_rolling || !amode || hill > 0 ||
                  !(in.idle > 0);
     static double mass_at = -100;
     static int heavy = 1;
@@ -406,9 +509,28 @@ static void ck_frame()
     in.heavy = heavy;
     in.set_max = (int)(heavy ? p_heavy_gear : p_max_gear);
     in.crawl_gear = pick_gear(heavy, in.idle);
+    if (in.crawl_gear > in.set_max) in.set_max = in.crawl_gear;  // a heavy crawl gear picked by rpm may lie above heavy_gear
     in.can_engage = g_tail_ok && g_engage_ok && ((st >= 1 && st <= 3) || gear == -1);
     int was_on = g_on;
+    float was_f = g_f;
     creep_tick(in);
+    {   // launch: pulling away is ours too, crawl or not (the hook below carries the value; the game's own is set along)
+        launch_in li = {};
+        li.dt = dt; li.speed = gear < 0 ? -T.speed : T.speed; li.thr = T.in_thr; li.brake = T.in_brake; li.rpm = T.rpm; li.idle = in.idle;
+        float r = wheel_radius();
+        li.rpm_per_ms = gear > 0 && gear <= T.fwd_gears && r > 0.1f && T.diff > 0 && T.ratio[gear - 1] > 0 ? T.ratio[gear - 1] * T.diff / r * 9.5493f : 0;
+        li.gear = gear; li.heavy = heavy;
+        li.handover = was_on && !g_on && was_f > 0.05f ? was_f : -1;
+        // the game's gearbox must be quiet: gear in, no shift under way (states 0 = idle, 3 = closing; 2 = opening the clutch)
+        int gst = gb_state(self);
+        li.shifting = (gst != 0 && gst != 3) || gb_target(self) != gear;
+        li.blocked = g_on || p_launch <= 0 || g_truck_unsupported || T.paused || !T.engine_on || T.parking_brake || T.cruise > 0.1f || g_rolling || !amode || hill > 0 ||
+                     !(in.idle > 0) || !g_hooked;
+        launch_tick(li);
+        g_clutch_ours = g_ln ? g_lc : g_on ? g_f : NAN;
+        if (g_ln && inner && mem_readable(inner + 0x142c, 4)) *(volatile float *)(inner + 0x142c) = g_lc;  // the game's own clutch follows ours (Auto Hold, TrueShift and the sequencer read it)
+        else if (g_ln_done && inner && mem_readable(inner + 0x142c, 4)) { *(volatile float *)(inner + 0x142c) = 0; g_ln_done = 0; }
+    }
     // Why not crawling while slow (ride 0.4: it never came on): every 5 s in the log.
     if (!g_on && g_user_on > 0 && T.engine_on && fabsf(T.speed) * 3.6f < p_on && fabsf(T.speed) > 0.3f) {
         static double said;
@@ -422,17 +544,18 @@ static void ck_frame()
                     gear, in.thr, in.brake, hill);
         }
     }
-    g_cf.floor = g_f;
-    g_cf.inner = g_on ? inner : NULL;
+    g_cf.floor = g_ln ? g_lc : g_f;
+    g_cf.inner = g_on || g_ln ? inner : NULL;
     g_creep_thr = g_cthr;
     g_creep_brake = g_on ? g_cbrake : 0;
     if (p_letter > 0 && g_on) g_dash_status = 'C';
     else if (g_dash_status == 'C') g_dash_status = 0;
 
-    if (g_csv && (g_on || was_on || g_f > 0) && now - csv_at >= 0.1) {
+    if (g_csv && (g_on || was_on || g_f > 0 || g_ln) && now - csv_at >= 0.1) {
         csv_at = now;
-        fprintf(g_csv, "%.2f,%.2f,%d,%.3f,%.3f,%d,%.3f,%.2f,%.0f,%.0f,%.3f,%d,%d,%d,%d,%.3f,%d,%d\n", wall_s(), T.speed * 3.6f, gear, in.thr,
-                in.brake, g_on, g_f, g_vt * 3.6f, T.rpm, in.idle, T.eff_clutch, g_hold, gb_state(self), st, hill > 0, g_cthr, in.crawl_gear, heavy);
+        fprintf(g_csv, "%.2f,%.2f,%d,%.3f,%.3f,%d,%.3f,%.2f,%.0f,%.0f,%.3f,%d,%d,%d,%d,%.3f,%d,%d,%d,%.3f,%.0f\n", wall_s(), T.speed * 3.6f, gear, in.thr,
+                in.brake, g_on, g_f, g_vt * 3.6f, T.rpm, in.idle, T.eff_clutch, g_hold, gb_state(self), st, hill > 0, g_cthr, in.crawl_gear, heavy, g_ln, g_ln ? g_lc : -1.0f,
+                g_ln ? g_ln_ra : 0.0f);
     }
     if (g_on && now - log_at >= 2) {
         log_at = now;
@@ -448,7 +571,7 @@ static const char *ck_status() { return g_status; }
 
 static void ck_start()
 {
-    if (p_enabled <= 0) { logline("Creep disabled in the ini"); snprintf(g_status, sizeof g_status, "off (ini)"); return; }
+    if (p_enabled <= 0 && p_launch <= 0) { logline("Creep and launch disabled in the ini"); snprintf(g_status, sizeof g_status, "off (ini)"); return; }
     if (p_off < p_on + 2) { p_off = p_on + 5; logline("Creep: off_kmh must be above on_kmh, using %.0f", p_off); }  // else it flips every frame
     snprintf(g_status, sizeof g_status, "off (not the 1.60 layout)");
     if (!L || strcmp(L->name, "1.60")) { logline("Creep: only for the 1.60 layout, off"); return; }
@@ -464,9 +587,9 @@ static void ck_start()
     else if (!g_engage_ok) logline("Creep: gearbox engage code not found, no start from rest");
     if (p_trace > 0) {
         g_csv = open_out("creep.csv", "w");
-        if (g_csv) fputs("t,kmh,gear,thr,brake,on,floor,target_kmh,rpm,idle,game_clutch,hold,gb_state,drive_state,hillhold,add_thr,crawl_gear,heavy\n", g_csv);
+        if (g_csv) fputs("t,kmh,gear,thr,brake,on,floor,target_kmh,rpm,idle,game_clutch,hold,gb_state,drive_state,hillhold,add_thr,crawl_gear,heavy,launch,launch_clutch,launch_aim\n", g_csv);
     }
-    snprintf(g_status, sizeof g_status, "on, hook in place; crawl %s at start, from rest %s, reverse %s", p_start_on > 0 ? "on" : "off (hold the toggle)",
+    snprintf(g_status, sizeof g_status, "on, hook in place; launch %s, crawl %s at start, from rest %s, reverse %s", p_launch > 0 ? "on" : "off", p_enabled <= 0 ? "disabled" : p_start_on > 0 ? "on" : "off (hold the toggle)",
              p_rest > 0 && g_tail_ok && g_engage_ok ? "on" : "off", p_rev > 0 ? "on" : "off");
     logline("Creep: hook in place at %p (crawl %.1f km/h, on below %.0f, off above %.0f, from rest %s, reverse %s)", (void *)site,
             p_creep, p_on, p_off, p_rest > 0 && g_tail_ok && g_engage_ok ? "on" : "off", p_rev > 0 ? "on" : "off");
@@ -475,6 +598,7 @@ static void ck_start()
 static void ck_stop()
 {
     g_cf.floor = 0;  // give everything back
+    g_ln = 0; g_clutch_ours = NAN;
     g_creep_thr = 0;
     g_creep_brake = 0;
     g_hold = 0;

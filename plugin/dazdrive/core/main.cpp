@@ -28,6 +28,7 @@ volatile float g_pcc_need_kmh = __builtin_nanf("");
 volatile float g_creep_brake;
 volatile char g_dash_flash, g_dash_status;
 volatile float g_creep_thr;
+volatile float g_clutch_ours = __builtin_nanf("");
 double g_dash_flash_until;
 
 static SCSAPI_VOID ev_frame_end(const scs_event_t, const void *const, const scs_context_t)

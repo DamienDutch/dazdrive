@@ -532,12 +532,12 @@ static void refresh(void *self)
     if (T.parking_brake || kmh < p_off_kmh) S.ours = 0;
     // By rpm: the engine has reached takeover_rpm with the clutch closed in a gear. Also above 20 km/h whatever the rpm: after a
     // pause, a load or a teleport the truck may already be cruising at 900 rpm in a high gear and never reach the rpm.
-    else if (p_on_rpm > 0 ? ((T.rpm >= p_on_rpm && T.gear > 0 && T.eff_clutch < 0.1f && kmh >= 3) || kmh >= fmaxf(p_on_kmh, 20.0f)) : kmh >= p_on_kmh) S.ours = 1;
+    else if (p_on_rpm > 0 ? ((T.rpm >= p_on_rpm && T.gear > 0 && clutch_seen() < 0.1f) || kmh >= fmaxf(p_on_kmh, 20.0f)) : kmh >= p_on_kmh) S.ours = 1;
     if (S.ours && !was) { S.ours_at = now; S.ours_launch = kmh < 25; }
 
     // Learn the rpm correction while the clutch is closed and the speed steady.
     int g = gb_gear(self);
-    if (g > 0 && v > 5 && T.eff_clutch < 0.02f && T.rpm > 700) {
+    if (g > 0 && v > 5 && clutch_seen() < 0.02f && T.rpm > 700) {
         float raw = rpm_at(g, v) / S.rpm_k;
         if (raw > 300) {
             float kr = T.rpm / raw;
@@ -577,7 +577,7 @@ static void refresh(void *self)
     S.demand += (float)(dt / (tau + dt)) * (S.thr - S.demand);
 
     // Tractive force asked for (clutch closed only): up in 0.3 s, down in 3 s.
-    if (g > 0 && T.eff_clutch < 0.1f && S.eng_ok) {
+    if (g > 0 && clutch_seen() < 0.1f && S.eng_ok) {
         float f = force_at(g, v, S.thr);
         float tf = f > S.f_need ? 0.3f : 3.0f;
         S.f_need += (float)(dt / (tf + dt)) * (f - S.f_need);
@@ -586,7 +586,7 @@ static void refresh(void *self)
     // Extra resistance the model misses (tires, wind, a wrong mass): force the
     // engine gives minus modeled resistance minus mass x acceleration, while
     // pulling steadily with the clutch closed. Slow (20 s), limited to +-2 % grade.
-    if (g > 0 && T.eff_clutch < 0.02f && S.eng_ok && v > 6 && eff > 0.1f && T.in_brake < 0.02f && !T.motor_brake &&
+    if (g > 0 && clutch_seen() < 0.02f && S.eng_ok && v > 6 && eff > 0.1f && T.in_brake < 0.02f && !T.motor_brake &&
         !T.retarder && S.eb_level < 0.01f && now - S.shift_at > 2) {
         float r = force_at(g, v, eff) - (resist(v) - S.f_bias) - S.mass * T.accel;
         float lim = S.mass * 9.81f * 0.02f;
@@ -617,7 +617,7 @@ static void refresh(void *self)
     // After an upshift: throttle well above what the new gear was expected to
     // need, while not gaining speed, adds up; a little over for long or a lot
     // over for short both end in a "no pull" downshift (see decide_gear).
-    if (S.up_gear && g == S.up_gear && T.eff_clutch < 0.1f) {
+    if (S.up_gear && g == S.up_gear && clutch_seen() < 0.1f) {
         float over = S.thr - fmaxf(S.up_pred + 0.15f, 0.8f);
         if (over > 0 && T.accel < 0.05f) S.strain += over * (float)dt;
         else S.strain = fmaxf(0, S.strain - 0.05f * (float)dt);
@@ -865,7 +865,7 @@ static int decide_gear(void *self, const char **why)
     if (rpm < idle_rpm() + 120 && cur > 1) { *why = "stall"; return pick_down(cur, v, eco_dn(1) + 300); }
 
     // not right after a launch shift (ts4o: 1->3 by the game at 10 km/h with the pedal floored, then 3->2->3)
-    if (kick && rpm < S.eng.range[R_POWER][0] + 100 && cur > 1 && since > 2.0 && T.eff_clutch < 0.1f && v * 3.6f > 15) {
+    if (kick && rpm < S.eng.range[R_POWER][0] + 100 && cur > 1 && since > 2.0 && clutch_seen() < 0.1f && v * 3.6f > 15) {
         int l = pick_down(cur, v, pw_mid() + (S.wet ? lerpf(-150, 100, clampf((cur - 4) / 4.0f, 0, 1)) : 100));
         // never into a gear that is at its upshift point a moment later (ts3a: 3->2->3 at 13 km/h)
         while (l < cur && rpm_at(l, v) > S.eng.range[R_POWER][1] - 100) l++;

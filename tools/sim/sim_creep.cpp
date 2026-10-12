@@ -31,6 +31,7 @@ const char *g_truck_unsupported;
 volatile float g_creep_brake;
 volatile char g_dash_flash, g_dash_status;
 volatile float g_creep_thr;
+volatile float g_clutch_ours = __builtin_nanf("");
 int input_held(int) { return 0; }
 void play_tones(const float *, int, int) {}
 float game_adaptive() { return 3; }
@@ -171,6 +172,61 @@ static void run(const char *name, double secs, void (*ev)(double))
            first_move, settle, vmin, vmax, minf, maxf, max_df, M.v * 3.6f, M.gear, g_on, g_f, ons, maxthr);
 }
 
+
+// ---- launch: the engine as an inertia against a slipping clutch (capacity ~ (1-c)^k, k unknown in the game: both ends are run)
+static void run_launch(const char *name, float thr_end, float mass, float grade_pct, float k, int gear = 1)
+{
+    printf("== %s\n", name);
+    memset(&T, 0, sizeof T);
+    T.fwd_gears = 12; T.diff = DIFF;
+    for (int i = 0; i < 12; i++) T.ratio[i] = RATIO[i];
+    g_ln = 0; g_ln_done = 0; g_lc = 0; g_on = 0;
+    p_launch = 1;
+    const float J = 8.0f, CMAX = 3500, ETQ = 1800;  // J: the engine rises ~1200 rpm/s at full pedal from idle, like the game's
+    float v_lock = 0, v = 0, w = IDLE / 9.5493f, c = 0, a_prev = 0, jerk_max = 0, t = 0, thr = 0, t10 = -1, rpm_max = 0, over_max = 0, lock_t = -1;
+    const double dt = 1.0 / 240;
+    const float R = RATIO[gear - 1] * DIFF;
+    int n = 0;
+    for (; t < 9 && !(lock_t >= 0 && t > lock_t + 0.5f); t += (float)dt, n++) {
+        thr = t < 0.5f ? 0 : fminf(thr_end, thr + (float)dt * 3.0f);  // the pedal comes down in ~0.3 s
+        float rpm = w * 9.5493f;
+        if (n % 4 == 0) {  // 60 Hz plugin frame
+            t_now = t;
+            launch_in li = {};
+            li.dt = 1.0f / 60; li.speed = v; li.thr = thr; li.brake = 0; li.rpm = rpm; li.idle = IDLE;
+            li.rpm_per_ms = R / RW * 9.5493f; li.gear = gear; li.heavy = mass >= p_heavy_t * 1000; li.handover = -1;
+            launch_tick(li);
+            if (g_ln) c = g_lc; else if (g_ln_done || lock_t >= 0) c = 0;
+            if (!g_ln && lock_t < 0 && c == 0 && t > 0.6f) { lock_t = t; v_lock = v; }
+            if (!g_ln && !g_ln_done && c > 0 && t > 0.6f && lock_t < 0) c = c;  // not started: the game's own clutch (open) holds
+        }
+        if (!g_ln && lock_t < 0 && c == 0 && t < 0.6f) c = 1;
+        float te = thr * ETQ * (0.6f + 0.4f * fminf(1, rpm / 1100)) + fmaxf(0, fminf(400.f, (IDLE - rpm) * 3.0f)) - 60;
+        if (rpm > 1900) te = fminf(te, 0);
+        float res = mass * 9.81f * (0.012f + grade_pct / 100);
+        float slip = rpm - v * R / RW * 9.5493f;
+        float acc;
+        float cap = CMAX * powf(fmaxf(1 - c, 0), k);
+        if (fabsf(slip) < 30 && cap > fabsf(te) + 50) {  // locked (the clutch holds the torque)
+            float Jt = J + mass * RW * RW / (R * R);
+            float dw = (te - res * RW / R) / Jt;
+            w += dw * (float)dt; v = w * RW / R; acc = dw * RW / R;
+        } else {
+            float tc = CMAX * powf(fmaxf(1 - c, 0), k) * (slip > 0 ? 1 : -1);
+            if (c >= 0.999f) tc = 0;
+            w += (te - tc) / J * (float)dt;
+            float F = tc * R / RW - res; if (v < 0.01f && F < 0) F = 0;
+            acc = F / mass; v += acc * (float)dt;
+        }
+        if (v < 0) v = 0;
+        if (n > 0) jerk_max = fmaxf(jerk_max, fabsf(acc - a_prev) / (float)dt * (t > 0.6f ? 1 : 0));
+        a_prev = acc; if (g_ln) { rpm_max = fmaxf(rpm_max, rpm); over_max = fmaxf(over_max, rpm - g_ln_ra); }
+        if (t10 < 0 && v * 3.6f >= 10) t10 = t;
+        if (verbose && n % 20 == 0) printf("   t=%4.2f pedal %.2f v %5.2f km/h rpm %5.0f aim %5.0f clutch %.2f launch %d acc %.2f\n", t, thr, v * 3.6f, w * 9.5493f, g_ln_ra, c, g_ln, acc);
+    }
+    printf("   while launching: rpm max %.0f (%.0f over the aim), launch ended %s, clutch closed at %.1f s, speed then %.1f km/h\n", rpm_max, over_max, g_ln ? "NOT" : g_ln_why, lock_t, v_lock * 3.6f);
+}
+
 static void ev_none(double) {}
 static void ev_brake(double t) { g_brake = t > 12 && t < 17 ? 0.3f : 0; }
 static void ev_brake_then_reverse_ok(double t) { g_brake = t > 10 && t < 14 ? 0.4f : 0; }
@@ -209,5 +265,12 @@ int main(int argc, char **argv)
     reset(0, 0, 1, 3, 28000); run("HEAVY 28 t uphill 3%", 30, ev_none);
     reset(0, 0, 1, 0, 28000); run("HEAVY 28 t flat, brake 0.5 at 10-16 s (throttle must drop to 0 at once)", 30, ev_brake_hv);
     reset(0, 0, 1, 0);        run("jam: crawl, brake to rest (14-22 s), release, crawl, tap brake at 34 s", 45, ev_jam);
+    run_launch("LAUNCH 30 t flat, pedal 0.35, soft bite (k 2.5)", 0.35f, 30000, 0, 2.5f);
+    run_launch("LAUNCH 30 t flat, pedal 0.35, hard bite (k 1.6)", 0.35f, 30000, 0, 1.6f);
+    run_launch("LAUNCH 30 t flat, pedal 1.0, soft bite (k 2.5)", 1.0f, 30000, 0, 2.5f);
+    run_launch("LAUNCH 30 t flat, pedal 1.0, hard bite (k 1.6)", 1.0f, 30000, 0, 1.6f);
+    run_launch("LAUNCH 30 t uphill 4%, pedal 0.7 (k 2.0)", 0.7f, 30000, 4, 2.0f);
+    run_launch("LAUNCH 13 t flat, pedal 0.5 (k 2.0)", 0.5f, 13000, 0, 2.0f);
+    run_launch("LAUNCH 13 t flat, pedal 0.15 (k 2.0)", 0.15f, 13000, 0, 2.0f);
     return 0;
 }

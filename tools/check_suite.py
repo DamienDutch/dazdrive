@@ -13,7 +13,7 @@ LAYOUTS = {
         torque="F3 41 0F 59 BE C0 01 00 00",
         adaptive="48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 41 0F 2F C0",
         gps="48 8D 88 ?? ?? ?? ?? 48 85 C9 74 ?? 48 8B 01 48 8D 54"),
-    # ATS 1.61 (docs/ats-161.md): gearbox object grew a float at +0x68 (target 0x70, force 0x121), inner +0x68
+    # ATS 1.61: gearbox object grew a float at +0x68 (target 0x70, force 0x121), inner +0x68
     "1.61": dict(
         window="48 8B 46 10 80 B8 A8 14 00 00 00 74 ?? F2 0F 10 83 44 02 00 00",
         chooser="4C 63 B9 B0 14 00 00",

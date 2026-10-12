@@ -968,6 +968,9 @@ static void ln_frame()
     // Lane keeping switched on/off by its key: game_actor+0x1d1 bit 0x20 (docs/lka-roll-re.md A2).
     static int was = -1, slow_off;
     static double at;
+    static float prev_k;
+    static double cross_at = -10;  // when the speed last came up through the game's minimum (55): the game's own switch-on happens then, a key press does not
+    { float k = fabsf(T.speed) * 3.6f; if (prev_k < 55 && k >= 55) cross_at = wall_s(); prev_k = k; }
     if (p_tone > 0 && o_law && wall_s() - at > 0.1) {  // offsets are 1.60's: only where the hook matched
         at = wall_s();
         char *ga = game_actor_safe();
@@ -975,10 +978,9 @@ static void ln_frame()
         if (on >= 0 && was >= 0 && on != was && on == g_lka_expect) {
             logv(2, "Lane: lane keeping %s (indicator)", on ? "on" : "off");
             g_lka_expect = -1;
-        } else if (on >= 0 && was >= 0 && on != was && on == 1 && p_slow_resume <= 0 && slow_off && fabsf(T.speed) * 3.6f >= 53 &&
-                   fabsf(T.speed) * 3.6f <= 61 && ga) {
-            // Switched on by itself where the game's minimum speed (55) comes back after a slow stretch (Damien 12-10: it came on
-            // after standing still). Undo it quietly; the key switches it on when he wants it.
+        } else if (on >= 0 && was >= 0 && on != was && on == 1 && p_slow_resume <= 0 && slow_off && wall_s() - cross_at < 0.6 && ga) {
+            // Switched on by itself right where the speed comes back up through the game's minimum (55) after a slow stretch (Damien
+            // 12-10: it came on after standing still). Undo it quietly; a key press at any other moment (the speed not just crossing 55) stays.
             lka_set(ga, 0);
             logline("Lane: lane keeping came on by itself at %.0f km/h after a slow stretch: switched off again (press its key to use it)", fabsf(T.speed) * 3.6f);
         } else if (on >= 0 && was >= 0 && on != was) {

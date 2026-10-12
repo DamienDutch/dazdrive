@@ -302,7 +302,7 @@ static float ah_drive_force()
     int g = T.gear;
     float r = wheel_radius();
     if (!s_eng_ok || g < 1 || g > 31 || !(r > 0.1f) || !(T.diff > 0) || !(T.ratio[g - 1] > 0)) return NAN;
-    float couple = 1 - T.eff_clutch;
+    float couple = 1 - clutch_seen();
     couple = couple < 0 ? 0 : couple > 1 ? 1 : couple;
     float te = s_eng.torque * curve_factor(&s_eng, T.rpm) * T.eff_thr;
     return s_ah_k * te * T.ratio[g - 1] * T.diff * 0.9f * couple / r;
@@ -359,10 +359,10 @@ static void auto_hold(char *g, float dt)
         // the drive estimate stays low while the clutch is still open and the engine at idle; Damien: "too slow").
         if (grade < 1.5f) target = 0;
         // Uphill but the clutch never bites while we hold (engine kept at idle): do not wait for it longer than 0.6 s.
-        if (AH.launch_t > 0.6 && T.eff_clutch > 0.9f) target = fminf(target, h * 0.5f);
+        if (AH.launch_t > 0.6 && clutch_seen() > 0.9f) target = fminf(target, h * 0.5f);
         // ... and with the pedal (almost) flat for 1.2 s and the clutch still open the hold is what keeps the clutch from closing (the
         // automatic does not close it against the service brake): let go (Damien 12-10: 4 % up, gear 2, pedal 1.0, clutch 0.97 for 2 s)
-        if (AH.launch_t > 1.2 && T.eff_clutch > 0.9f && T.in_thr > 0.7f) target = 0;
+        if (AH.launch_t > 1.2 && clutch_seen() > 0.9f && T.in_thr > 0.7f) target = 0;
         float ped = fminf(1, fmaxf(0, (T.in_thr - 0.25f) / 0.55f));          // 0 gentle .. 1 hard
         float t_rel = p_ah_gentle + (p_ah_hard - p_ah_gentle) * ped;          // seconds for the full hold
         float rate = h / fmaxf(t_rel, 0.05f);
@@ -629,13 +629,13 @@ static float cruise_body(void *ga, float dt, float pedal)
         route_junction_t ji = {};
         float vj = junc_on() ? route_junction_speed(p_cv_coast, &ji) : NAN;
         // You step on the gas for a junction we are slowing for: you go another way than the route (Damien 12-10: a petrol station with
-        // 3-4 side entrances, the route turned there, he drove straight on and we braked to 20 for each). Leave junctions alone
-        // for 12 s (a few hundred meters); the bends of the road itself still count.
+        // 3-4 side entrances, the route turned there, he drove straight on and we braked to 20 for each). Leave junctions and roundabouts alone
+        // for 6 s (Damien 12-10: first 12); the bends of the road itself still count.
         {
             static double ignore_until;
             if (vj == vj && T.in_thr > 0.3f && kmh < 60 && ji.dist_m < 250 && (kmh > ji.limit_ms * 3.6f - 5)) {
-                if (wall_s() >= ignore_until) logv(1, "Cruise: gas pedal at a junction ahead (%.0f m, %.0f\xc2\xb0 \xe2\x86\x92 %.0f km/h): junctions are left alone for 12 s", ji.dist_m, ji.turn_deg, ji.limit_ms * 3.6f);
-                ignore_until = wall_s() + 12;
+                if (wall_s() >= ignore_until) logv(1, "Cruise: gas pedal at a junction ahead (%.0f m, %.0f\xc2\xb0 \xe2\x86\x92 %.0f km/h): junctions are left alone for 6 s", ji.dist_m, ji.turn_deg, ji.limit_ms * 3.6f);
+                ignore_until = wall_s() + 6;
             }
             if (wall_s() < ignore_until) vj = NAN;
         }
@@ -680,7 +680,8 @@ static float cruise_body(void *ga, float dt, float pedal)
     // until it is straight again (+ 0.8 s)
     {
         static double steer_until;
-        if (fabsf(T.in_steer) > (kmh > 60 ? 0.25f : 0.15f)) steer_until = wall_s() + 0.8;
+        float st_abs = fabsf(T.in_steer);  // a keyboard or gamepad tap sits at full lock: only an analog wheel counts
+        if (st_abs > (kmh > 60 ? 0.25f : 0.15f) && st_abs < 0.95f) steer_until = wall_s() + 0.8;
         if (wall_s() < steer_until && kmh > 8 && target > kmh) target = kmh;
     }
     float e = target - kmh;
@@ -869,10 +870,10 @@ static float lead_rel_speed(char *g, float lead, float dt)
 
 // The gap we want to keep (m): a standstill gap plus the time gap of the player's distance level (and mode).
 // (Damien 12-10: in a queue it may close up, whatever the distance level, not onto the bumper: from walking pace the gap grows
-// from 4.5 m to own_acc_stop_m and the time gap fades in, both full at 30 km/h)
+// from 4 m to own_acc_stop_m and the time gap fades in, both full at 30 km/h)
 static float stop_gap(float v_ms)
 {
-    float lo = fminf(4.5f, p_own_stop_m), fade = fminf(1.0f, v_ms / 8.33f);
+    float lo = fminf(4.0f, p_own_stop_m), fade = fminf(1.0f, v_ms / 8.33f);
     return lo + (p_own_stop_m - lo) * fade;
 }
 static float desired_gap(float v_ms)
@@ -991,7 +992,7 @@ static void own_acc(char *g, float dt)
         // psi). Plan the stop at stop_m - 1 m from the lead's bumper, with an offset that beats the idle creep, and
         // keep a light hold at a standstill until the lead pulls away (then Stop&Go drives off).
         if (p_own_brake > 0 && lv < 1.5f && v > 0.05f && lead < gmin + 15) {
-            float s = lead - fmaxf(3.5f, stopm - 2);
+            float s = lead - fmaxf(4.0f, stopm - 1);
             float a_t = v * v / (2 * fmaxf(0.3f, s));
             // only when the stop really needs it: ts4r 213-215 s stopped at 16.6 m behind a stopped car (a_t 0.2) with
             // our throttle fighting it; with room to spare the idle creep closes in by itself (Damien liked that)

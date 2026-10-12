@@ -33,6 +33,7 @@ void incident(const char *kind, const char *fmt, ...)
 }
 volatile char g_dash_flash, g_dash_status;
 volatile float g_creep_thr;
+volatile float g_clutch_ours = __builtin_nanf("");
 double g_dash_flash_until;
 static double t_now;
 double wall_s() { return t_now; }
