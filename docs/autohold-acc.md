@@ -1,7 +1,6 @@
 # Auto Hold, lead speed and own ACC
 
 Implemented in `plugin/dazdrive/modules/cruise.cpp`, tested in `tools/sim/sim_cruise.cpp` (`tools/sim/run_cruise.sh`).
-Background: `docs/cruise-re.md` § 3, `docs/neutral-exit-re.md` § 3 (brake request `ga+0x17c`).
 
 ## 1. Auto Hold
 
@@ -19,7 +18,7 @@ Ini (cruise section): `auto_hold` 1, `auto_hold_request` 0.6, `auto_hold_gentle_
 
 **The release (what "do it better" means here)**
 Real cars (Crafter, Lynk & Co) drop the hold at a fixed moment; pulling away hard then lurches or rolls. Two things make ours different:
-1. **The gas reaches the engine while we hold.** The game zeroes the merged throttle while `ga+0x17c > 0` (neutral-exit-re § 3.1). One 7-byte compare is
+1. **The gas reaches the engine while we hold.** The game zeroes the merged throttle while `ga+0x17c > 0`. One 7-byte compare is
    patched (`comiss xmm7,[rbx+0x17c]` at `0x1405c8583`, found with the unique pattern of the throttle store gates, `game_patch_cf0_if` with the flag
    `s_thr_pass`): the compare is skipped while **only Auto Hold** asks (not for curve brake, hill start, creep brake or the game's own AEB, which are bigger/other
    requests). So the box engages as for a normal launch (the neutral-exit gate needs `inner+0x1424 > 0`), the clutch closes, torque builds against the brake.

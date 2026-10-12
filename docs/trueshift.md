@@ -47,7 +47,7 @@ Upshift trigger in the update only if net accel at current throttle > grade acce
 - Engine (`resolve(inner+0xff0)`): torque `+0x1c0`, curve ptr `+0x1d0` (float2 pairs, starts with (0,0)),
   count `+0x1d8`, rpm limit `+0x22c`, rpm ranges `+0x23c` (brake, low, high, power; (down, up)).
 - Transmission (`resolve(inner+0xfe8)`): shift time `+0x1c0`, fwd ratios dyn array `+0x1f0`.
-- inner: gear `+0x1448`, throttle in/eff `+0x1424/+0x1428`, clutch `+0x142c` (see `docs/clutch-mode.md`).
+- inner: gear `+0x1448`, throttle in/eff `+0x1424/+0x1428`, clutch `+0x142c`.
 - `g_adaptive_shift` cvar `0x142bf4b70`, read via `0x1401d6ad0`; logged on change (letter test).
 
 ## Decision (per update, forward gear, ≥ low_speed_kmh)
@@ -82,7 +82,7 @@ long, min gap 1 s too slow in low gears, upshift pull requirement too strict at 
 - **Dashboard letter**: the game does not show the mode by itself (the dashboard stays on "A" in every mode, it is not driven by the cvar), so TrueShift writes it. The transmission's `auto_mode_name`
   string_dyn at `tx+0x258` (tx = resolve(inner+0xfe8); fallback `[inner+0x150]+0x358`) is checked (size 1, manual name "M" at +0x278) and its first character overwritten 4x/s from the SDK frame via
   `game_actor+0x1d68` (only when that equals the gearbox the hooks saw). The letter is D/E/P/M, also stopped and in N (a steady letter rather than "A" at every stop), and a plain A in reverse. The HUD reads it
-  live via vfunc `0x14098db70` (`docs/engine-brake-re.md` section 3), so it shows at once.
+  live via vfunc `0x14098db70`, so it shows at once.
 
 ## Design rules
 - Normal is adaptive enough to never need switching; no mode may hurt a player who forgets that it is on. Eco and Power nudge the shift points down and up, never to an unusable value, and the differences

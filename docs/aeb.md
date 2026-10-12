@@ -1,7 +1,6 @@
 # Own AEB (emergency braking)
 
 Implemented in `plugin/dazdrive/modules/cruise.cpp` (section AEB, `aeb()`); the sim is `tools/sim/run_cruise.sh` (`aeb_run`).
-Research and design background: `docs/aeb-research.md`.
 
 ## What the game does (why DazDrive replaces it)
 - With the game's AEB option off (`g_emergency_brake 0`; related options `g_emergency_brake_mode`, `g_blind_spot`, `g_acc`) the stock AEB never fires.
@@ -18,8 +17,8 @@ Research and design background: `docs/aeb-research.md`.
 | ACC emergency part: gap load `movss xmm7,[rsi+0x1a8]` | `80 BE 99 01 00 00 00 0F 84 ?? ?? ?? ?? 48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 0F 2F C6 0F 86 ?? ?? ?? ?? 0F 2F 3D ?? ?? ?? ?? 0F 87 ?? ?? ?? ?? 48 8B 46 18 F3 0F 10 BE A8 01 00 00` (+0x33, 8 bytes) | new `game_patch_zero_xmm_if`: xmm7 = 0 while ours runs -> `comiss xmm7,xmm6(0); jbe` skips the part |
 | AEB store 1 | `41 0F 2F F8 73 14 44 0F 2F 8B 0C 01 00 00 73 0A C7 83 7C 01 00 00 00 00 80 3F` (+16, 10 bytes) | `game_patch_skip_if` |
 | AEB store 2 | `84 C0 75 0D 83 8B 14 01 00 00 10 EB 1A 84 C0 74 16 C7 83 7C 01 00 00 00 00 80 3F` (+17, 10 bytes) | `game_patch_skip_if` |
-If any patch fails the flag goes to 0 and every patch is inert (the game's stays). The radar runs with `g_acc > 0` or blind spot / AEB option / auto high beams
-(`docs/cruise-re.md` § 3); the log warns when none is on. Our requests go through `brake_request()` (`+0x17c`; with the AEB option off nothing in the game
+If any patch fails the flag goes to 0 and every patch is inert (the game's stays). The radar runs with `g_acc > 0` or blind spot / AEB option / auto high beams;
+the log warns when none is on. Our requests go through `brake_request()` (`+0x17c`; with the AEB option off nothing in the game
 clears it, we write 0 back).
 
 ## Behavior
@@ -56,7 +55,7 @@ clears it, we write 0 back).
 - **One application:** while braking and closing in, dips of the target below 0.08 are ignored; the stage floors fade continuously with the closing speed, so a steady gap
   behind a braking lead does not flip between two requests (sim before the change: 56-78 reversals, -155 psi at 7 m).
 - **Hazards:** the AEB's request mutes the game's hazard rule; `emergency_hazards` (> 4 m/s2 above 50 km/h) switches them on as before.
-- **Radar:** it runs when `g_acc` > 0 or blind spot / the AEB option / auto high beams are on (`docs/cruise-re.md` section 3); the log warns when none is on.
+- **Radar:** it runs when `g_acc` > 0 or blind spot / the AEB option / auto high beams are on; the log warns when none is on.
   Open point: the radar's lead is not guaranteed to be in the truck's path in bends (parked or oncoming cars).
 
 ## Logging
