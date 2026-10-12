@@ -27,10 +27,18 @@ You **must** know these before you install it:
 
 ## Why I made this
 
-I got tired of the game's automatic. It shifts at fixed rpm and does not care about load, grade or the
-road ahead. So I started with the gearbox and made it shift like a real truck. Once that worked, the cruise
-control and the lane assist were the next things that bothered me, and if I could change one, why not
-the rest. That is how it grew into one plugin.
+My biggest pet peeve with the game's automatic is that it doesn't think. Apart from a bit of hill
+awareness (it shifts a little later, or holds a gear so you don't stall), it just follows the rpm.
+Climbing or cruising gently, same shift point, no idea what is coming. After enough hours of that I
+wanted a gearbox with some brain.
+
+So I looked at what real truck gearboxes do and started building that. Once it worked, the lane
+assist was next. It is fine as it is, but I wanted something closer to hands-free: calm enough on a
+straight stretch to grab a drink without stopping. (That part is experimental and off by default, and
+you still keep your hands near the wheel.) One thing led to another, and a gearbox turned into a
+plugin.
+
+If you ever caught yourself thinking "why is it shifting *now*?", this is for you.
 
 ## Why you would use it
 
