@@ -29,6 +29,8 @@ STANDARD = {
     # the log 0.6 MB x (log, .1, previous session) and 4 MB of incidents. The developer's compiled defaults are 10x that.
     "core": {"log_level": 0, "log_max_mb": 0.6, "incident_mb": 4},
     "trueshift": {
+        "takeover_kmh": 10,      # players: the proven handover (the developer's compiled default takes over earlier, from 7 km/h, still being tested)
+        "handback_kmh": 6,
         "eco_roll": 1,           # ON: neutral roll on gentle descents, with its strict limits (eco_roll_max_decel, never with brake/retarder/engine brake); ridden
         "lookahead": 0,          # off in the shipped preset: the ~2010 year of the setup page; the page turns it on from ~2015
         "wet_wipers": 0,         # OFF: automatic wipers keep the lever on, so it was always "wet"; traction control does grip
