@@ -25,7 +25,7 @@
 
 static float *g_minp, p_on_kmh, p_a_max, p_a_leak, p_min_kmh, p_mode, p_gain, p_dead, p_tone;
 static float p_edge_look, p_edge_from, p_edge_full, p_backoff, p_drv_rate, p_drv_follow, p_drv_attack, p_drv_release, p_drv_leak;
-static float p_umax, p_ind_pause, p_ind_resume, p_ind_off, p_keep_on, p_nonffb;
+static float p_umax, p_ind_pause, p_ind_resume, p_ind_off, p_keep_on, p_nonffb, p_slow_resume;
 static float p_sway, p_sw_cut, p_sw_rec, p_sw_amp;
 static float p_learn, p_l_rate, p_l_min, p_l_max, p_l_update, p_l_save;
 static float p_head_ref, p_k_off, p_k_head, p_k_afb, p_bend_a, p_edge_boost, p_rate2, p_i2, p_i2max;
@@ -72,6 +72,7 @@ static param g_params[] = {
     { "driver_release", &p_drv_release, 1.0f, "seconds until the assist is back at full strength after you let go" },
     { "driver_leak", &p_drv_leak, 0.02f, "extra share of the assist offset that leaks away per physics step while you steer" },
     { "min_kmh", &p_min_kmh, 20, "the assist steers from this speed (game: 55 km/h); below it the wheel is free" },
+    { "slow_resume", &p_slow_resume, 0, "0 = after lane keeping went off on a slow stretch it stays off until you press its key (a switch-on by itself when the speed comes back to about 55 km/h is undone); 1 = leave that to the game" },
     { "keep_on", &p_keep_on, 1, "1 = the game never switches lane keeping off for low speed: it can be switched on standing still and waits until min_kmh (mode 2 gives no request below it). 0 = off below min_kmh, back on from on_kmh" },
     { "on_kmh", &p_on_kmh, 39, "keep_on = 0: after dropping below min_kmh it only comes back from this speed" },
     { "indicator_pause", &p_ind_pause, 1, "1 = an indicator (one side, not the hazards) pauses the assist: the wheel is yours for the lane change; after the indicator goes off and a lane is found again (or 4 s) it comes back gently over 1 s. 0 = only no steering back against the indicator" },
@@ -965,7 +966,7 @@ static void ln_frame()
     }
     if (p_ind_pause > 0 && p_mode >= 1 && o_law) indicator_pause();  // first: it may undo a key press (see there)
     // Lane keeping switched on/off by its key: game_actor+0x1d1 bit 0x20 (docs/lka-roll-re.md A2).
-    static int was = -1;
+    static int was = -1, slow_off;
     static double at;
     if (p_tone > 0 && o_law && wall_s() - at > 0.1) {  // offsets are 1.60's: only where the hook matched
         at = wall_s();
@@ -974,7 +975,15 @@ static void ln_frame()
         if (on >= 0 && was >= 0 && on != was && on == g_lka_expect) {
             logv(2, "Lane: lane keeping %s (indicator)", on ? "on" : "off");
             g_lka_expect = -1;
+        } else if (on >= 0 && was >= 0 && on != was && on == 1 && p_slow_resume <= 0 && slow_off && fabsf(T.speed) * 3.6f >= 53 &&
+                   fabsf(T.speed) * 3.6f <= 61 && ga) {
+            // Switched on by itself where the game's minimum speed (55) comes back after a slow stretch (Damien 12-10: it came on
+            // after standing still). Undo it quietly; the key switches it on when he wants it.
+            lka_set(ga, 0);
+            logline("Lane: lane keeping came on by itself at %.0f km/h after a slow stretch: switched off again (press its key to use it)", fabsf(T.speed) * 3.6f);
         } else if (on >= 0 && was >= 0 && on != was) {
+            if (!on && fabsf(T.speed) * 3.6f < 56) slow_off = 1;  // went off at low speed (the game's rule or the key)
+            else if (on) slow_off = 0;                           // switched on by the key at another speed: normal again
             g_lka_expect = -1;
             static const float up[] = { 660, 990 }, down[] = { 990, 660 };
             play_tones(on ? up : down, 2, 90);
