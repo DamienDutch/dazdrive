@@ -299,9 +299,11 @@ static float a_power() { return S.mode == MODE_ECO ? 0.2f : S.mode == MODE_POWER
 static lesson learned();
 
 // Lowest landing rpm of an early upshift.
-static float cruise_floor(int g)
+// A skip (2 steps or more) may land up to 100 rpm under the plateau (Damien 12-10: fewer shifts when pulling lightly); the
+// downshift point plus hysteresis stays the lower bound, so it does not hunt back.
+static float cruise_floor(int g, float under = 0)
 {
-    return fmaxf(S.plateau + p_cruise_rpm + mode_rpm(), base_dn(g) + p_hyst + 50) + learned().rpm;
+    return fmaxf(S.plateau + p_cruise_rpm + mode_rpm() - under, base_dn(g) + p_hyst + 50) + learned().rpm;
 }
 
 static int skip_allowed() { return (int)p_max_skip; }
@@ -1044,7 +1046,7 @@ static int decide_gear(void *self, const char **why)
         } else if (grade_pct() > -0.5f) k += 0.1f;
         int best = cur;
         for (int h = cur + 1; h <= n && h <= cur + 1 + skips; h++) {
-            float fl = cruise_floor(h);
+            float fl = cruise_floor(h, h > cur + 1 ? 100.0f : 0.0f);
             if (h == cur + 1) S.floor_rpm = fl;
             if (rpm_at(h, v2) < fl) break;
             if (force_at(h, v2, 1.0f) < k * need) break;
