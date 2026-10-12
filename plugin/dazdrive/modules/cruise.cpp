@@ -628,6 +628,17 @@ static float cruise_body(void *ga, float dt, float pedal)
         }
         route_junction_t ji = {};
         float vj = junc_on() ? route_junction_speed(p_cv_coast, &ji) : NAN;
+        // You step on the gas for a junction we are slowing for: you go another way than the route (Damien 12-10: a petrol station with
+        // 3-4 side entrances, the route turned there, he drove straight on and we braked to 20 for each). Leave junctions alone
+        // for 12 s (a few hundred meters); the bends of the road itself still count.
+        {
+            static double ignore_until;
+            if (vj == vj && T.in_thr > 0.3f && kmh < 60 && ji.dist_m < 250 && (kmh > ji.limit_ms * 3.6f - 5)) {
+                if (wall_s() >= ignore_until) logv(1, "Cruise: gas pedal at a junction ahead (%.0f m, %.0f\xc2\xb0 \xe2\x86\x92 %.0f km/h): junctions are left alone for 12 s", ji.dist_m, ji.turn_deg, ji.limit_ms * 3.6f);
+                ignore_until = wall_s() + 12;
+            }
+            if (wall_s() < ignore_until) vj = NAN;
+        }
         static double said_j;
         // Log as soon as a junction/roundabout limit is well under our speed and close (<= 5 s apart).
         if (vj == vj && ji.limit_ms * 3.6f < fminf(target, kmh) - 5 && ji.dist_m < 400 && wall_s() - said_j > 5) {
