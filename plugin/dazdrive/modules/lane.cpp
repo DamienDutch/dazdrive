@@ -515,6 +515,8 @@ static void sway_step(float o1, float dt, int indicator)
     SW_hold_until = SW_t + 5; SW_events++; SW_n = 0;
     DEV_NOTE(sway());
     logv(1, "Lane: sway detected (o1 extremes %.2f / %.2f / %.2f m, half period %.1f s), gains x%.2f -> x%.2f", SW_ex_v[0], SW_ex_v[1], SW_ex_v[2], h2, before, SW_fac);
+    incident("lane", "the lane assist sways (o1 extremes %.2f / %.2f / %.2f m, half period %.1f s), gains x%.2f -> x%.2f at %.0f km/h", SW_ex_v[0], SW_ex_v[1],
+             SW_ex_v[2], h2, before, SW_fac, fabsf(T.speed) * 3.6f);
     if (SW_t - SW_lastact > 8 && learn_small_signal()) learn_sway_hit(SW_fac);
 }
 

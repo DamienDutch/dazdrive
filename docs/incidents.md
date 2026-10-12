@@ -12,10 +12,10 @@ something goes wrong, the plugin saves that moment as its own file in `plugins\d
 | `limiter` | the rpm sits at the limiter for more than 0.6 s while TrueShift drives (not in M, not on the engine brake) |
 | `lug` | the rpm sits under 90 % of idle for more than 0.8 s while moving above 8 km/h with the throttle open |
 | `neutral` | stuck in neutral for 1.5 s (also after an eco-roll) and TrueShift had to engage a gear; not right after the pause menu or a load |
-| `air` | the brake air is so low that DazDrive stops its own braking |
+| `air` | the brake air is so low (while moving) that DazDrive stops its own braking |
 | `aeb` | automatic emergency braking acted |
 | `input` | the ACC distance key reads as held for 6 s (its state does not return to 0): holding it for ISA is switched off for the session |
-| `lane` | the lane assist offset rings (the gains are lowered) |
+| `lane` | the lane assist sways or rings: the truck swings to and fro around the center and the gains are cut |
 
 Triggers are deliberately strict: a normal ride (hills, eco-roll, stops, cruise) must not make one. A further trigger within 15 s
 of the last one joins the open file, so one bad stretch is one file.

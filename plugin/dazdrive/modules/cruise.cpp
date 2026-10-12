@@ -203,7 +203,8 @@ static void brake_request(char *g, float want)
     if (T.air_warning || (T.air_psi > 1 && T.air_psi < p_air_min)) {
         if (!s_air_low) {
             logline("Cruise: brake air low (%.0f psi): our braking paused", T.air_psi);
-            incident("air", "brake air low: %.0f psi at %.0f km/h, our braking paused", T.air_psi, fabsf(T.speed) * 3.6f);
+            if (fabsf(T.speed) * 3.6f > 10)  // standing after a start or a teleport the tank is simply still filling
+                incident("air", "brake air low: %.0f psi at %.0f km/h, our braking paused", T.air_psi, fabsf(T.speed) * 3.6f);
         }
         s_air_low = 1;
     } else if (s_air_low && T.air_psi > p_air_min + 15) { s_air_low = 0; logline("Cruise: brake air back (%.0f psi)", T.air_psi); }
