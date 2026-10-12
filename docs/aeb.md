@@ -63,9 +63,9 @@ clears it, we write 0 back).
 - `dazdrive.log`: `AEB: warning / partial braking / FULL braking: lead ... TTC ... needs ...`, `AEB: over after ...: highest ..., km/h, min gap, min TTC, peak decel,
   air psi, held back by ...`, `AEB: overruled by the gas pedal`.
 - `cruise.csv` has the columns `aeb,ttc,a_need,a_cmd,decel` (also written while the AEB acts with cruise off).
-- **Incident files** (`aeb_logs_mb` 10): every event gets its own file `plugins\dazdrive\aeb\aeb_<yyyy-mm-dd_hh-mm-ss local>.csv` at 20 Hz: the 10 s before the
+- **Incident files** (`incident_mb`): every event gets its own file `plugins\dazdrive\incidents\aeb_<yyyy-mm-dd_hh-mm-ss local>.csv` at 20 Hz: the 10 s before the
   event, the event, and 10 s after it is over. Columns: t, kmh, gap, lead_kmh, closing, ttc, a_need, stage (0-4), request, a_cmd, thr, brake, decel, steer,
-  yaw_deg_s, indicator (1 L, -1 R, 2 hazards), air. The folder is trimmed oldest-first to 90 % of the cap before a new file is created; `aeb_logs_mb` 0 = no incident files.
+  yaw_deg_s, indicator (1 L, -1 R, 2 hazards), air. The folder is trimmed oldest-first to 90 % of the cap before a new file is created; `incident_mb` 0 = no incident files (the folder is shared with the other incidents).
 
 ## Sim (26 t unless said; request -> 0.4 + 10 r / (m / 30 t) m/s2, game slew 5/s; the driver holds 30 % throttle and does nothing)
 | scenario | result |

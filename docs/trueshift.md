@@ -74,14 +74,11 @@ long, min gap 1 s too slow in low gears, upshift pull requirement too strict at 
 - The game's own keybind for the adaptive transmission cycles the cvar `g_adaptive_shift`: Eco (10) -> Normal (3) -> Power (1.6667) -> off (0) -> Eco, one step per press, each step visible in the log
   within 1 s. DazDrive uses that keybind as the mode source and turns the game's "off" slot into the fourth mode **M** (assisted manual), so the cycle is Eco -> Normal -> Power -> M.
 - With cruise control on the game sets `game_actor+0x199` = 1 (it ignores the adaptive mode while cruising); the cvar itself stays as it was. TrueShift ignores that flag, so the mode survives cruise control.
-- Optionally a long press of the shift-hint wheel buttons switches the mode (`mode_up_button`, `mode_down_button`, `mode_hold_s` 0.8 s): up toward Power, down toward Eco, Normal in between; a short press
-  still gives the game's hint shift. The wheel buttons are read directly with winmm `joyGetPosEx` (works under Proton; the log prints every button number).
 - **Eco / Power** move the shift points and the cruise floor by `eco_rpm` -75 / `power_rpm` +150, with a force reserve for an early upshift of 1.2 / 1.5 (Normal 1.3); the demand-driven downshift starts at
   pedal 0.9 / 0.75 (Normal 0.85).
-- **M (assisted manual)**: the gear stays where the hint buttons put it, but kickdown still works, the rev limiter gets one gear up, stall protection, downshifts when braking to a stop (below the low-speed
+- **M (assisted manual)**: the gear stays where the driver's shift hints put it, but kickdown still works, the rev limiter gets one gear up, stall protection, downshifts when braking to a stop (below the low-speed
   handover the game picks as usual) and one gear down when lugging (below `m_lug_rpm` 1000 rpm with a lot of pedal and no pull; `m_assist` 0 turns kickdown and lugging help off). `m_full_manual` 1 = rev
-  limiter and stall protection only. In M a short press of a hint button (released before `mode_hold_s`) is remembered; when the game has not started that shift 0.8 s later (target still the old gear),
-  TrueShift does it itself (`M: hint up/down`) if the rpm allows (up: above idle + 150, down: under 95 % of the limit; else "M: hint ... not done" in the log).
+  limiter and stall protection only.
 - **Dashboard letter**: the game does not show the mode by itself (the dashboard stays on "A" in every mode, it is not driven by the cvar), so TrueShift writes it. The transmission's `auto_mode_name`
   string_dyn at `tx+0x258` (tx = resolve(inner+0xfe8); fallback `[inner+0x150]+0x358`) is checked (size 1, manual name "M" at +0x278) and its first character overwritten 4x/s from the SDK frame via
   `game_actor+0x1d68` (only when that equals the gearbox the hooks saw). The letter is D/E/P/M, also stopped and in N (a steady letter rather than "A" at every stop), and a plain A in reverse. The HUD reads it

@@ -25,7 +25,9 @@ VERSION = re.search(r'#define SUITE_VERSION "([^"]*)"', open(f"{ROOT}/core/suite
 # so the page shows it as "Standard (as shipped)". The look-ahead items (lookahead, curves, curve_brake, predictive) are
 # stable but come on only from ~2015 / ~2020 on the page, so they are off here.
 STANDARD = {
-    "core": {"log_level": 1, "log_max_mb": 2},  # enough for a bug report; 2 writes big csv files. ~6 MB in all with aeb_logs_mb
+    # Players: a quiet log plus incident files (what went wrong, with the 20 s before and 15 s after). At most ~6 MB in all:
+    # the log 0.6 MB x (log, .1, previous session) and 4 MB of incidents. The developer's compiled defaults are 10x that.
+    "core": {"log_level": 0, "log_max_mb": 0.6, "incident_mb": 4},
     "trueshift": {
         "eco_roll": 1,           # ON: neutral roll on gentle descents, with its strict limits (eco_roll_max_decel, never with brake/retarder/engine brake); ridden
         "lookahead": 0,          # off in the shipped preset: the ~2010 year of the setup page; the page turns it on from ~2015
@@ -34,12 +36,9 @@ STANDARD = {
         "smooth_stop": 1,        # ON: clutch opens around idle when braking to a stop (no pushing down to 2 km/h); ridden
         "dash_letter": 1,        # ON: D/E/P/M on the dashboard instead of A
         "tones": 1,              # ON: short tone when the mode changes
-        "mode_up_button": 0,     # OFF: wheel button numbers differ per wheel; every player has to find their own (setup page explains)
-        "mode_down_button": 0,   # OFF: same
         "trace": 0,              # csv traces only for bug hunting (needs log_level 2 anyway)
     },
     "cruise": {
-        "aeb_logs_mb": 2,        # players: ~30 AEB incident files at most (~6 MB in all)
         "smart_overspeed_kmh": -1,  # players: the game's own overspeed setting
         "descent_overspeed_kmh": 0, # players: descents held at the set speed, as before
         "smooth": 1,             # ON: own cruise throttle, no bursts after shifts: part of what TrueShift is for
@@ -67,7 +66,6 @@ STANDARD = {
         "speed_limit_ahead": 0,  # OFF: only matters with ISA on
         "resume_to_limit": 0,    # OFF: only matters with ISA, changes what "resume" does
         "speed_limit_probe": 0,  # OFF: test-ride probe
-        "speed_limit_button": 0, # OFF: wheel button number, every player has their own
         "trace": 0,
     },
     "lane": {
@@ -81,7 +79,6 @@ STANDARD = {
     "creep": {
         "enabled": 0,            # OFF: crawl / maneuver mode is experimental
         "start_on": 0,
-        "toggle_button": 0,
         "trace": 0,
     },
 }
@@ -90,7 +87,7 @@ STANDARD_HEADER = ("standard preset (stable on, except the look-ahead ones; beta
                    "(ACC, Stop & Go, Auto Hold, ISA, JunctionSense, lane centering, crawl mode) off).")
 
 SECTION_INTRO = {
-    "core": "Logging. level 1 is enough for a bug report; level 2 adds csv traces (large).",
+    "core": "Logging. Level 0 keeps a short log and writes an incident file when something goes wrong; level 1 and 2 log more (2 adds csv traces, large).",
     "trueshift": "The gearbox: TrueShift picks the gears of the game's automatic.",
     "cruise": "Cruise control and ACC extras. The standard preset has the stable ones on, except the ones that look ahead (bends, climbs); beta and experimental ones (ACC, Stop & Go, Auto Hold, ISA, JunctionSense) are off.",
     "lane": "Lane centering. The standard preset leaves the game's own assist alone.",
@@ -241,24 +238,19 @@ SETUP_GROUPS = [
      "items": [
         ("creep", "enabled", "b", "Crawl mode available", True),
         ("creep", "start_on", "b", "Crawl switched on when the game starts", False),
-        ("creep", "toggle_mode_key", "b", "Hold Adaptive Automatic Transmission Mode at a standstill to switch it (recommended)", False),
+        ("creep", "toggle_mode_key", "b", "Hold Adaptive Automatic Transmission Mode at a standstill to switch crawl on or off", False),
         ("creep", "creep_kmh", "n", "Crawl speed (km/h)", False)]},
     {"id": "log", "title": "Logging", "advanced": "core",
-     "tuning": [{"name": "Standard", "desc": "Enough for a normal bug report", "over": {}},
-                {"name": "Bug hunt", "desc": "Also large csv traces, only when asked", "over": {"core": {"log_level": 2}, "trueshift": {"trace": 1}, "cruise": {"trace": 1}, "creep": {"trace": 1}}}],
-     "about": ["🐞 Standard is enough for a bug report. Bug hunt writes big csv files: only when asked."],
-     "items": [("core", "log_level", "c", "How much goes into dazdrive.log", False, [["0", "0: events only"], ["1", "1: normal"], ["2", "2: + csv traces (large)"]])]},
+     "tuning": [{"name": "Standard", "desc": "A quiet log, plus an incident file when something goes wrong", "over": {}},
+                {"name": "Bug hunt", "desc": "Also every shift in the log and large csv traces, only when asked", "over": {"core": {"log_level": 2}, "trueshift": {"trace": 1}, "cruise": {"trace": 1}, "creep": {"trace": 1}}}],
+     "about": ["🐞 When something goes wrong (the gearbox hunts, you fight a shift, the rpm hits the limiter, ...) the plugin saves the 20 s before and 15 s after in the incidents folder. Attach those files to a bug report.", "Bug hunt writes big csv files: only when asked."],
+     "items": [("core", "log_level", "c", "How much goes into dazdrive.log", False, [["0", "0: quiet (incidents are saved separately)"], ["1", "1: + every shift"], ["2", "2: + csv traces (large)"]]),
+               ("core", "incident_mb", "n", "Size of the incidents folder (MB, 0 = no incident files)", False)]},
 ]
 
 
-# --- the wheel-button helper on the setup page: [section, key, what to press, why, extra]
-# extra = true: tucked away under "another button", because the recommended way needs no number
-BUTTONS = [
-    ["trueshift", "mode_up_button", "Shift Up Hint", "hold: gearbox mode up (Eco → Normal → Power; from M back to Normal)", False],
-    ["trueshift", "mode_down_button", "Shift Down Hint", "hold: gearbox mode down (Power → Normal → Eco; from M back to Normal)", False],
-    ["cruise", "speed_limit_button", "Adaptive Cruise Control Mode", "hold: speed limits (ISA) on/off", False],
-    ["creep", "toggle_button", "Crawl mode on another button", "By default: hold Adaptive Automatic Transmission Mode at a standstill, nothing to set. Only fill this in if you want a separate button.", True],
-]
+# --- wheel buttons: none. Everything is switched with the game's own keys (see the feature texts), so the page has no button step.
+BUTTONS = []
 
 # --- truck eras: how smart the truck is, as presets on the setup page. Each is "base" (standard) plus overrides,
 # after when the real thing appeared in European series trucks (docs/eras.md): AMT 1995, ACC ~2000,
@@ -306,8 +298,8 @@ ERAS = [
 # refine it (the tile is "mixed" while only some of its keys have the "on" value).
 FEATURES = [
     # group, stage, since (first in a real European truck, docs/eras.md), info (the popup), needs (feature ids that must be on)
-    {"id": "ts", "group": "Gearbox", "stage": "stable", "since": "1995", "label": "TrueShift gearbox", "desc": "Shifts like a real truck automatic", "buttons": [["trueshift", "mode_up_button"], ["trueshift", "mode_down_button"]],
-     "info": "Takes over the gear choice of the game's automatic. It picks the gear from engine torque, weight, grade and the route ahead instead of fixed rpm, keeps the revs low when it can, skips gears when the box is slow and learns when an upshift did not pull. The driving modes Eco, Normal, Power and M (manual, with help) are cycled with the game's own \"Adaptive Automatic Transmission Mode\" key. Once the shift-hint buttons are set in step 3, holding one steps Eco, Normal and Power up or down (from M it goes back to Normal). M is reached only with the game's key; in M a short press on a hint button is a manual shift hint.",
+    {"id": "ts", "group": "Gearbox", "stage": "stable", "since": "1995", "label": "TrueShift gearbox", "desc": "Shifts like a real truck automatic",
+     "info": "Takes over the gear choice of the game's automatic. It picks the gear from engine torque, weight, grade and the route ahead instead of fixed rpm, keeps the revs low when it can, skips gears when the box is slow and learns when an upshift did not pull. The driving modes Eco, Normal, Power and M (manual, with help) are cycled with the game's own \"Adaptive Automatic Transmission Mode\" key.",
      "keys": [["trueshift", "enabled", 1, 0]]},
     {"id": "roll", "group": "Gearbox", "stage": "stable", "since": "2006", "label": "Eco-roll", "desc": "Rolls in neutral on gentle descents to save fuel",
      "info": "On a gentle descent with the cruise on, the gearbox goes to neutral and the truck rolls without burning fuel. Never with the brake, engine brake or retarder, and it re-engages as soon as the speed drifts too far from the set speed.",
@@ -318,8 +310,8 @@ FEATURES = [
     {"id": "stop", "group": "Gearbox", "stage": "stable", "since": "2000", "label": "Smooth stop", "desc": "No judder or pushing when you brake to a halt",
      "info": "When you brake to a stop the clutch opens around idle, so the engine does not judder and the truck does not push on against the brake. The game's own automatic keeps the clutch closed down to about 2 km/h.",
      "keys": [["trueshift", "smooth_stop", 1, 0]]},
-    {"id": "crawl", "group": "Gearbox", "stage": "experimental", "since": "2009", "label": "Crawl mode", "desc": "Creeps at walking pace for parking and docking", "buttons": [["creep", "toggle_button"]],
-     "info": "At walking pace in gears 1, 2 and R the clutch slips like in a real truck automatic: the truck creeps by itself. The brake makes it slower, the throttle a bit faster. Switch it on or off by holding the Adaptive Automatic Transmission Mode key at a standstill (no button number needed), or a separate button from step 3.",
+    {"id": "crawl", "group": "Gearbox", "stage": "experimental", "since": "2009", "label": "Crawl mode", "desc": "Creeps at walking pace for parking and docking",
+     "info": "At walking pace in gears 1, 2 and R the clutch slips like in a real truck automatic: the truck creeps by itself. The brake makes it slower, the throttle a bit faster. Switch it on or off by holding the Adaptive Automatic Transmission Mode key at a standstill.",
      "keys": [["creep", "enabled", 1, 0]]},
     {"id": "cc", "group": "Cruise control", "stage": "stable", "since": "1990", "label": "SteadyCruise", "desc": "Calm cruise control, no throttle bursts after shifts",
      "info": "Replaces the game's cruise throttle with a calm one: no bursts of full throttle after every shift and no hunting around the set speed. Most other cruise features build on it.",
@@ -354,8 +346,8 @@ FEATURES = [
     {"id": "hold", "group": "Cruise control", "stage": "beta", "since": "2011", "label": "Auto Hold", "desc": "Stays braked at a stop until you give gas", "needs": ["cc"],
      "info": "After you stop, the brake stays on by itself until you press the throttle, like Auto Hold in a modern truck: no creeping at a traffic light.",
      "keys": [["cruise", "auto_hold", 1, 0]]},
-    {"id": "isa", "group": "Cruise control", "stage": "beta", "since": "2022", "label": "Follow speed limits (ISA)", "desc": "The cruise set speed follows the signs (+3 km/h)", "buttons": [["cruise", "speed_limit_button"]],
-     "info": "Intelligent speed assistance (ISA): the cruise set speed follows the signs, plus the offset you choose (3 km/h by default). With this on, it starts active; holding the Adaptive Cruise Control Mode button switches it off and on while driving, once that button is set in step 3.",
+    {"id": "isa", "group": "Cruise control", "stage": "beta", "since": "2022", "label": "Follow speed limits (ISA)", "desc": "The cruise set speed follows the signs (+3 km/h)",
+     "info": "Intelligent speed assistance (ISA): the cruise set speed follows the signs, plus the offset you choose (3 km/h by default). With this on, it starts active. While driving, hold the Adaptive Cruise Control Mode key (the distance key) for a second to switch it off and on; the distance stays as it was, and a short tone says which way it went.",
      "keys": [["cruise", "speed_limit", 1, 0], ["cruise", "resume_to_limit", 1, 0]]},
     {"id": "lka", "group": "Steering", "stage": "experimental", "since": "2019", "label": "Lane centering", "desc": "Keeps the truck in its lane, calm and self-learning, from 20 km/h",
      "info": "Keeps the truck in the middle of the lane with gentle steering, learns how your wheel responds and damps any sway. Works from 20 km/h and pauses while you indicate. Keep your hands near the wheel: it is an assistant, not an autopilot.",

@@ -5,7 +5,7 @@
 #pragma once
 
 #define SUITE_NAME "dazdrive"  // DazDrive: DLL, ini and output folder
-#define SUITE_VERSION "0.6.0-beta.1"
+#define SUITE_VERSION "0.6.0-beta.2-dev.1"
 
 #include <windows.h>
 #include <stdint.h>
@@ -18,7 +18,12 @@
 
 extern char g_dir[MAX_PATH];  // output folder (plugins\SUITE_NAME\), trailing backslash
 void log_open();
-void logline(const char *fmt, ...);  // one timestamped line in SUITE_NAME.log
+void logline(const char *fmt, ...);  // one timestamped line in SUITE_NAME.log (and in the text ring)
+void logring(const char *fmt, ...);  // only in the text ring: it reaches the disk only inside an incident file
+void log_lock();
+void log_unlock();
+void log_ring_dump(FILE *f, double since, double t0);
+extern void (*g_log_tap)(double t, const char *s);
 double wall_s();                  // seconds since the DLL started
 double sim_s();                   // simulation time in seconds (stops while paused)
 FILE *open_out(const char *name, const char *mode);
@@ -29,8 +34,9 @@ extern double g_csv_max_mb;
 // stamp gets the local date_time part of the name (yyyy-mm-dd_hh-mm-ss). NULL if it cannot be made.
 FILE *open_incident(const char *dir, const char *prefix, double max_mb, char *stamp, size_t n);  // NULL for *.csv below log_level 2
 
-// log_level (ini [core]): 0 = events only (start, hooks, errors, mode changes, AEB incidents), 1 = + every shift and the
-// modules' detail lines, 2 = + periodic traces and the csv trace files.
+// log_level (ini [core]): 0 = events only (start, hooks, errors, mode changes, incidents), 1 = + every shift and the
+// modules' detail lines, 2 = + periodic traces and the csv trace files. Lines of level 1 are kept in the text ring anyway,
+// so an incident file has them even at level 0.
 extern int g_log_level;
 extern double g_log_max_mb;
 // LOG_BOOST: an experimental module defines it as 1 before including this file, so its detail lines already show one
@@ -38,7 +44,26 @@ extern double g_log_max_mb;
 #ifndef LOG_BOOST
 #define LOG_BOOST 0
 #endif
-#define logv(lvl, ...) do { if (g_log_level + LOG_BOOST >= (lvl)) logline(__VA_ARGS__); } while (0)
+#define logv(lvl, ...) do { if (g_log_level + LOG_BOOST >= (lvl)) logline(__VA_ARGS__); else if ((lvl) <= 1) logring(__VA_ARGS__); } while (0)
+
+// ---------------------------------------------------------------- incident.cpp
+// An incident = something went wrong or looked odd (a hunting gearbox, the driver fighting a shift, the rpm limiter, stuck
+// in neutral, a ringing lane assist, AEB). incident() writes incidents\<kind>_<local date_time>.csv: the log lines and the
+// rows (10 per second) of the 20 s before, and everything until 15 s after the last trigger. The folder is kept under
+// incident_mb (oldest out first); dazdrive.log only gets one line per incident.
+struct incident_ctx {
+    volatile int mode;        // gearbox mode: 0 off/game, 1 Eco, 2 Normal, 3 Power, 4 M
+    volatile int target;      // the gear TrueShift wants (0 = none)
+    volatile int flags;       // INC_* bits
+    volatile float grade_pct; // road grade, % (NAN unknown)
+    volatile float gap_m;     // radar gap to the vehicle ahead, m (NAN none)
+};
+enum { INC_ROLL = 1, INC_CRAWL = 2, INC_AEB = 4, INC_ISA = 8, INC_HOLD = 16 };
+extern incident_ctx g_inc;
+extern double g_incident_mb;
+void incident(const char *kind, const char *fmt, ...);
+void incident_frame();   // every frame, after the modules
+void incident_stop();
 
 // ---------------------------------------------------------------- config.cpp
 

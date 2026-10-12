@@ -12,17 +12,15 @@ labels: bug
 - ETS2 version (Steam beta temporary_1_60?):
 - Truck, engine and gearbox (mods?):
 - Trailer: yes / no. Navigation route active: yes / no.
-- Wheel / controller and which buttons you pressed:
 
 **When**
 In-game time or odometer when it happened, and roughly how often it happens.
 
 **Files**
-`dazdrive.log` is overwritten every time the game starts, so copy `plugins\dazdrive\dazdrive.log`
-(and `dazdrive.log.1` if it exists) to somewhere safe **before you start the game again**, then attach
-the copy.
+When something goes wrong, DazDrive saves that moment (20 s before, 15 s after) in
+`plugins\dazdrive\incidents\`. Zip that folder and attach it, together with `plugins\dazdrive\dazdrive.log`
+(the previous session's log is `dazdrive.prev.log`).
 
-- About emergency braking (AEB)? Also attach the folder `plugins\dazdrive\aeb\` (zipped).
-- About driving behavior? Pick "Bug hunt" under Logging on the setup page (csv traces only exist at
-  log_level 2), drive again and attach the zipped `.csv` files from the same folder (`trueshift.csv`,
-  `cruise.csv`, `lane.csv`, `creep.csv`).
+- Nothing in the incidents folder, but it felt wrong? Say so. For driving behavior you can also pick
+  "Bug hunt" under Logging on the setup page (csv traces only exist at log_level 2), drive again and
+  attach the zipped `.csv` files from the same folder.

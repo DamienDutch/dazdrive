@@ -51,7 +51,7 @@ Project: <https://github.com/DamienDutch/dazdrive> · Downloads: [Releases](http
 | ACC (adaptive cruise control) | beta | off (~2015) | Follows the vehicle ahead smoothly and brakes early. |
 | Stop & Go | beta | off (~2015) | The ACC keeps going in a jam: stops behind the vehicle ahead and drives off with it. |
 | Auto Hold | beta | off (~2015) | Stays braked at a stop until you give gas. |
-| Follow speed limits (ISA, intelligent speed assistance) | beta | off (2024) | The cruise set speed follows the signs. |
+| Follow speed limits (ISA, intelligent speed assistance) | beta | off (2024) | The cruise set speed follows the signs. Starts off: hold the game's ACC distance key for a second to switch it on. |
 | Crawl mode | experimental | off (~2020) | Creeps at walking pace in 1, 2 and R, for parking and docking. |
 | **JunctionSense** | experimental | off (~2020) | Slows for junctions and roundabouts on your route. |
 | Lane centering | experimental | off (~2020) | Keeps the truck in its lane (self-learning). Keep your hands near the wheel: it is an assistant, not an autopilot. |
@@ -89,13 +89,16 @@ single features, detect your wheel buttons, save the ini next to the page and re
 
 [Open an issue](https://github.com/DamienDutch/dazdrive/issues/new/choose) with:
 
-- `plugins\dazdrive\dazdrive.log` (and `dazdrive.log.1` if it exists). **The log is overwritten every
-  time the game starts, so copy it before you start the game again.**
+- the folder `plugins\dazdrive\incidents\` (zipped) and `plugins\dazdrive\dazdrive.log`. When something
+  goes wrong (the gearbox hunts, you fight a shift, the rpm hits the limiter, stuck in neutral,
+  emergency braking, a ringing lane assist) DazDrive saves that moment as a file there: the 20 s
+  before and 15 s after, with the log lines of that time. The name has the local date and time. The
+  folder stays under 4 MB and the previous session's log is kept as `dazdrive.prev.log`.
 - the game version, truck and engine/gearbox (mods?), trailer or not, whether a route was active,
-  what you pressed and roughly when.
-- if it is about emergency braking: also the folder `plugins\dazdrive\aeb\` (zipped).
-- for driving behavior: pick "Bug hunt" under Logging on the setup page, drive again and zip the
-  `.csv` files from the same folder. They only exist at log level 2 (`log_level=2`).
+  and what you were doing.
+- nothing in the incidents folder but it felt wrong? Say so. For driving behavior you can pick "Bug
+  hunt" under Logging on the setup page, drive again and zip the `.csv` files from the same folder
+  (they only exist at log level 2).
 
 ## Build from source
 
@@ -121,7 +124,7 @@ does not know, it should find nothing, log that and do nothing, but that is no g
 - `tools/` – build, release, ini/setup-page generator (`gen_ini.py` + `dazdrive-setup.tmpl.html`),
   ride-log analysis, simulators (`tools/sim/`).
 - `docs/` – design notes and reverse-engineering notes per feature
-  ([`trueshift.md`](docs/trueshift.md), [`aeb.md`](docs/aeb.md),
+  ([`trueshift.md`](docs/trueshift.md), [`aeb.md`](docs/aeb.md), [`incidents.md`](docs/incidents.md),
   [`predictive-cruise.md`](docs/predictive-cruise.md), [`lane.md`](docs/lane.md),
   [`research.md`](docs/research.md), ...), [`eras.md`](docs/eras.md) for when real trucks got what,
   [`horizon.md`](docs/horizon.md) for what could still be built.

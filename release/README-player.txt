@@ -160,32 +160,22 @@ it does; 0/1 are off/on. Changes apply after restarting the game. Delete the fil
 writes the standard preset again; a setting missing from an old ini also gets its standard value.
 
 
-CONTROLS AND FINDING YOUR BUTTON NUMBERS
-----------------------------------------
+CONTROLS
+--------
 
-The plugin reads wheel/joystick buttons directly. Numbers in the ini count from 1, like the Windows
-game controller panel.
+There is nothing to set up: DazDrive uses the keys and buttons you already bound in the game
+(Options > Controls), on a wheel or a keyboard.
 
-Easiest: the setup page's "Detect" button. Recommended: use the same buttons you bound in the game
-for Shift Up Hint, Shift Down Hint and Adaptive Cruise Control Mode: a short press does what the
-game does, holding it 0.8 s adds the extra. The game's controls count from 0, the plugin from 1
-("Joy Button 22" there = 23 here). Buttons 1 to 128 can be read.
-
-By hand: press the button once in the game, open plugins\dazdrive\dazdrive.log and look for
-"input: joystick 0 button 14 pressed".
-
-- Gearbox mode: the game's own key for the adaptive automatic (Options > Controls) steps
-  Eco / Normal / Power / M. TrueShift follows it. Or hold the shift-hint buttons (mode_up_button /
-  mode_down_button; 0 = off in the standard preset) for 0.8 s to step Eco / Normal / Power (M only
-  with the game's key); a short press stays an ordinary shift hint, and in M it is a manual shift.
-  A hint also holds its gear for 10 s (hint_hold_s).
-- Keyboard only? The mode key and the cruise keys of the game work. The long-press on hint buttons
-  and the wheel-button options need a joystick/wheel button. The crawl toggle also has toggle_key
-  (a Windows virtual-key code, e.g. 67 = C).
-- Speed-limit following (ISA): hold speed_limit_button (0 = off in the standard preset) for 0.8 s.
-- Crawl mode (if enabled): at a standstill hold the game's gearbox-mode key (or toggle_button)
-  for 0.8 s.
-
+- Gearbox mode: the game's own key for the adaptive automatic ("Adaptive Automatic Transmission
+  Mode") steps Eco / Normal / Power / M. TrueShift follows it. A shift hint (up or down) is an
+  ordinary hint: the gear it picks is held for 10 s (hint_hold_s).
+- Speed-limit following (ISA, beta): it starts off. While driving, hold the game's ACC distance key
+  ("Adaptive Cruise Control Mode") for about a second to switch it on or off. A rising or falling
+  pair of tones tells you which way it went, the distance stays as it was, and the choice is
+  remembered.
+- Crawl mode (if enabled in the setup page): at a standstill hold the game's gearbox-mode key for
+  about a second.
+- Cruise + / - and the ACC distance key: see "Cruise" above. Nothing else needs a button.
 
 DASHBOARD LETTERS AND TONES
 ---------------------------
@@ -240,18 +230,21 @@ Open an issue: https://github.com/DamienDutch/dazdrive/issues/new/choose
 (or send the same things to whoever gave you this zip).
 
 Include: game version, truck and engine/gearbox (mods?), trailer or not, whether a route was
-active, what you pressed, and the in-game time or odometer of the problem.
+active, and what you were doing.
 
-Attach plugins\dazdrive\dazdrive.log (and dazdrive.log.1 if it exists). The log is overwritten every
-time the game starts, so copy it somewhere BEFORE you start the game again. The first lines say
-which version and which modules are running.
+Attach the folder plugins\dazdrive\incidents\ (zipped) and plugins\dazdrive\dazdrive.log. When
+something goes wrong (the gearbox hunts between gears, you fight a shift, the rpm hits the limiter,
+the truck is stuck in neutral, emergency braking, a ringing lane assist) DazDrive saves that moment
+as one file in the incidents folder: the 20 seconds before and 15 seconds after, with the log lines
+of that time. The file name has the local date and time, so you can say "it was about then". The
+folder is kept under 4 MB (oldest files go first) and dazdrive.log holds one line per incident. The
+log of the previous session is kept as dazdrive.prev.log, so you do not have to copy anything
+before you start the game again.
 
-If it is about emergency braking, also attach the folder plugins\dazdrive\aeb\ (zipped).
-
-For a driving problem, pick "Bug hunt" under Logging on the setup page (or set log_level=2 and
-trace=1 in [trueshift], [cruise] and [creep]), drive again and also send the .csv files from the
-same folder (trueshift.csv, cruise.csv, lane.csv, creep.csv); they are large, so zip them. The
-csv traces only exist at log_level 2.
+If something felt wrong but there is no incident file, say so in the issue: that is useful to know
+too. For that case, pick "Bug hunt" under Logging on the setup page (or set log_level=2 and trace=1
+in [trueshift], [cruise] and [creep]), drive again and also send the .csv files from the same
+folder (trueshift.csv, cruise.csv, lane.csv, creep.csv); they are large, so zip them.
 
 
 CREDITS AND LICENSE

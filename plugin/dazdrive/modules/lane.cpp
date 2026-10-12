@@ -287,6 +287,7 @@ static void learn_ring(float xA, float dt)
         L_cur.cap = L_cur.s;
         L_base = L_cur; L_trial = 0; L_hold = 2; L_ring_cool = L_t + 10; L_dirty = 1;
         logv(1, "Lane learn: the assist offset rings (A rms %.4f, %d crossings in 8 s): gains x%.2f -> s %.2f", sqrtf(L_xa2), n, L_cur.s / old, L_cur.s);
+        incident("lane", "the lane assist rings: %d crossings in 8 s (A rms %.4f), gains lowered x%.2f", n, sqrtf(L_xa2), L_cur.s / old);
         for (auto &t : L_ar_t) t = -1e9;
     }
 }

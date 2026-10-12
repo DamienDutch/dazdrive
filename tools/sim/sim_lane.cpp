@@ -24,6 +24,16 @@ const layout *L = &g_layout;
 volatile int g_rolling, g_cruise_smooth, g_crawl_on;
 volatile float g_pcc_need_kmh = NAN;
 int g_log_level = 2;
+incident_ctx g_inc = { 0, 0, 0, NAN, NAN };
+double g_incident_mb = 0;
+int g_n_incidents;
+void logring(const char *, ...) {}
+void incident(const char *kind, const char *fmt, ...)
+{
+    g_n_incidents++;
+    char b[300]; va_list ap; va_start(ap, fmt); vsnprintf(b, sizeof b, fmt, ap); va_end(ap);
+    printf("   INCIDENT %s: %s\n", kind, b);
+}
 const char *g_truck_unsupported;
 volatile float g_creep_brake;
 volatile char g_dash_flash, g_dash_status;

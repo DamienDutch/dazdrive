@@ -26,7 +26,7 @@ static float p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_hint_hold, p_min_gap,
     p_max_skip, p_skip_acc, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
     p_eb_down, p_eb_light, p_eb_skip, p_m_manual, p_m_assist, p_m_lug, p_letter, p_start_fix, p_slip_s, p_launch_torque, p_launch_rpm,
-    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_dec, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_wet, p_stop, p_tones, p_btn_up, p_btn_dn, p_long_s, p_crest_band;
+    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_dec, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_wet, p_stop, p_tones, p_crest_band;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = TrueShift on, 0 = the game's own automatic" },
@@ -76,9 +76,6 @@ static param g_params[] = {
     { "eco_roll_under_power_kmh", &p_roll_under_pw, 1.0f, "the same in Power: the strictest (keep it between 1 and 2 km/h; values around 0.5 give very short rolls that hunt)" },
     { "eco_roll_max_decel", &p_roll_dec, 0.04f, "eco-roll only where the truck would lose at most this much speed in neutral (m/s2; 0.04 = ~3 km/h in 20 s: a slight descent, not the flat)" },
     { "eco_roll", &p_roll, 1, "1 = roll in neutral with the pedal released on gentle stretches (Eco, Normal and Power; not in M; never with any brake)" },
-    { "mode_up_button", &p_btn_up, 14, "hold this wheel button (shift hint up) to go one mode up: Eco -> Normal -> Power; from M it goes back to Normal (number from dazdrive.log; 0 = off)" },
-    { "mode_down_button", &p_btn_dn, 13, "hold this one (shift hint down) to go one mode down: Power -> Normal -> Eco; from M it goes back to Normal" },
-    { "mode_hold_s", &p_long_s, 0.8f, "how long to hold for a mode change (a short press stays a shift hint; in M it is a manual shift hint). M is only reached with the game's own 'Adaptive Automatic Transmission Mode' key, not with these buttons" },
     { "tones", &p_tones, 1, "1 = a short tone when the mode changes (Eco low, Normal middle, Power rising, M two short)" },
     { "retarder_downshift", &p_ret_down, 0, "1 = the retarder also makes TrueShift keep the rpm up like the engine brake (a retarder does not need it); 0 = only the engine brake does" },
     { "air_charge_psi", &p_air_psi, 100, "brake air below this (psi): keep the rpm up so the engine-driven compressor refills it; 0 = off" },
@@ -132,7 +129,6 @@ static struct {
     double shift_at;
     int shift_dir;
     int commanded;          // last gear we returned to the game
-    int m_hint, m_hint_gear; double m_hint_at;   // M: a short press on a hint button (+1 / -1) the game has not carried out (yet)
     const char *cmd_why;
     const char *last_why;   // reason of the last shift we made
     double hold_until;
@@ -720,28 +716,13 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
     return kmh <= S.roll_kmh + 6 && kmh >= S.roll_kmh - 12 && kmh >= 45 && grade_pct() > -4;
 }
 
-// M: the gear stays where the hint buttons put it; TrueShift only helps.
+// M: the gear stays where the driver's shift hints put it; TrueShift only helps.
 static int decide_manual(int cur, float rpm, float v, double since, const char **why)
 {
     int n = n_gears(), ebrake = T.motor_brake || T.retarder > 0 || S.eb_level > 0.01f;
     double now = sim_s();
     float brake = fmaxf(T.in_brake, T.eff_brake);
     if (rpm > S.eng.rpm_limit * (ebrake ? 0.99f : 0.96f) && cur < n) { *why = "M: rev limit"; return cur + 1; }
-    // The hint buttons in M (Damien 11-10, ride 3 at 119/121 s: hint up twice in 8 at 1700 rpm, nothing until the limiter; in ride
-    // ts2, TrueShift 0.2, the game did carry them out in M): a short press does it here when the game has not started it 0.8 s after
-    // the press (ts3b: the game's hint shift showed 0.63 s after the button). Kept until the gear changes (the hook asks twice).
-    if (S.m_hint) {
-        double age = wall_s() - S.m_hint_at;
-        int d = S.m_hint, to = cur + d;
-        if (cur != S.m_hint_gear || age > 2.5 || (S.self && gb_target(S.self) != cur && age < 0.8)) S.m_hint = 0;  // the game did it / stale
-        else if (age > 0.8) {
-            if (to >= 1 && to <= n && (d > 0 ? rpm_at(to, v) > idle_rpm() + 150 : rpm_at(to, v) < S.eng.rpm_limit * 0.95f)) {
-                *why = d > 0 ? "M: hint up" : "M: hint down"; return to;
-            }
-            S.m_hint = 0;
-            logline("M: hint %s not done in %d at %.0f km/h (the rpm would be %.0f)", d > 0 ? "up" : "down", cur, v * 3.6f, rpm_at(to, v));
-        }
-    }
     if (rpm < idle_rpm() + 120 && cur > 1) { *why = "M: stall"; return pick_down(cur, v, eco_dn(1) + 300); }
     if (p_m_manual > 0) { *why = "M"; return cur; }
     if (p_m_assist > 0 && S.kick_until > now && rpm < S.eng.range[R_POWER][0] + 100 && cur > 1 && since > 0.3) {
@@ -1124,6 +1105,25 @@ static int decide_gear(void *self, const char **why)
 
 // ---------------------------------------------------------------- hook stubs
 
+// Incidents from the shifts (core/incident.cpp): the gearbox hunting (three shifts in a row that each reverse the direction
+// within 10 s, none of them the driver's) and the driver fighting a shift (a hint against our last shift within 5 s).
+static void track_shifts(int prev, int g, int hint, double now)
+{
+    static struct { double t; int from, to; } sh[3];
+    if (!S.ours) { memset(sh, 0, sizeof sh); return; }  // below the takeover speed the game's own automatic shifts
+    if (prev <= 0 || g <= 0 || fabsf(T.speed) * 3.6f < 5) return;  // neutral (eco-roll) is not a shift, nor is picking the launch gear at a stop
+    if (hint) {
+        if (sh[2].t && now - sh[2].t < 5 && (g - prev) * (sh[2].to - sh[2].from) < 0)
+            incident("override", "hint %d->%d against our shift %d->%d, %.1f s later, %.0f km/h, %.0f rpm, mode %s", prev, g, sh[2].from, sh[2].to,
+                     now - sh[2].t, fabsf(T.speed) * 3.6f, T.rpm, mode_name[S.mode]);
+        return;
+    }
+    sh[0] = sh[1]; sh[1] = sh[2]; sh[2].t = now; sh[2].from = prev; sh[2].to = g;
+    if (sh[0].t && now - sh[0].t < 10 && (sh[0].to - sh[0].from) * (sh[1].to - sh[1].from) < 0 && (sh[1].to - sh[1].from) * (g - prev) < 0)
+        incident("hunt", "gears %d->%d->%d->%d in %.1f s at %.0f km/h, %.0f rpm, grade %.1f%%, mode %s", sh[0].from, sh[0].to, sh[1].to, g,
+                 now - sh[0].t, fabsf(T.speed) * 3.6f, T.rpm, grade_pct(), mode_name[S.mode]);
+}
+
 static void note_gear_change(void *self)
 {
     int g = gb_gear(self);
@@ -1138,6 +1138,7 @@ static void note_gear_change(void *self)
     int hint = prev > 0 && g > 0 && g != S.commanded && S.ours;
     const char *why = hint ? "hint" : g == S.commanded ? S.cmd_why : "game";
     DEV_NOTE(shift(prev, g, why, hint, now));
+    track_shifts(prev, g, hint, now);
 
     // Did the last upshift hold? A downshift out of it for lack of force (or a
     // hint down) within 25 s means it did not.
@@ -1236,7 +1237,10 @@ static void tail_pre(void *self)
     // (ts3a-c, docs/neutral-exit-re.md § 1). There we do its own engage step.
     if (S.roll_exit > 0) {
         if (g != 0 || sim_s() - S.roll_exit_at > 3 || fabsf(T.speed) * 3.6f < p_off_kmh) {
-            if (g == 0) logline("roll end: gear %d did not engage in 3 s", S.roll_exit);
+            if (g == 0) {
+                logline("roll end: gear %d did not engage in 3 s", S.roll_exit);
+                incident("neutral", "after the eco-roll gear %d did not engage in 3 s (%.0f km/h)", S.roll_exit, fabsf(T.speed) * 3.6f);
+            }
             S.roll_exit = 0;
             g_rolling = 0;
         } else {
@@ -1256,6 +1260,8 @@ static void tail_pre(void *self)
             // right after a pause the gap state is the pause's, not a shift's (pre.6 ride 609/1716 s: 1.5 s in neutral at 45-50 km/h)
             else if (sim_s() - gap_since > (sim_s() - g_reset_at < 5 ? 0.3 : 1.5) && gb_engage(self, tgt)) {
                 logline("stuck in neutral for %.1f s at %.0f km/h: engaged gear %d", sim_s() - gap_since, fabsf(T.speed) * 3.6f, tgt);
+                if (sim_s() - g_reset_at >= 5)  // right after a pause the gap state is normal: no incident
+                    incident("neutral", "stuck in neutral for %.1f s at %.0f km/h, engaged gear %d", sim_s() - gap_since, fabsf(T.speed) * 3.6f, tgt);
                 gap_since = 0;
             }
         } else gap_since = 0;
@@ -1394,54 +1400,52 @@ static void dash_letter()
     }
 }
 
-// Long press on the shift-hint buttons changes the mode (Damien 10-10); the
-// game's own keybind keeps working, and the short press stays a hint shift.
-static void mode_buttons()
+// Incident watch (core/incident.cpp): the rpm limiter hit while TrueShift drives, or the engine dragged below idle while moving.
+static void watch_engine()
 {
-    static double down_at[2], up_at[2];
-    static int fired[2];
-    const float btn[2] = { p_btn_up, p_btn_dn };
-    double now = wall_s();
-    for (int k = 0; k < 2; k++) {
-        if (btn[k] < 1) continue;
-        // A held button flickers under Proton (ts3a: 7 "presses" in 1.2 s):
-        // only a release of 0.3 s ends the hold.
-        if (!input_held((int)btn[k])) {
-            if (!up_at[k]) up_at[k] = now;
-            if (now - up_at[k] > 0.3) {
-                // a short press (released before mode_hold_s) in M is a hint shift for decide_manual
-                if (down_at[k] && !fired[k] && S.mode == MODE_M && S.self) {
-                    S.m_hint = k == 0 ? 1 : -1; S.m_hint_at = down_at[k]; S.m_hint_gear = S.last_gear;
-                }
-                down_at[k] = 0; fired[k] = 0;
-            }
-            continue;
+    static double hi_at, lo_at;
+    static int armed = 1;
+    double now = sim_s();
+    int driving = g_active && !S.unsupported && takeover() && S.mode != MODE_M && T.engine_on && !T.paused && T.gear > 0;
+    float lim = S.eng.rpm_limit > 500 ? S.eng.rpm_limit : T.rpm_limit;
+    if (driving && lim > 500 && T.rpm > 0.985f * lim && T.retarder == 0 && !T.motor_brake) {
+        if (!hi_at) hi_at = now;
+        if (armed && now - hi_at > 0.6) {
+            armed = 0;
+            incident("limiter", "rpm %.0f of %.0f for %.1f s in gear %d at %.0f km/h, throttle %.0f%%, grade %.1f%%, mode %s", T.rpm, lim, now - hi_at, T.gear,
+                     fabsf(T.speed) * 3.6f, T.in_thr * 100, grade_pct(), mode_name[S.mode]);
         }
-        up_at[k] = 0;
-        if (!down_at[k]) down_at[k] = now;
-        if (fired[k] || now - down_at[k] < p_long_s || !G.cvar_adaptive) continue;
-        fired[k] = 1;
-        int m = S.mode, to;
-        if (k == 0) to = m == MODE_ECO ? MODE_NORMAL : MODE_POWER;  // from M: both go to Normal (below)
-        else to = m == MODE_POWER ? MODE_NORMAL : MODE_ECO;
-        if (m == MODE_M) to = MODE_NORMAL;
-        if (to == m) continue;
-        static const float cvar[] = { 3.0f, 10.0f, 1.6667f, 0.0f };  // Normal, Eco, Power, M
-        game_cvar_set((void *)G.cvar_adaptive, cvar[to]);
-        S.hold_until = 0;  // the short press made a hint shift: TrueShift picks again
-        logline("mode button: %s -> %s", mode_name[m], mode_name[to]);
+    } else {
+        hi_at = 0;
+        if (T.rpm < 0.9f * lim) armed = 1;
     }
+    if (driving && fabsf(T.speed) * 3.6f > 8 && T.rpm > 100 && T.rpm < 0.9f * idle_rpm() && T.in_thr > 0.2f) {
+        if (!lo_at) lo_at = now;
+        if (now - lo_at > 0.8) {
+            incident("lug", "rpm %.0f under idle %.0f for %.1f s in gear %d at %.0f km/h, throttle %.0f%%, grade %.1f%%", T.rpm, idle_rpm(), now - lo_at, T.gear,
+                     fabsf(T.speed) * 3.6f, T.in_thr * 100, grade_pct());
+            lo_at = now + 30;  // not again for a while
+        }
+    } else if (!lo_at || now > lo_at) lo_at = 0;
 }
 
 static void ts_frame()
 {
     g_rolling = S.rolling || S.roll_exit > 0;  // neutral by our choice, also until the exit gear is in
+    {
+        static const int to_inc[] = { 2, 1, 3, 4 };  // Normal, Eco, Power, M -> incident file numbering
+        int on = g_active && !S.unsupported && !manual_box();
+        g_inc.mode = on ? to_inc[S.mode] : 0;
+        g_inc.target = on && S.commanded > 0 ? S.commanded : 0;
+        g_inc.grade_pct = on ? grade_pct() : NAN;
+        g_inc.flags = (g_inc.flags & ~(INC_ROLL | INC_HOLD)) | (g_rolling ? INC_ROLL : 0) | (S.hold_until > sim_s() ? INC_HOLD : 0);
+        if (on) watch_engine();
+    }
     DEV_NOTE(gearbox(g_active && !S.unsupported && !manual_box() ? mode_letter[S.mode] : 0, S.mass, grade_pct()));
     {
         static double at;
         if (wall_s() - at > 0.5 || wall_s() < at) { at = wall_s(); g_pcc_need_kmh = g_active && !S.unsupported ? climb_need_kmh() : NAN; }
     }
-    if (g_active && !S.unsupported && !manual_box()) mode_buttons();
     dash_letter();
     int wet = p_wet > 0 && T.wipers;
     if (wet != S.wet) { S.wet = wet; logv(1, "wipers %s: %s road behavior", wet ? "on" : "off", wet ? "wet" : "dry"); }

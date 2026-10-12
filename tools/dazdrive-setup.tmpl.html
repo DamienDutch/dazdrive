@@ -6,7 +6,7 @@
 <title>DazDrive setup</title>
 <style>
 /* One page, in layers: Start (open your ini / guide me) -> 1 truck era (timeline) -> 2 feature switches ->
-   3 wheel buttons (optional) -> 4 fine-tuning (collapsed per module) -> 5 save, with a sticky bar at the bottom.
+   3 fine-tuning (collapsed per module) -> 4 save, with a sticky bar at the bottom.
    "Guide me" turns the same sections into a wizard: one step at a time with Back / Next in the bar. */
 :root{--bg:#f3f4f1;--card:#fff;--fg:#1c2421;--mute:#5d6863;--line:#d8ddd8;--acc:#d2611a;--accfg:#fff;--on:#2f7d4f;--onbg:#e7f3ec;
   --warn:#9a5b06;--bad:#c0262d;--code:#eef0ec;--dash:#1b1f1e;--dashfg:#f1f3ef;--dashmute:#9aa6a0;--bar:rgba(255,255,255,.92);--glow:rgba(210,97,26,.25)}
@@ -102,15 +102,6 @@ dialog .also:empty{display:none}
 dialog .btns{margin:14px 0 0;justify-content:flex-end}
 .tag{display:inline-block;font-size:.68rem;border:1px solid var(--warn);color:var(--warn);border-radius:99px;padding:0 7px;vertical-align:middle;font-weight:400}
 .count{font:600 .85rem ui-monospace,monospace;color:var(--mute)}
-/* wheel buttons */
-.btnrow{display:grid;grid-template-columns:1fr auto auto;gap:4px 10px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
-.btnrow .what{min-width:0}
-.btnrow .st{grid-column:1/-1;font-size:.85rem;color:var(--mute);min-height:1.2em}
-.btnrow .st:empty{display:none}
-.btnrow .st.ok{color:var(--on)}
-.btnrow .st.wait{color:var(--acc)}
-.btnrow input{width:5.5em;text-align:center}
-.btnrow .num{font:600 .95rem ui-monospace,monospace}
 /* fine-tuning */
 details.tune{margin:10px 0;padding:0 16px}
 details.tune summary{list-style:none;cursor:pointer;display:flex;gap:10px;align-items:center;padding:12px 0;font-weight:600}
@@ -209,37 +200,17 @@ body.wiz .wizhead{display:flex}
 <div id="tiles"></div>
 </section>
 
-<section class="card" data-step="3" id="s-btn">
-<h2><span class="n">3</span> Your wheel buttons <span class="opt">optional</span></h2>
-<ul class="facts">
-<li>🎮 Use the <b>same buttons</b> you already have in the game's controls: a short press does what the game does, <b>holding 0.8 s</b> does the extra</li>
-<li>🔍 Press <b>Detect</b>, then press the button on your wheel. The game counts from 0 and this page from 1: Detect handles that</li>
-<li>➕ A modifier in the game (like <i>Joy Button 21 + 13</i>)? Only the button itself counts here, <b>no modifier</b></li>
-<li>⌨️ Keyboard or no wheel? Skip this step</li>
-</ul>
-<div id="buttons"></div>
-<details id="btnextra"><summary>Another button for crawl mode</summary><div id="buttons2"></div></details>
-<details><summary>Detect does not work, or you want to check the numbers</summary>
-<ol>
-<li>Start the game once with the plugin installed and drive a bit.</li>
-<li>Press each button you want once, in a fixed order.</li>
-<li>Close the game and open <code>plugins\dazdrive\dazdrive.log</code>. Search for <code>input: joystick</code>: the line <code>input: joystick 3 button 14 pressed</code> means button number 14.</li>
-<li>Type the numbers in the fields above. A modifier in the game (like <i>Joy Button 21 + 13</i>) can be ignored: only the button itself counts.</li>
-</ol>
-</details>
-</section>
-
-<section data-step="4" id="s-tune">
+<section data-step="3" id="s-tune">
 <div class="card" style="margin-bottom:0">
-<h2><span class="n">4</span> Fine-tuning <span class="opt">optional</span></h2>
+<h2><span class="n">3</span> Fine-tuning <span class="opt">optional</span></h2>
 <p class="mute" style="margin:0">👍 Standard suits most players · open a module for presets · 🔧 Custom shows every setting</p>
 </div>
 <div id="modules"></div>
 <p class="mute offnote" id="offnote"></p>
 </section>
 
-<section class="card" data-step="5" id="s-save">
-<h2><span class="n">5</span> Save</h2>
+<section class="card" data-step="4" id="s-save">
+<h2><span class="n">4</span> Save</h2>
 <ol class="facts" id="savesteps"></ol>
 <p id="msg" class="mute"></p>
 <details><summary>Preview of the file</summary><pre id="preview"></pre></details>
@@ -252,7 +223,6 @@ body.wiz .wizhead{display:flex}
 <p class="since" id="i_since"></p>
 <p id="i_text"></p>
 <p class="needs" id="i_needs"></p>
-<p class="needs" id="i_btn"></p>
 <p class="also" id="i_also"></p>
 <div class="btns"><button type="button" id="i_toggle"></button><button type="button" class="primary" id="i_close">Close</button></div>
 </dialog>
@@ -342,7 +312,6 @@ function eraStage(D, era) {
   return STAGES[worst];
 }
 function isNum(s) { return /^\s*-?(\d+\.?\d*|\.\d+)\s*$/.test(s); }
-function isButtonKey(D, sec, key) { for (var i = 0; i < D.buttons.length; i++) if (D.buttons[i][0] === sec && D.buttons[i][1] === key) return true; return false; }
 // an ini file -> {section: {key: value}}; comments and unknown lines are skipped
 function parseIni(text) {
   var sec = null, out = {};
@@ -365,13 +334,13 @@ function applyIni(D, parsed, vals) {
   }); });
   return n;
 }
-// which era the values are closest to (wheel buttons do not count); [era id, number of keys that differ]
+// which era the values are closest to [era id, number of keys that differ]
 function nearestEra(D, vals) {
   var best = null;
   D.eras.forEach(function (e) {
     var p = presetValues(D, e.id), d = 0;
     D.order.forEach(function (sec) { D.tables[sec].forEach(function (row) {
-      if (!isButtonKey(D, sec, row[0]) && !same(p[sec][row[0]], vals[sec][row[0]])) d++;
+      if (!same(p[sec][row[0]], vals[sec][row[0]])) d++;
     }); });
     if (!best || d < best[1]) best = [e.id, d];
   });
@@ -395,11 +364,11 @@ if (typeof document !== "undefined") (function () {
   function changes() {
     var base = presetValues(D, era), n = 0;
     D.order.forEach(function (sec) { D.tables[sec].forEach(function (row) {
-      if (!isButtonKey(D, sec, row[0]) && !same(base[sec][row[0]], vals[sec][row[0]])) n++;
+      if (!same(base[sec][row[0]], vals[sec][row[0]])) n++;
     }); });
     return n;
   }
-  // every value equal to the era's preset, wheel buttons included
+  // every value equal to the era's preset
   function isPreset(e) {
     var p = presetValues(D, e.id), ok = true;
     D.order.forEach(function (sec) { D.tables[sec].forEach(function (row) { if (!same(p[sec][row[0]], vals[sec][row[0]])) ok = false; }); });
@@ -412,7 +381,7 @@ if (typeof document !== "undefined") (function () {
     if (i.err) i.err.textContent = bad ? text : "";
     if (bad) badList.push(i);
   }
-  function badText(n) { return n + (n === 1 ? " field needs" : " fields need") + " a number (marked red; wheel buttons 1 to 128)."; }
+  function badText(n) { return n + (n === 1 ? " field needs" : " fields need") + " a number (marked red)."; }
   function refresh() {
     badList = [];
     Object.keys(inputs).forEach(function (id) {
@@ -487,10 +456,8 @@ if (typeof document !== "undefined") (function () {
     bind(sec, key, kind, ctl, err, label);
     return row;
   }
-  function setEra(id, keepButtons) {
-    var keep = D.buttons.map(function (b) { return vals[b[0]][b[1]]; });
+  function setEra(id) {
     era = id; vals = presetValues(D, era);
-    if (keepButtons !== false) D.buttons.forEach(function (b, i) { vals[b[0]][b[1]] = keep[i]; });
     mods.forEach(function (m) { m.custom = false; });
   }
   // load an ini text: values in, era = the nearest one, custom tuning shows as Custom
@@ -507,7 +474,7 @@ if (typeof document !== "undefined") (function () {
     try { localStorage.setItem(STORE, JSON.stringify({ ini: text, when: new Date().toISOString(), version: D.version })); } catch (e) {}
   }
 
-  // 1. era timeline (the wheel buttons stay as they are)
+  // 1. era timeline
   var eh = $("eras");
   eh.style.setProperty("--n", D.eras.length);
   D.eras.forEach(function (e, i) {
@@ -546,17 +513,6 @@ if (typeof document !== "undefined") (function () {
       nd.appendChild(document.createTextNode("Needs: "));
       f.needs.forEach(function (id, i) { var n = byId[id], ok = featureState(n, vals) !== "false"; if (i) nd.appendChild(document.createTextNode(", ")); nd.appendChild(el("span", ok ? "" : "off", n.label + (ok ? "" : " (off)"))); });
     }
-    var bl = $("i_btn"); bl.textContent = "";
-    if (f.buttons && f.buttons.length) {
-      bl.appendChild(document.createTextNode("Wheel button" + (f.buttons.length > 1 ? "s" : "") + ": "));
-      f.buttons.forEach(function (sk, i) {
-        var bt = null; D.buttons.forEach(function (b) { if (b[0] === sk[0] && b[1] === sk[1]) bt = b; });
-        if (!bt) return;
-        var v = vals[sk[0]][sk[1]], set = isNum(v) && +v > 0;
-        if (i) bl.appendChild(document.createTextNode(", "));
-        bl.appendChild(el("span", set ? "" : "off", bt[2].replace(/ on another button$/, "") + (set ? " = " + v : bt[4] ? " (optional, not set)" : " not set: step 3")));
-      });
-    }
     $("i_also").textContent = also && also.length ? "Also switched on: " + also.join(", ") : "";
     $("i_toggle").textContent = on ? "Switch off" : "Switch on";
   }
@@ -584,60 +540,7 @@ if (typeof document !== "undefined") (function () {
     th.appendChild(grid);
   });
 
-  // 3. wheel buttons: the browser's Gamepad API sees the wheel; the plugin counts buttons from 1
-  var listening = null;
-  function pressedSet() {
-    var s = {}, pads = navigator.getGamepads ? navigator.getGamepads() : [];
-    for (var i = 0; i < pads.length; i++) { var p = pads[i]; if (!p) continue;
-      for (var b = 0; b < p.buttons.length; b++) if (p.buttons[b].pressed) s[i + ":" + b] = p; }
-    return s;
-  }
-  function stopListening(msg, cls) {
-    if (!listening) return;
-    listening.st.textContent = msg; listening.st.className = "st" + (cls ? " " + cls : "");
-    listening.btn.textContent = "Detect";
-    listening = null;
-  }
-  D.buttons.forEach(function (bt) {
-    var sec = bt[0], key = bt[1], extra = bt[4];
-    var row = el("div", "btnrow"), what = el("div", "what");
-    what.appendChild(el("b", null, bt[2]));
-    what.appendChild(el("small", null, bt[3]));
-    var inp = el("input"); inp.type = "text"; inp.inputMode = "numeric"; inp.placeholder = "not set"; inp.className = "num";
-    var berr = el("small", "err"); berr.setAttribute("aria-live", "polite"); what.appendChild(berr);
-    inp.setAttribute("aria-label", bt[2] + " number (empty = not used)");
-    var btn = el("button", null, "Detect"); btn.type = "button";
-    var st = el("div", "st", "");
-    row.appendChild(what); row.appendChild(inp); row.appendChild(btn); row.appendChild(st);
-    bind(sec, key, "btn", inp, berr, bt[2]);
-    btn.addEventListener("click", function () {
-      if (listening) { var sameBtn = listening.btn === btn; stopListening("Stopped.", ""); if (sameBtn) return; }
-      if (!navigator.getGamepads) { st.textContent = "This browser cannot see controllers. Use the log method below."; return; }
-      var base = pressedSet(), t0 = Date.now();
-      listening = { btn: btn, st: st };
-      btn.textContent = "Cancel";
-      st.textContent = "Press your " + bt[2] + " button now..."; st.className = "st wait";
-      (function poll() {
-        if (!listening || listening.btn !== btn) return;
-        var now = pressedSet();
-        for (var k in now) if (!base[k]) {
-          var n = parseInt(k.split(":")[1], 10) + 1;
-          if (n > 128) { stopListening("That is button " + n + ": the plugin can only read buttons 1 to 128. Pick another button.", "wait"); return; }
-          vals[sec][key] = String(n);
-          stopListening("Got it: button " + n + " on " + now[k].id.replace(/\s*\(.*$/, "") + ".", "ok");
-          refresh();
-          return;
-        }
-        for (var k2 in base) if (!now[k2]) delete base[k2];  // released: may count as new when pressed again
-        if (Date.now() - t0 > 15000) { stopListening("No press seen in 15 s. Press any wheel button once, then Detect again.", ""); return; }
-        requestAnimationFrame(poll);
-      })();
-    });
-    $(extra ? "buttons2" : "buttons").appendChild(row);
-  });
-  if (!$("buttons2").children.length) $("btnextra").hidden = true;
-
-  // 4. one collapsed card per module: tuning chips + Custom with every setting
+  // 3. one collapsed card per module: tuning chips + Custom with every setting
   var host = $("modules");
   D.groups.forEach(function (g) {
     var card = el("details", "card tune"), sum = el("summary");
@@ -668,7 +571,7 @@ if (typeof document !== "undefined") (function () {
       var det = el("details"); det.appendChild(el("summary", null, ""));
       var n = 0;
       D.tables[g.advanced].forEach(function (r) {
-        if (shown[g.advanced + "." + r[0]] || isButtonKey(D, g.advanced, r[0])) return;
+        if (shown[g.advanced + "." + r[0]]) return;
         n++;
         det.appendChild(item(g.advanced, r[0], "n", r[0], false));
       });

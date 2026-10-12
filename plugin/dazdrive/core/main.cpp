@@ -37,6 +37,7 @@ static SCSAPI_VOID ev_frame_end(const scs_event_t, const void *const, const scs_
     input_poll();
     for (int m = 0; m < g_n_modules; m++)
         if (g_modules[m]->frame) g_modules[m]->frame();
+    incident_frame();
     DEV_NOTE(frame());
 }
 
@@ -98,6 +99,7 @@ SCSAPI_VOID scs_telemetry_shutdown(void)
     if (g_inactive) return;
     for (int m = 0; m < g_n_modules; m++)
         if (g_modules[m]->stop) g_modules[m]->stop();
+    incident_stop();
     DEV_NOTE(stop());
 }
 

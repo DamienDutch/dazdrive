@@ -11,6 +11,31 @@ static FILE *g_log;
 static CRITICAL_SECTION g_log_lock;
 static ULONGLONG g_t0;
 
+// Text ring: the last lines of the log, also the ones the log level keeps out of the file (logv at level 1). They are only
+// written to disk around an incident (core/incident.cpp), so a quiet log still has the detail where it matters.
+enum { RING_LINES = 256, RING_W = 220 };
+static struct { double t; char s[RING_W]; } g_ring[RING_LINES];
+static int g_ring_i, g_ring_n;
+void (*g_log_tap)(double t, const char *s);  // set while an incident file is open: new lines go into it too
+void log_lock() { EnterCriticalSection(&g_log_lock); }
+void log_unlock() { LeaveCriticalSection(&g_log_lock); }
+static void ring_push(double t, const char *s)
+{
+    g_ring[g_ring_i].t = t;
+    snprintf(g_ring[g_ring_i].s, RING_W, "%s", s);
+    g_ring_i = (g_ring_i + 1) % RING_LINES;
+    if (g_ring_n < RING_LINES) g_ring_n++;
+    if (g_log_tap) g_log_tap(t, s);
+}
+// the ring lines from log clock `since` on, as "# <time>  <text>" (caller holds the lock)
+void log_ring_dump(FILE *f, double since, double t0)
+{
+    for (int k = 0; k < g_ring_n; k++) {
+        int i = (g_ring_i - g_ring_n + k + RING_LINES) % RING_LINES;
+        if (g_ring[i].t >= since) fprintf(f, "# %+.2f  %s\n", g_ring[i].t - t0, g_ring[i].s);
+    }
+}
+
 double wall_s() { return (GetTickCount64() - g_t0) / 1000.0; }
 
 double sim_s() { return T.sim_time ? T.sim_time / 1e6 : wall_s(); }
@@ -78,13 +103,23 @@ void log_open()
     g_t0 = GetTickCount64();
     InitializeCriticalSection(&g_log_lock);
     CreateDirectoryA(g_dir, NULL);
+    // the last session's log stays as dazdrive.prev.log (more history); the one before that is gone
+    char a[MAX_PATH * 2], b[MAX_PATH * 2];
+    snprintf(a, sizeof a, "%s%s", g_dir, SUITE_NAME ".log");
+    snprintf(b, sizeof b, "%s%s", g_dir, SUITE_NAME ".prev.log");
+    MoveFileExA(a, b, MOVEFILE_REPLACE_EXISTING);
     g_log = open_out(SUITE_NAME ".log", "w");
 }
 
-void logline(const char *fmt, ...)
+static void log_put(int to_file, const char *fmt, va_list ap)
 {
     if (!g_log) return;
+    char text[512];
+    int m = vsnprintf(text, sizeof text, fmt, ap);
+    if (m < 0) return;
     EnterCriticalSection(&g_log_lock);
+    ring_push(wall_s(), text);
+    if (!to_file) { LeaveCriticalSection(&g_log_lock); return; }
     // Cap: past log_max_mb the log moves to dazdrive.log.1 (one generation) and starts again. A failing disk
     // (read-only folder, full) only costs the log lines, never a module.
     if (g_log_bytes > (size_t)(g_log_max_mb * 1048576.0)) {
@@ -99,12 +134,23 @@ void logline(const char *fmt, ...)
         fprintf(g_log, "(log rotated: the earlier part is in " SUITE_NAME ".log.1)\n");
     }
     int n = fprintf(g_log, "%8.2f  ", wall_s());
-    va_list ap;
-    va_start(ap, fmt);
-    int m = vfprintf(g_log, fmt, ap);
-    va_end(ap);
+    fputs(text, g_log);
     fputc('\n', g_log);
     fflush(g_log);
-    g_log_bytes += (n > 0 ? n : 0) + (m > 0 ? m : 0) + 1;
+    g_log_bytes += (n > 0 ? n : 0) + (m < (int)sizeof text ? m : (int)sizeof text - 1) + 1;
     LeaveCriticalSection(&g_log_lock);
+}
+void logline(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    log_put(1, fmt, ap);
+    va_end(ap);
+}
+void logring(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    log_put(0, fmt, ap);
+    va_end(ap);
 }

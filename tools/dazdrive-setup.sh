@@ -36,14 +36,11 @@ trueshift|eco_roll|b|Eco-roll: neutral on gentle descents (Eco and Normal modes)
 trueshift|smooth_stop|b|Smooth stop: open the clutch around idle when braking to a stop
 trueshift|lookahead|b|Use the navigation route ahead (climbs, tops, junctions)
 trueshift|hint_hold_s|n|Seconds a gear chosen with the shift-hint buttons is held
-trueshift|mode_up_button|n|Wheel button (hold) for one gearbox mode up, 0 = none
-trueshift|mode_down_button|n|Wheel button (hold) for one gearbox mode down, 0 = none
 trueshift|tones|b|Short tone when the gearbox mode changes
 cruise|enabled|b|Cruise module (smooth throttle, ACC extras)
 cruise|smooth|b|Smooth cruise throttle (no bursts after shifts)
 cruise|speed_limit|b|Follow speed limits with the cruise set speed
 cruise|speed_limit_offset_kmh|n|Set speed = limit plus this (km/h)
-cruise|speed_limit_button|n|Wheel button (hold) to switch limit following on/off, 0 = none
 cruise|auto_hold|b|Auto Hold: stay braked after stopping until you give gas
 cruise|stop_go|b|ACC keeps going in a jam (stop and go)
 cruise|own_acc|b|Own, smoother ACC speed target

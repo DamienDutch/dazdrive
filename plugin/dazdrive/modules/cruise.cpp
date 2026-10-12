@@ -26,7 +26,7 @@
 #include <math.h>
 #include <string.h>
 
-static float p_key_slide, p_acc_calm, p_set_ease, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_btn, p_isa_mod, p_isa_off, p_isa_ramp, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_eco_k, p_power_k, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade, p_aeb_logs_mb;
+static float p_key_slide, p_acc_calm, p_set_ease, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_ramp, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_eco_k, p_power_k, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = cruise module on" },
@@ -38,9 +38,7 @@ static param g_params[] = {
     { "acc_min_m", &p_min_m, 15, "the gap never gets shorter than this (meters)" },
     { "acc_max_m", &p_max_m, 90, "and never longer than this" },
     { "speed_limit", &p_isa, 1, "speed-limit following at the first start (before any on/off choice is remembered): 1 = on (at every new limit the cruise set speed becomes limit + offset; +/- still work until the next sign); after that your last on/off choice is remembered (cruise_state.txt)" },
-    { "speed_limit_button", &p_isa_btn, 23, "hold this wheel button to switch speed-limit following on/off (number from dazdrive.log); may be the ACC distance button: a short press stays the distance; 0 = none" },
-    { "speed_limit_modifier", &p_isa_mod, 0, "button that must be held with it (0 = none)" },
-    { "speed_limit_hold_s", &p_isa_hold, 0.8f, "how long to hold the button" },
+    { "speed_limit_hold_s", &p_isa_hold, 0.8f, "hold the ACC distance key of the game this long (s) to switch speed-limit following on/off; the distance stays as it was. No button number to set" },
     { "speed_limit_ease_kmh_s", &p_isa_ramp, 2.5f, "a lower limit: the set speed goes down this fast (km/h per second; 0 = at once, the game then brakes hard at the sign)" },
     { "speed_limit_offset_kmh", &p_isa_off, 3, "set speed = limit plus this (3: 80 -> 83)" },
     { "auto_hold", &p_ah, 1, "1 = Auto Hold: after stopping with the brake the truck stays held when you release the pedal (any slope, no timer) until you give gas; it lets go smoothly as the engine pulls. Not with crawl on, the parking brake, reverse or Stop&Go. With auto_hold on, hill_start is not used" },
@@ -101,7 +99,6 @@ static param g_params[] = {
     { "own_acc_accel", &p_own_up, 0.8f, "own ACC: how fast the target may rise (m/s2)" },
     { "aeb", &p_aeb, 1, "1 = own emergency brake assist (AEB): warning tones, then partial braking, then full braking, all ramped; it replaces the game's ACC emergency braking and the game's AEB (both empty the brake air). 0 = the game's" },
     { "aeb_evade_steer", &p_aeb_evade, 0.01f, "AEB: the indicator to one side plus steering that way by this much (share of the full steering range, 0.01 = ~4.5 degrees on a 900-degree wheel; or the truck turning that way at 1.4 deg/s) for 0.3 s = an evasive lane change: a warning or partial braking stands down for 3 s. 0 = off" },
-    { "aeb_logs_mb", &p_aeb_logs_mb, 10, "AEB: every incident gets its own file aeb\\aeb_<date_time>.csv with the 10 s before it, the event and 10 s after (20 per second); the folder is kept under this size, oldest first. 0 = no incident files" },
     { "aeb_without_cruise", &p_aeb_manual, 1, "1 = the AEB also watches when you drive yourself (cruise off); needs the game's radar, which runs with an ACC distance, blind spot or emergency brake switched on in the options" },
     { "aeb_warn_s", &p_aeb_warn_s, 3.0f, "AEB: warning tones when the time to collision drops below this (s)" },
     { "aeb_partial_s", &p_aeb_part_s, 2.0f, "AEB: partial braking below this time to collision (s)" },
@@ -134,7 +131,8 @@ static float s_bend_coast_kmh = NAN;   // the route's bend speed (coast plan) th
 static int s_curve_braking;                             // bend braking hysteresis
 static int s_isa_last = -1;                             // the limit (km/h) we last set the cruise to
 static double s_btn_down_at, s_btn_up_at;               // speed-limit button hold
-static int s_btn_fired;
+static int s_btn_fired, s_acc_armed, s_acc_key_bad;
+static float s_hold_before = NAN;  // the ACC distance when the hold of its key began (a held key may step it again)
 static float s_ahead_ours = NAN;                        // limit ahead: the set speed we wrote
 static int s_ahead_ignore = -1, s_ahead_logged = -1;
 static double s_isa_at;                                 // ISA easing clock
@@ -203,7 +201,10 @@ static void brake_request(char *g, float want)
     // Save the air (Damien 11-10: the tank ran empty): no brake requests of ours while the pressure is low; a
     // request that holds still (hill start) is kept, it uses no new air.
     if (T.air_warning || (T.air_psi > 1 && T.air_psi < p_air_min)) {
-        if (!s_air_low) logline("Cruise: brake air low (%.0f psi): our braking paused", T.air_psi);
+        if (!s_air_low) {
+            logline("Cruise: brake air low (%.0f psi): our braking paused", T.air_psi);
+            incident("air", "brake air low: %.0f psi at %.0f km/h, our braking paused", T.air_psi, fabsf(T.speed) * 3.6f);
+        }
         s_air_low = 1;
     } else if (s_air_low && T.air_psi > p_air_min + 15) { s_air_low = 0; logline("Cruise: brake air back (%.0f psi)", T.air_psi); }
     // the AEB is never paused: it brakes with what is left (and holds its request steady instead of pulsing)
@@ -431,7 +432,7 @@ static void resume_to_limit(char *ga)
 //    handler, keys_tick runs in front of it) and do the stepping ourselves:
 //    release before hold_s = one tap step to the next multiple; held longer =
 //    hold steps at hold_rate. The tap step is thus applied on release.
-enum { GA_RETARDER = 0x180, GA_LIM = 0x190, GA_LIM_ON = 0x198, ACT_TOGGLE = 0x1e710, ACT_INC = 0x1e720, ACT_DEC = 0x1e730, ACT_RESUME = 0x1e740, ACT_STATE = 0xf8 };
+enum { GA_RETARDER = 0x180, GA_LIM = 0x190, GA_LIM_ON = 0x198, ACT_TOGGLE = 0x1e710, ACT_INC = 0x1e720, ACT_DEC = 0x1e730, ACT_RESUME = 0x1e740, ACT_ACCMODE = 0x1e750, ACT_STATE = 0xf8 };
 typedef void (*consume_fn)(void *action);
 typedef void (*retarder_fn)(void *ga, unsigned level, unsigned char snap);
 static consume_fn o_consume;
@@ -1304,7 +1305,7 @@ static void aeb_row(FILE *f, const float *r)
 static void aeb_record(float gap, float kmh, float vc, float ttc, float a_need)
 {
     double now = wall_s();
-    if (p_aeb_logs_mb <= 0 || now - s_rec_at < 0.05) return;
+    if (g_incident_mb <= 0 || now - s_rec_at < 0.05) return;
     s_rec_at = now;
     char *ga = game_actor_safe();
     unsigned char fl = ga ? *(unsigned char *)(ga + GA_LIGHTS) & 0x0c : 0;
@@ -1315,13 +1316,13 @@ static void aeb_record(float gap, float kmh, float vc, float ttc, float a_need)
     if (s_ring_n < AEB_RING) s_ring_n++;
     if (AE.st != AEB_OFF && !s_inc) {
         char stamp[32];
-        s_inc = open_incident("aeb", "aeb", p_aeb_logs_mb, stamp, sizeof stamp);
+        s_inc = open_incident("incidents", "aeb", g_incident_mb, stamp, sizeof stamp);
         if (s_inc) {
             fprintf(s_inc, "# DazDrive %s AEB incident at %s (local time), %.0f t, log clock %.0f s (dazdrive.log); stage 0 off 1 warning 2 partial 3 full 4 hold; indicator 1 left -1 right 2 hazards\n", SUITE_VERSION, stamp,
                     AE.mass / 1000, now);
             fputs("t,kmh,gap_m,lead_kmh,closing_ms,ttc_s,a_need,stage,request,a_cmd,thr,brake,decel,steer,yaw_deg_s,indicator,air_psi\n", s_inc);
             for (int k = 0; k < s_ring_n; k++) aeb_row(s_inc, s_ring[(s_ring_i - s_ring_n + k + AEB_RING) % AEB_RING]);
-            logline("AEB: incident file aeb\\aeb_%s.csv", stamp);
+            logline("incident: aeb -> incidents\\aeb_%s.csv", stamp);
             DEV_NOTE(aeb_file(stamp));
         }
     } else if (s_inc) aeb_row(s_inc, r);
@@ -1532,6 +1533,8 @@ static void aeb(char *g, float dt)
 
 static void cr_frame()
 {
+    g_inc.gap_m = g_radar_ok && wall_s() - s_radar.at < 0.3 && s_radar.gap > 0.3f ? s_radar.gap : NAN;
+    g_inc.flags = (g_inc.flags & ~(INC_AEB | INC_ISA)) | (AE.st != AEB_OFF ? INC_AEB : 0) | (p_isa > 0 ? INC_ISA : 0);
     DEV_NOTE(cruise(T.cruise > 0.5f, T.cruise * 3.6f, g_acc ? g_level : -1, g_radar_ok ? s_radar.gap : NAN, s_radar.v,
                     s_radar.at, p_isa > 0, AE.st, AH.st, s_dip));
     {
@@ -1541,24 +1544,44 @@ static void cr_frame()
     route_junction_cfg(junc_on(), p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio);
     if (g_keys_ok) keys_tick(game_actor_safe());
     emergency_hazards();
-    // Speed-limit following on/off: hold the button (Damien: the ACC distance
-    // button; the game already stepped the distance on the press, a long press
-    // puts it back). A held button flickers under Proton: 0.3 s up ends a hold.
-    if (p_isa_btn > 0) {
+    // Speed-limit following on/off: hold the game's own ACC distance key (no wheel button number: the key is read from the
+    // game's action object, so a wheel or a keyboard both work). The game already stepped the distance on the press, a long
+    // press puts it back. Held = the action state is not 0; it must have been seen at 0 first (else a state that never
+    // reads 0 would fire at start). A held key may flicker: 0.3 s up ends a hold.
+    if (g_low_ok && p_isa_hold > 0 && !s_acc_key_bad) {
         double now = wall_s();
-        int held = input_held((int)p_isa_btn) && (p_isa_mod <= 0 || input_held((int)p_isa_mod));
-        if (!held) {
+        char *ga = game_actor_safe();
+        void *act = ga ? action_of(ga, ACT_ACCMODE) : NULL;
+        int st = act ? *(int *)((char *)act + ACT_STATE) : 0;
+        static int last_st = -1, n_st;
+        if (act && st != last_st && n_st < 16) { n_st++; logv(1, "Cruise: ACC distance key state %d", st); }
+        last_st = act ? st : -1;
+        if (act && st == 0) s_acc_armed = 1;
+        int held = act && s_acc_armed && st != 0;
+        if (held && s_btn_down_at && now - s_btn_down_at > 6.0) {
+            // nobody holds a key that long: the state does not go back to 0 on release. Stop reading it for this session and
+            // undo the toggle it made, so the ACC gap code (which waits while the key is held) is not blocked.
+            s_acc_key_bad = 1;
+            if (s_btn_fired) { p_isa = p_isa > 0 ? 0 : 1; s_isa_last = -1; state_write(); }
+            s_btn_fired = 0; s_btn_up_at = 0; held = 0;
+            logline("Cruise: the ACC distance key state does not return to 0 (%d for %.0f s): holding it to switch speed-limit following is off for this session", st, now - s_btn_down_at);
+            incident("input", "ACC distance key state stuck at %d for %.0f s", st, now - s_btn_down_at);
+        } else if (!held) {
             if (!s_btn_up_at) s_btn_up_at = now;
-            if (now - s_btn_up_at > 0.3) { s_btn_down_at = 0; s_btn_fired = 0; }
+            if (now - s_btn_up_at > 0.3) { s_btn_down_at = 0; s_btn_fired = 0; s_hold_before = NAN; }
         } else {
             s_btn_up_at = 0;
-            if (!s_btn_down_at) s_btn_down_at = now;
+            if (!s_btn_down_at) {
+                s_btn_down_at = now;
+                s_hold_before = now - s_press_at < 1.0 ? s_press_before : NAN;  // else the key press is read a moment later
+            }
             if (!s_btn_fired && now - s_btn_down_at >= p_isa_hold) {
                 s_btn_fired = 1;
-                if (g_acc && s_press_before == s_press_before && now - s_press_at < p_isa_hold + 1) {
-                    game_cvar_set(g_acc, s_press_before);
-                    g_acc_player = s_press_before;
-                    g_level = level_of(s_press_before);
+                float back = s_hold_before == s_hold_before ? s_hold_before : now - s_press_at < p_isa_hold + 1 ? s_press_before : NAN;
+                if (g_acc && back == back) {
+                    game_cvar_set(g_acc, back);
+                    g_acc_player = back;
+                    g_level = level_of(back);
                     g_acc_ours = NAN;
                 }
                 s_press_before = NAN;
@@ -1791,6 +1814,7 @@ static void cr_reset(int level, const char *why)
     s_prev_on = ga ? *(unsigned char *)(ga + GA_ON) : 0;
     s_btn_down_at = s_btn_up_at = 0;
     s_btn_fired = 0;
+    s_acc_armed = 0; s_hold_before = NAN;
     s_press_before = NAN;
     s_btn_held = 0;
     // Auto Hold / hill start / our brake request back to 0

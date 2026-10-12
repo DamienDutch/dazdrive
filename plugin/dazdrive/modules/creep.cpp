@@ -23,7 +23,7 @@
 #include <string.h>
 #include <windows.h>
 
-static float p_enabled, p_creep, p_man, p_on, p_off, p_maxped, p_brake, p_rest, p_delay, p_rev, p_close, p_open, p_release, p_trace, p_letter, p_heavy_t, p_max_gear, p_heavy_gear, p_heavy_thr, p_arm, p_start_on, p_tog_btn, p_tog_key, p_tog_hold, p_descent_brake, p_descent_kmh, p_tog_mode;
+static float p_enabled, p_creep, p_man, p_on, p_off, p_maxped, p_brake, p_rest, p_delay, p_rev, p_close, p_open, p_release, p_trace, p_letter, p_heavy_t, p_max_gear, p_heavy_gear, p_heavy_thr, p_arm, p_start_on, p_tog_hold, p_descent_brake, p_descent_kmh, p_tog_mode;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = crawl / maneuver mode on (automatic only; the clutch slips at idle in gears 1, 2 and R)" },
@@ -36,10 +36,8 @@ static param g_params[] = {
     { "from_rest", &p_rest, 1, "1 = after a stop, with both pedals free, engage gear 1 and crawl off (the stock automatic waits in neutral)" },
     { "descent_kmh", &p_descent_kmh, 8.0f, "downhill: the crawl starts braking above this speed (km/h)" },
     { "descent_brake", &p_descent_brake, 0.4f, "downhill: brake request (0..1) the crawl may use to hold its speed; 0 = off" },
-    { "start_on", &p_start_on, 0, "crawl switched on when the game starts (else hold the toggle to switch it on)" },
+    { "start_on", &p_start_on, 0, "crawl switched on when the game starts (else hold the gearbox-mode key at a standstill to switch it on)" },
     { "toggle_mode_key", &p_tog_mode, 1, "1 = hold the game's gearbox-mode key (Eco/Normal/Power/M) at a standstill to switch crawl on/off; the mode it stepped to is put back" },
-    { "toggle_button", &p_tog_btn, 0, "wheel button to hold at a standstill to switch crawl on/off (number from dazdrive.log); 0 = none" },
-    { "toggle_key", &p_tog_key, 0, "or a keyboard key to hold (Windows virtual-key code, e.g. 67 = C); 0 = none" },
     { "toggle_hold_s", &p_tog_hold, 0.8f, "how long to hold it" },
     { "arm_kmh", &p_arm, 0, "from_rest only after the truck has been driven faster than this since the engine started (km/h); 0 = always" },
     { "rest_delay_s", &p_delay, 0.3f, "from_rest: both pedals free this long (s) before the truck starts crawling" },
@@ -272,12 +270,12 @@ static void tail_pre(void *self)
     }
 }
 
-// Crawl on/off: hold the toggle button / key at a standstill (Damien 11-10: toggle, not always on).
+// Crawl on/off: hold the game's gearbox-mode key at a standstill (no wheel button to set up).
 static int g_user_on = -1;
 static void crawl_toggle()
 {
     if (g_user_on < 0) g_user_on = p_start_on > 0;
-    if (p_tog_btn <= 0 && p_tog_key <= 0 && p_tog_mode <= 0) return;
+    if (p_tog_mode <= 0) return;
     static double down_at, up_at;
     static int fired;
     static float mode_before = NAN;
@@ -304,8 +302,7 @@ static void crawl_toggle()
         }
         last_a = a;
     }
-    int held = mode_held || (p_tog_btn > 0 && input_held((int)p_tog_btn)) ||
-               (p_tog_key > 0 && (GetAsyncKeyState((int)p_tog_key) & 0x8000));
+    int held = mode_held;
     static double keep_until;  // after a toggle the mode is kept a moment past the release too (ts4n: N -> E)
     if (!held) {  // a held wheel button flickers under Proton: 0.3 s up ends a hold
         if (!up_at) up_at = now;

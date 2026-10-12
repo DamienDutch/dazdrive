@@ -9,11 +9,12 @@
 #include <string.h>
 
 // [core]: settings of the suite itself (no code of its own).
-static float p_log_level, p_log_max_mb, p_csv_max_mb;
+static float p_log_level, p_log_max_mb, p_csv_max_mb, p_incident_mb;
 static param g_params[] = {
-    { "log_level", &p_log_level, 2, "dazdrive.log: 0 = events only (start, hooks, errors, mode changes, AEB incidents), 1 = + every shift and the modules' detail lines, 2 = + periodic traces and the csv trace files" },
+    { "incident_mb", &p_incident_mb, 40, "incidents\\ folder: something went wrong (hunting gearbox, a shift you fought, rpm limiter, stuck in neutral, AEB, ...) = one file with the 20 s before and 15 s after, with the log lines of that time. The folder is kept under this size (MB), oldest first; 0 = no incident files" },
+    { "log_level", &p_log_level, 2, "dazdrive.log: 0 = start-up, errors, mode changes and one line per incident, 1 = + every shift and the modules' detail lines, 2 = + periodic traces and the csv trace files. The detail lines of level 1 are in every incident file anyway" },
     { "csv_max_mb", &p_csv_max_mb, 5, "a csv trace (log_level 2 only) moves to <name>.1 and starts again beyond this size (MB, 0.5-200): ~2.5 hours of driving per file" },
-    { "log_max_mb", &p_log_max_mb, 5, "dazdrive.log moves to dazdrive.log.1 and starts again beyond this size (MB, 0.2-100): at most twice this on disk; 2 is plenty for a bug report" },
+    { "log_max_mb", &p_log_max_mb, 5, "dazdrive.log moves to dazdrive.log.1 and starts again beyond this size (MB, 0.2-100). The log of the previous session stays as dazdrive.prev.log" },
 };
 module m_core = { "core", "Core", g_params, sizeof g_params / sizeof g_params[0], NULL, NULL, NULL, NULL };
 
@@ -24,18 +25,17 @@ static const struct { const char *sec, *key; float v; } k_standard[] = {
 // Bounds for the keys where a stray value would do harm (steer to the stop, brake for every bend, stop for roundabouts,
 // a brake request above 1, a log that rotates every line). Everything else only has to be finite and sane in size.
 static const struct { const char *sec, *key; float lo, hi; } k_bounds[] = {
-    { "core", "log_level", 0, 2 }, { "core", "csv_max_mb", 0.5f, 200 }, { "core", "log_max_mb", 0.2f, 100 },
+    { "core", "log_level", 0, 2 }, { "core", "incident_mb", 0, 500 }, { "core", "csv_max_mb", 0.5f, 200 }, { "core", "log_max_mb", 0.2f, 100 },
     { "trueshift", "takeover_kmh", 0, 60 }, { "trueshift", "handback_kmh", 0, 60 }, { "trueshift", "hint_hold_s", 0, 120 },
     { "trueshift", "min_gap_s", 0, 10 }, { "trueshift", "max_skip", 0, 6 }, { "trueshift", "kickdown_pedal", 0.3f, 1 },
     { "trueshift", "power_from", 0.05f, 1 }, { "trueshift", "power_full", 0.1f, 1 }, { "trueshift", "eco_reserve", 1, 5 },
     { "trueshift", "power_reserve", 1, 5 }, { "trueshift", "reserve", 1, 5 }, { "trueshift", "launch_torque", 0.1f, 1 },
     { "trueshift", "launch_rpm", 400, 2500 }, { "trueshift", "rolling_resistance", 0.001f, 0.05f }, { "trueshift", "drag_area", 0.3f, 30 },
     { "trueshift", "efficiency", 0.5f, 1 }, { "trueshift", "idle_rpm", 300, 1500 }, { "trueshift", "eco_roll_max_decel", 0, 1 },
-    { "trueshift", "mode_up_button", 0, 128 }, { "trueshift", "mode_down_button", 0, 128 }, { "trueshift", "mode_hold_s", 0.2f, 5 },
     { "trueshift", "air_charge_psi", 0, 150 }, { "trueshift", "air_charge_rpm", 500, 2500 },
     { "cruise", "acc_short_s", 0.4f, 6 }, { "cruise", "acc_middle_s", 0.4f, 6 }, { "cruise", "acc_long_s", 0.4f, 6 },
-    { "cruise", "acc_min_m", 3, 60 }, { "cruise", "acc_max_m", 20, 400 }, { "cruise", "speed_limit_button", 0, 128 },
-    { "cruise", "speed_limit_modifier", 0, 128 }, { "cruise", "speed_limit_hold_s", 0.2f, 5 }, { "cruise", "speed_limit_offset_kmh", -20, 30 },
+    { "cruise", "acc_min_m", 3, 60 }, { "cruise", "acc_max_m", 20, 400 },
+    { "cruise", "speed_limit_hold_s", 0.2f, 5 }, { "cruise", "speed_limit_offset_kmh", -20, 30 },
     { "cruise", "auto_hold_request", 0.1f, 1 }, { "cruise", "auto_hold_max_s", 0.3f, 10 }, { "cruise", "hill_start_s", 0.3f, 15 },
     { "cruise", "emergency_decel", 2, 9 }, { "cruise", "emergency_off_decel", 0.5f, 8 }, { "cruise", "air_min_psi", 0, 150 },
     { "cruise", "curve_lat", 1, 6 }, { "cruise", "junction_lat", 0.5f, 6 }, { "cruise", "junction_min_deg", 5, 90 },
@@ -46,7 +46,7 @@ static const struct { const char *sec, *key; float lo, hi; } k_bounds[] = {
     { "cruise", "step_hold_kmh", 1, 10 }, { "cruise", "hold_s", 0.1f, 5 }, { "cruise", "hold_rate", 0.5f, 20 },
     { "cruise", "own_acc_gain", 0.05f, 2 }, { "cruise", "own_acc_stop_m", 2, 20 }, { "cruise", "own_acc_plan_decel", 0.3f, 4 },
     { "cruise", "own_acc_brake", 0, 1 }, { "cruise", "own_acc_decel", 0.3f, 6 }, { "cruise", "own_acc_accel", 0.1f, 4 },
-    { "cruise", "aeb_evade_steer", 0, 0.1f }, { "cruise", "aeb_logs_mb", 0.5f, 200 }, { "cruise", "aeb_warn_s", 0.5f, 8 },
+    { "cruise", "aeb_evade_steer", 0, 0.1f }, { "cruise", "aeb_warn_s", 0.5f, 8 },
     { "cruise", "aeb_partial_s", 0.5f, 6 }, { "cruise", "aeb_full_s", 0.3f, 4 }, { "cruise", "aeb_partial_decel", 1, 6 },
     { "cruise", "aeb_max_decel", 2, 9 }, { "cruise", "aeb_min_kmh", 5, 60 },
     { "lane", "offset_gain", 0, 0.1f }, { "lane", "heading_gain", 0, 3 }, { "lane", "assist_feedback", 0, 200 },
@@ -61,8 +61,8 @@ static const struct { const char *sec, *key; float lo, hi; } k_bounds[] = {
     { "lane", "min_kmh", 5, 55 }, { "lane", "on_kmh", 5, 90 },
     { "creep", "creep_kmh", 1, 15 }, { "creep", "manoeuvre_kmh", 2, 30 }, { "creep", "on_kmh", 1, 20 },
     { "creep", "off_kmh", 3, 40 }, { "creep", "max_pedal", 0.05f, 1 }, { "creep", "brake", 0.05f, 1 },
-    { "creep", "descent_kmh", 1, 30 }, { "creep", "descent_brake", 0, 1 }, { "creep", "toggle_button", 0, 128 },
-    { "creep", "toggle_key", 0, 255 }, { "creep", "toggle_hold_s", 0.2f, 5 }, { "creep", "rest_delay_s", 0, 5 },
+    { "creep", "descent_kmh", 1, 30 }, { "creep", "descent_brake", 0, 1 },
+    { "creep", "toggle_hold_s", 0.2f, 5 }, { "creep", "rest_delay_s", 0, 5 },
     { "creep", "close_rate", 0.05f, 5 }, { "creep", "open_rate", 0.05f, 10 }, { "creep", "release_s", 0.1f, 5 },
     { "creep", "heavy_t", 5, 80 }, { "creep", "max_gear", 1, 8 }, { "creep", "heavy_gear", 1, 4 }, { "creep", "heavy_throttle", 0, 0.5f },
 };
@@ -187,6 +187,7 @@ void config_load()
     g_log_level = (int)p_log_level;
     g_log_max_mb = p_log_max_mb;
     g_csv_max_mb = p_csv_max_mb;
+    g_incident_mb = p_incident_mb;
 
     // Level 0 lists only what differs from the defaults; 1 and up the whole table.
     for (int m = 0; m < g_n_modules; m++) {
