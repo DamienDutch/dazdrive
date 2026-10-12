@@ -1013,7 +1013,9 @@ static int decide_gear(void *self, const char **why)
     float grade = sinf(S.grade_deg * 0.0174533f);
     // No skipping right after taking over from the game (it may have started
     // in a high gear) or close above the takeover speed.
-    if (now - S.ours_at < 3 || v * 3.6f < p_on_kmh + 5) skips = 0;
+    // The launch is the exception (Damien 12-10: 1 -> 2 -> 3 -> 4 -> 5 one by one between 12 and 20 km/h, "skip one, also in Eco"): from
+    // the takeover speed the first gears may be skipped; the rpm and pull checks below still decide.
+    if (!(cur <= 2 && v * 3.6f >= p_on_kmh) && (now - S.ours_at < 3 || v * 3.6f < p_on_kmh + 5)) skips = 0;
     float v2 = fmaxf(0.5f, v - f_res / S.mass * S.eng.shift_time);
 
     // Early upshift: light load, the new gear lands on the torque plateau and

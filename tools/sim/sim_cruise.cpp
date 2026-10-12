@@ -373,7 +373,7 @@ static accres acc_run(const char *name, int own, int scen)
     o_cruise = stock_cruise; stock_thr = 0;
     T.engine_on = 1; T.gear = 8; T.eff_clutch = 0; T.parking_brake = 0;
     const float m = 26000, set = 90;
-    double t0 = t_now, x = 0, v = scen == 6 ? 40 / 3.6 : 80 / 3.6, lx = 0, lv = 0, jerk_prev_a = 0, a_prev = 0;
+    double t0 = t_now, x = 0, v = scen == 6 ? 40 / 3.6 : scen == 7 ? 90 / 3.6 : 80 / 3.6, lx = 0, lv = 0, jerk_prev_a = 0, a_prev = 0;
     float set_kmh = scen == 6 ? 40 : set;
     *(unsigned char *)(GA + GA_ON) = 1; *(float *)(GA + GA_SET) = set_kmh;
     accres r = { 1e9f, 0, 0, 0, 1e9f, 0, 0, 0 };
@@ -394,13 +394,17 @@ static accres acc_run(const char *name, int own, int scen)
             if (!lead_on && t >= 10) { lead_on = 1; lx = x + 27; lv = 60 / 3.6; v = 69 / 3.6; }
             if (lead_on && lv > 45 / 3.6) lv = fmax(45 / 3.6, lv - 1.5 * dt);
         }
+        else if (scen == 7) {                                                                                       // ride 12-10 20:54: 92 m behind a lead at 49 km/h that brakes to 33 (1.1 m/s2) while we come in at 90
+            if (!lead_on && t >= 10) { lead_on = 1; lx = x + 92; lv = 49 / 3.6; }
+            if (lead_on && t >= 11.5 && lv > 33 / 3.6) lv = fmax(33 / 3.6, lv - 1.1 * dt);
+        }
         else if (scen == 6) {                                                                                       // a car crossing 45 m ahead (roundabout): 25 km/h across, gone after 3 s
             if (t >= 10 && t < 12 && !lead_on) { lead_on = 1; lx = x + 40; lv = 0; }
             if (t >= 12) lead_on = 0;
         }
         if (lead_on) lx += lv * dt;
         float gap = lead_on ? (float)(lx - x) : 0;
-        T.speed = (float)v; T.cruise = set_kmh / 3.6f;
+        T.speed = (float)v; T.cruise = set_kmh / 3.6f; T.accel = (float)a_prev;
         float D = fmaxf(4, 2.0f * (float)v);
         // game's ACC fn
         float acc_t = set_kmh;
@@ -592,10 +596,10 @@ int main(int argc, char **argv)
     // ACC with a lead vehicle
     {
         int bad = 0;
-        const char *nm[] = { "cut-in slower (60 km/h, 28 m ahead) at 80", "cut-in faster (86 km/h, 30 m ahead) at 80, calm", "lead brakes 3 m/s2 from 80 to 30, 50 m ahead", "far lead (70 m, 70 km/h) at 80", "closing on a 25 km/h lead from 99 m at 80", "ts4p cut-in at 27 m, 60 -> 45 km/h, we 69", "we 40, a car crosses 40 m ahead at 25 km/h for 2 s" };
+        const char *nm[] = { "cut-in slower (60 km/h, 28 m ahead) at 80", "cut-in faster (86 km/h, 30 m ahead) at 80, calm", "lead brakes 3 m/s2 from 80 to 30, 50 m ahead", "far lead (70 m, 70 km/h) at 80", "closing on a 25 km/h lead from 99 m at 80", "ts4p cut-in at 27 m, 60 -> 45 km/h, we 69", "we 40, a car crosses 40 m ahead at 25 km/h for 2 s", "lead 92 m ahead brakes 49 -> 33 km/h, we 90 (ride 12-10)" };
         printf("--- ACC with a lead: game target against own ACC target\n");
-        accres g[7], o[7];
-        for (int sc = 0; sc < 7; sc++) { g[sc] = acc_run(nm[sc], 0, sc); o[sc] = acc_run(nm[sc], 1, sc); }
+        accres g[8], o[8];
+        for (int sc = 0; sc < 8; sc++) { g[sc] = acc_run(nm[sc], 0, sc); o[sc] = acc_run(nm[sc], 1, sc); }
         // own ACC: no emergency braking where the game's target needed it, no harder decel than the game, calm cut-in really calm
         // own ACC brakes itself early: no emergency braking where we can avoid it, never more than ~4 m/s2 (the emergency
         // hazards threshold), gaps not smaller than the game's
@@ -605,7 +609,7 @@ int main(int argc, char **argv)
         bad |= o[3].max_jerk > g[3].max_jerk;        // far lead: smoother than the game
         // the same with our AEB in place of the game's ACC emergency part: normal following must not need it hard
         printf("--- own ACC + own AEB (the game's ACC emergency braking off)\n");
-        for (int sc = 0; sc < 7; sc++) {
+        for (int sc = 0; sc < 8; sc++) {
             memset(&AE, 0, sizeof AE); AE.gap_prev = AE.rate = AE.vl_prev = NAN; s_aeb_owns = 1; T.in_thr = 0; T.in_brake = 0; T.dgear = 8;
             char nm2[96]; snprintf(nm2, sizeof nm2, "%s +AEB", nm[sc]);
             accres w = acc_run(nm2, 1, sc);

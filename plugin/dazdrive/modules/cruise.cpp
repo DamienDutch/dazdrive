@@ -65,7 +65,7 @@ static param g_params[] = {
     { "junctions", &p_junc, 1, "1 = with navigation: also slow down before junctions where the route turns, and before roundabouts (needs curves = 1; always on with own_acc = 1)" },
     { "junction_lat", &p_junc_lat, 2.0f, "sideways acceleration (m/s2) allowed in a junction turn (v = sqrt(this x turn radius), at least 15 km/h)" },
     { "junction_min_deg", &p_junc_deg, 25, "turns smaller than this (degrees) are not slowed for" },
-    { "roundabout_kmh", &p_rb_kmh, 25, "speed at the entry of a roundabout, also when going straight through" },
+    { "roundabout_kmh", &p_rb_kmh, 30, "speed at the entry of a roundabout, also when going straight through" },
     { "roundabout_ratio", &p_rb_ratio, 1.4f, "a prefab with 2+ route curves counts as a roundabout when the path through it is this many times its entry-exit chord (lower = more prefabs count)" },
     { "descent_overspeed_kmh", &p_desc_kmh, 2, "on a descent (descent = 1) the engine brake / retarder hold the set speed plus this (km/h; 0 = exactly the set speed)" },
     { "smart_overspeed_kmh", &p_smart_kmh, 3, "cruise downhill: how far over the set speed the truck may run before the engine brake / retarder hold it (the game's 'smart' cruise option, km/h); -1 = keep the game's setting (at 0 the retarder comes in the moment the truck is over the set speed). On a descent of 2 % or more descent_overspeed_kmh applies instead; never less than the predictive cruise (PCC) momentum asks for" },
@@ -649,6 +649,9 @@ static float cruise_body(void *ga, float dt, float pedal)
         // the junction profile is a target too (ts4w 532-553 s: no lead, set 83, braking 0.1-0.15 for a 95° turn while
         // our throttle sat at 1.0, because only the brake knew about the junction)
         if (vj == vj && vj > 0) target = fminf(target, vj * 3.6f);
+        // and no gas toward a junction or roundabout we have to slow down for anyway: the plan above allows speeds above ours far
+        // from the entry, so the throttle came on and the brakes right after (Damien 12-10: "gas, then brake")
+        if (vj == vj && ji.limit_ms > 0 && kmh > ji.limit_ms * 3.6f + 1 && ji.dist_m < fmaxf(150.0f, 12 * kmh / 3.6f)) target = fminf(target, kmh);
     }
     // The ACC's own target (vehicle ahead) always wins, also 0 = stop behind it. But someone cutting in or a
     // car that pulls away (the gap is opening) is no reason to slow down (Damien): then only hold the speed.
@@ -658,6 +661,13 @@ static float cruise_body(void *ga, float dt, float pedal)
     if (lead > 0.5f && acc >= 0 && acc < target) {
         if (p_acc_calm > 0 && gap_rate > 0.3f && lead > 8) target = fmaxf(acc, fminf(target, kmh));  // opening: coast at most
         else target = acc;
+    }
+    // No gas while the wheel is turned (Damien 12-10: on a roundabout it gave gas with the wheel still round): hold the speed
+    // until it is straight again (+ 0.8 s)
+    {
+        static double steer_until;
+        if (fabsf(T.in_steer) > (kmh > 60 ? 0.25f : 0.15f)) steer_until = wall_s() + 0.8;
+        if (wall_s() < steer_until && kmh > 8 && target > kmh) target = kmh;
     }
     float e = target - kmh;
     // Too fast for a bend and the throttle is already off: a gentle brake request
@@ -947,6 +957,9 @@ static void own_acc(char *g, float dt)
         // wanted) braked to a junction and we mirrored it 78 -> 4 km/h with 0.30 requests; far away the closing term
         // above is enough. Full weight at the wanted gap, none from 1.5x it.
         float near_w = fminf(1, fmaxf(0, (1.5f * dstar - lead) / (0.5f * dstar)));
+        // ... and also from afar when the time to collision is short (Damien 12-10: 54 m behind a lead braking from 49 to 33 km/h
+        // while we closed at 10 m/s: our brake request was 0.14, the AEB had to add partial braking on top)
+        if (closing > 0.3f) near_w = fmaxf(near_w, fminf(1, fmaxf(0, (7.0f - lead / closing) / 3.0f)));
         if (closing > -1) need += near_w * fmaxf(0, -s_a_lead - 0.3f);  // 0.3: radar speed noise (ts4t 505-516 s: pulses at 40 m)
         float b = p_own_brake > 0 && need > 0.35f / heavy ? fminf(p_own_brake * fminf(heavy, 1.5f), (need * heavy - 0.3f) / 7.0f) : 0;
         if (b > 0 && b < 0.05f) b = 0.05f;
@@ -1409,6 +1422,9 @@ static void aeb(char *g, float dt)
         if (jm >= 0 && jm < 60 && AE.vl > 2) { p_s = fminf(p_s, 1.5f); f_s = fminf(f_s, 1.0f); }
         // the driver brakes enough by himself
         if (T.in_brake > 0.05f && -T.accel >= 0.9f * a_need) { cap_st = AEB_OFF; cap = "driver brakes"; }
+        // the ACC (cruise on) already brakes enough and there is time: leave it to the ACC (Damien 12-10: the AEB went off with
+        // the ACC on and braking, and he thought the ACC did fine). The AEB is back as soon as that stops being true.
+        else if (on && T.in_brake < 0.05f && ttc > 3.0f && -T.accel >= 0.65f * a_need) { cap_st = AEB_OFF; cap = "ACC brakes"; }
     }
     // The only cancel (Damien 11-10): the driver gives gas. Kick-down, a firm pedal held 0.3 s, or the pedal pressed 0.25 further
     // than it was when the braking started (a pedal that was already held does not cancel by itself). Then 3 s no braking.
