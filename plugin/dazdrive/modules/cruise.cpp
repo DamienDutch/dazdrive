@@ -360,6 +360,9 @@ static void auto_hold(char *g, float dt)
         if (grade < 1.5f) target = 0;
         // Uphill but the clutch never bites while we hold (engine kept at idle): do not wait for it longer than 0.6 s.
         if (AH.launch_t > 0.6 && T.eff_clutch > 0.9f) target = fminf(target, h * 0.5f);
+        // ... and with the pedal (almost) flat for 1.2 s and the clutch still open the hold is what keeps the clutch from closing (the
+        // automatic does not close it against the service brake): let go (Damien 12-10: 4 % up, gear 2, pedal 1.0, clutch 0.97 for 2 s)
+        if (AH.launch_t > 1.2 && T.eff_clutch > 0.9f && T.in_thr > 0.7f) target = 0;
         float ped = fminf(1, fmaxf(0, (T.in_thr - 0.25f) / 0.55f));          // 0 gentle .. 1 hard
         float t_rel = p_ah_gentle + (p_ah_hard - p_ah_gentle) * ped;          // seconds for the full hold
         float rate = h / fmaxf(t_rel, 0.05f);
