@@ -69,8 +69,9 @@ SETTINGS: THE SETUP PAGE
 ------------------------
 
 - Open plugins\dazdrive\dazdrive-setup.html in any browser (works offline, installs nothing).
-- Pick how smart your truck is (~1995, ~2000, ~2010, ~2015, ~2020 or 2024), switch single features,
-  set up your wheel buttons ("Detect" finds them). "Guide me" walks you through it step by step.
+- Pick how smart your truck is (~1995, ~2000, ~2010, ~2015, ~2020 or 2024) and switch single
+  features. There is no button setup: DazDrive uses the keys you already bound in the game (see
+  CONTROLS). "Guide me" walks you through it step by step.
 - Press "Save dazdrive.ini", take it from your Downloads and put it next to the page
   (overwrite the old one).
 - Restart the game.
@@ -105,6 +106,7 @@ OFF in the included ini (switch on with the setup page; the year that turns it o
   Auto Hold                      beta           (~2015)
   Follow speed limits (ISA)      beta           (2024)
   Crawl mode                     experimental   (~2020)
+  Smooth start                   experimental   (switch on with the setup page only)
   JunctionSense                  experimental   (~2020)
   Lane centering                 experimental   (~2020)
 
@@ -150,6 +152,10 @@ Lane
 Creep
   Crawl / maneuver mode: in gears 1, 2 and R the clutch slips at idle so the truck crawls by
   itself, the brake lowers the speed, the throttle asks for a bit more.
+  Smooth start (experimental, off): when you pull away in a forward gear from a standstill, DazDrive
+  closes the clutch itself. The engine rises to a speed that follows the pedal, the clutch slips to
+  hold it until the wheels catch up, then closes gently. A shift, lifting off, the brake or about
+  14 km/h ends it and the game takes over. Works with or without crawl mode.
 
 
 EDITING THE INI BY HAND

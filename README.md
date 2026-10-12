@@ -75,6 +75,7 @@ The game already has an automatic, cruise control and lane assist. This changes 
 | Auto Hold | beta | off (~2015) | Stays braked at a stop until you give gas. |
 | Follow speed limits (ISA, intelligent speed assistance) | beta | off (2024) | The cruise set speed follows the signs. Starts off: hold the game's ACC distance key for a second to switch it on. |
 | Crawl mode | experimental | off (~2020) | Creeps at walking pace in 1, 2 and R, for parking and docking. |
+| Smooth start | experimental | off (setup page only) | Closes the clutch itself when you pull away: the engine follows the pedal, the clutch slips, then closes gently. |
 | **JunctionSense** | experimental | off (~2020) | Slows for junctions and roundabouts on your route. |
 | Lane centering | experimental | off (~2020) | Keeps the truck in its lane (self-learning). Keep your hands near the wheel: it is an assistant, not an autopilot. |
 
@@ -103,7 +104,7 @@ To remove it, delete `plugins\dazdrive.dll` and the `plugins\dazdrive` folder.
 The included `dazdrive.ini` matches the year "~2010 (Modern)" on the setup page: the features marked
 "on" above. To change that, open `plugins\dazdrive\dazdrive-setup.html` in a browser (works offline,
 sends nothing): pick how smart your truck is (~1995, ~2000, ~2010, ~2015, ~2020 or 2024), switch
-single features, detect your wheel buttons, save the ini next to the page and restart the game.
+single features, save the ini next to the page and restart the game (no button setup: DazDrive uses the keys you bound in the game).
 "Guide me" walks you through it one step at a time. Full details, controls, dash letters and tones:
 `README.txt` in the zip ([source](release/README-player.txt)).
 

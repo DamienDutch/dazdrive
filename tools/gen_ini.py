@@ -88,7 +88,7 @@ STANDARD = {
 }
 
 STANDARD_HEADER = ("standard preset (stable on, except the look-ahead ones; beta and experimental "
-                   "(ACC, Stop & Go, Auto Hold, ISA, JunctionSense, lane centering, crawl mode) off).")
+                   "(ACC, Stop & Go, Auto Hold, ISA, JunctionSense, lane centering, crawl mode, smooth start) off).")
 
 SECTION_INTRO = {
     "core": "Logging. Level 0 keeps a short log and writes an incident file when something goes wrong; level 1 and 2 log more (2 adds csv traces, large).",
@@ -244,6 +244,13 @@ SETUP_GROUPS = [
         ("creep", "start_on", "b", "Crawl switched on when the game starts", False),
         ("creep", "toggle_mode_key", "b", "Hold Adaptive Automatic Transmission Mode at a standstill to switch crawl on or off", False),
         ("creep", "creep_kmh", "n", "Crawl speed (km/h)", False)]},
+    {"id": "smoothstart", "off_when": ["creep", "smooth_start", "0"], "title": "Smooth start", "advanced": "creep",
+     "tuning": [{"name": "Standard", "desc": "The engine rises with the pedal, the clutch slips, then closes gently", "over": {}}],
+     "about": ["🧪 Experimental. Pulling away in a forward gear from a standstill.", "🦶 The pedal sets how high the engine revs while the clutch slips", "✋ A shift, lifting off, the brake or about 14 km/h ends it"],
+     "items": [
+        ("creep", "smooth_start", "b", "Smooth start: DazDrive closes the clutch itself when you pull away", True),
+        ("creep", "smooth_start_rpm_light", "n", "Engine speed above idle with a light pedal (rpm)", False),
+        ("creep", "smooth_start_rpm_full", "n", "Engine speed with the pedal flat (rpm)", False)]},
     {"id": "log", "title": "Logging", "advanced": "core",
      "tuning": [{"name": "Standard", "desc": "A quiet log, plus an incident file when something goes wrong", "over": {}},
                 {"name": "Bug hunt", "desc": "Also every shift in the log and large csv traces, only when asked", "over": {"core": {"log_level": 2}, "trueshift": {"trace": 1}, "cruise": {"trace": 1}, "creep": {"trace": 1}}}],
@@ -317,6 +324,9 @@ FEATURES = [
     {"id": "crawl", "group": "Gearbox", "stage": "experimental", "since": "2009", "label": "Crawl mode", "desc": "Creeps at walking pace for parking and docking",
      "info": "At walking pace in gears 1, 2 and R the clutch slips like in a real truck automatic: the truck creeps by itself. The brake makes it slower, the throttle a bit faster. Switch it on or off by holding the Adaptive Automatic Transmission Mode key at a standstill.",
      "keys": [["creep", "enabled", 1, 0]]},
+    {"id": "start", "group": "Gearbox", "stage": "experimental", "since": "2009", "label": "Smooth start", "desc": "Closes the clutch itself when you pull away, like a real truck automatic",
+     "info": "Pulling away in a forward gear from a standstill, DazDrive closes the clutch itself instead of the game's quick, fixed way: the engine rises to a speed that follows the pedal (a little for a light pedal, high for a flat one, a bit more with a heavy load), the clutch slips to hold it until the wheels catch up, then closes gently. It works with or without crawl mode. A shift, lifting off the pedal, the brake or about 14 km/h ends it and the game takes over. New and not ridden much: if it feels wrong, switch it off.",
+     "keys": [["creep", "smooth_start", 1, 0]]},
     {"id": "cc", "group": "Cruise control", "stage": "stable", "since": "1990", "label": "SteadyCruise", "desc": "Calm cruise control, no throttle bursts after shifts",
      "info": "Replaces the game's cruise throttle with a calm one: no bursts of full throttle after every shift and no hunting around the set speed. Most other cruise features build on it.",
      "keys": [["cruise", "smooth", 1, 0]]},
