@@ -27,10 +27,10 @@ You **must** know these before you install it:
 
 ## Why I made this
 
-My biggest pet peeve with the game's automatic is that it doesn't think. It has adaptive modes and
-kickdown works, but I drive most of the time on cruise control, and with cruise control on the game
-ignores those modes and just follows the rpm. Climbing or cruising gently, same shift point, no idea
-what is coming. After enough hours of that I wanted a gearbox with some brain.
+My biggest pet peeve with the game's automatic is that it doesn't think. It has adaptive modes, and
+they are what makes kickdown and the like possible, but they only work without cruise control. I drive
+most of the time on cruise control, and then the game just follows the rpm. Climbing or cruising
+gently, same shift point, no idea what is coming. After enough hours of that I wanted a gearbox with some brain.
 
 So I looked at what real truck gearboxes do and started building that. Once it worked, the lane
 assist was next. It is fine as it is, but I wanted something closer to hands-free: calm enough on a
