@@ -529,7 +529,9 @@ static void refresh(void *self)
     float v = fabsf(T.speed), kmh = v * 3.6f;
     int was = S.ours;
     if (T.parking_brake || kmh < p_off_kmh) S.ours = 0;
-    else if (p_on_rpm > 0 ? (T.rpm >= p_on_rpm && T.gear > 0 && T.eff_clutch < 0.1f && kmh >= 3) : kmh >= p_on_kmh) S.ours = 1;
+    // By rpm: the engine has reached takeover_rpm with the clutch closed in a gear. Also above 20 km/h whatever the rpm: after a
+    // pause, a load or a teleport the truck may already be cruising at 900 rpm in a high gear and never reach the rpm.
+    else if (p_on_rpm > 0 ? ((T.rpm >= p_on_rpm && T.gear > 0 && T.eff_clutch < 0.1f && kmh >= 3) || kmh >= fmaxf(p_on_kmh, 20.0f)) : kmh >= p_on_kmh) S.ours = 1;
     if (S.ours && !was) S.ours_at = now;
 
     // Learn the rpm correction while the clutch is closed and the speed steady.

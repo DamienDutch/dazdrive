@@ -227,7 +227,7 @@ static void tick(double dt, int stats)
     T.rpm = rpm; T.speed = M.v; T.in_thr = M.pedal; T.eff_thr = fmaxf(M.pedal, M.cc);
     T.in_brake = M.brake; T.eff_brake = M.brake; T.cruise = M.cruise_kmh / 3.6f;
     T.motor_brake = M.ebrake; T.retarder = M.ret; T.eff_clutch = M.state ? 1 : 0; T.wipers = M.wet;
-    T.engine_on = 1;
+    T.engine_on = 1; T.gear = M.gear; T.dgear = M.gear;
     if (M.road) M.grade_pct = M.road(M.s);
     telemetry_frame();
     m_trueshift.frame();
@@ -409,7 +409,6 @@ int main(int argc, char **argv)
 {
     verbose = argc > 1 && !strcmp(argv[1], "-v");
     for (int i = 0; i < m_trueshift.n_params; i++) *m_trueshift.params[i].val = m_trueshift.params[i].def;
-    set_param("takeover_rpm", 0);   // the simulator takes over by speed (its clutch and rpm model is not detailed enough for the rpm rule)
     T.fwd_gears = 12; T.diff = 2.85f; T.wheels = 4; T.retarder_steps = 5;
     for (int i = 0; i < 12; i++) T.ratio[i] = RATIO[i];
     G.tail_site = 5; G.decide_site = 1; G.n_choose = 1; G.choose_sites[0] = 2; G.n_start = 1; G.start_sites[0] = 4;
