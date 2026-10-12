@@ -169,8 +169,17 @@ writes the standard preset again; a setting missing from an old ini also gets it
 CONTROLS
 --------
 
-There is nothing to set up: DazDrive uses the keys and buttons you already bound in the game
-(Options > Controls), on a wheel or a keyboard.
+There is no button setup: DazDrive uses the keys and buttons you bound in the game
+(Options > Controls), on a wheel or a keyboard. Check that these are bound, otherwise the part
+that needs them does nothing (everything else keeps working):
+
+  Cruise control: on/off, + and -, resume   Needed for every cruise feature (SteadyCruise, ACC, AEB, ...)
+  Adaptive Cruise Control Mode              Changes the ACC distance; held for a second: speed-limit
+                                            following (ISA) on/off. Without it: no distance change, no ISA switch
+  Adaptive Automatic Transmission Mode      Steps the gearbox mode Eco / Normal / Power / M; held at a
+                                            standstill: crawl mode on/off. Without it: no mode change, no
+                                            crawl switch
+  Shift hint up / down (optional)           A hinted gear is held for 10 s
 
 - Gearbox mode: the game's own key for the adaptive automatic ("Adaptive Automatic Transmission
   Mode") steps Eco / Normal / Power / M. TrueShift follows it. A shift hint (up or down) is an

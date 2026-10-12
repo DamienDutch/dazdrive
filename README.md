@@ -108,6 +108,12 @@ single features, save the ini next to the page and restart the game (no button s
 "Guide me" walks you through it one step at a time. Full details, controls, dash letters and tones:
 `README.txt` in the zip ([source](release/README-player.txt)).
 
+**Keys to bind.** There is no button setup: DazDrive uses the keys you bind in the game (Options > Controls).
+Cruise control (on/off, + and -, resume) is needed for every cruise feature. Two more are worth binding:
+*Adaptive Cruise Control Mode* (ACC distance; hold it for a second to switch speed-limit following on or off) and
+*Adaptive Automatic Transmission Mode* (steps the gearbox mode Eco / Normal / Power / M; hold it at a standstill to
+switch crawl mode). Unbound, only the part that needs the key does nothing.
+
 ## Reporting a problem
 
 [Open an issue](https://github.com/DamienDutch/dazdrive/issues/new/choose) with:
