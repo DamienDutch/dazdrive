@@ -766,7 +766,9 @@ static float cruise_body(void *ga, float dt, float pedal)
     // Integrate only while the output can follow (not shifting, not held by the
     // limits or the rate limit in the same direction): no wind-up.
     int held_up = u < u_raw - 1e-4f && e > 0, held_down = u > u_raw + 1e-4f && e < 0;
-    if (!shifting && !held_up && !held_down) C.i += ki * e * dt;
+    // integrate the same look-ahead error as P: with e the integrator kept filling during the approach and held the throttle up
+    // after P had eased it (toy model 13-10: +1.5 instead of +0.6 on the flat)
+    if (!shifting && !held_up && !held_down) C.i += ki * ep * dt;
     if (C.i > 1) C.i = 1;
     if (C.i < -0.5f) C.i = -0.5f;
     C.u = u;
