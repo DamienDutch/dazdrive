@@ -63,7 +63,7 @@ static param g_params[] = {
     { "m_lug_rpm", &p_m_lug, 1000, "M mode with m_assist: one gear down below this rpm with a lot of pedal and no pull" },
     { "dash_letter", &p_letter, 1, "1 = the dashboard shows the mode (D, E, P, M) instead of A" },
     { "start_gear_fix", &p_start_fix, 1, "1 = lower the game's start gear when the launch would be too slow" },
-    { "launch_max_kmh", &p_launch_max, 14, "a start gear above the game's pick is allowed when the clutch would be closed by this speed (km/h at launch_rpm) and the slip time stays within launch_slip_s: on a light or downhill start the truck no longer revs a low gear to the limiter. Not in Power or M. 0 = never above the game's pick" },
+    { "launch_max_kmh", &p_launch_max, 14, "a start gear above the game's pick is allowed when the clutch would be closed by this speed (km/h at launch_rpm) and the slip time stays within launch_slip_s: on a light or downhill start the truck no longer revs a low gear to the limiter. Not in Power or M. 0 = never above the game's pick (the game picks by a number in the truck definition: 4 solo, 1 with a trailer, whatever the gear ratios are). With this on, a full pedal does not demand a quicker clutch than a normal one" },
     { "launch_slip_s", &p_slip_s, 1.0f, "longest clutch-slip time accepted for a start gear" },
     { "launch_torque", &p_launch_torque, 0.6f, "share of max torque the clutch passes while starting" },
     { "launch_rpm", &p_launch_rpm, 1000, "rpm at which the clutch closes when starting" },
@@ -1314,11 +1314,11 @@ static int stub_start(void *self)
     float thr = clampf(T.in_thr, 0, 1);
     if (p_start_fix > 0 && takeover() && S.eng_ok && wheel_radius() > 0.1f && stock <= n_gears()) {
         float r = wheel_radius(), f_res = resist(0);
-        float limit = p_slip_s * (thr >= p_kick_pedal ? 0.6f : 1.0f);
-        pick = 1;
-        // Above the game's pick: only by physics (lock speed and slip time at this mass, grade and pedal), never by a gear count,
-        // because every gearbox numbers its gears differently.
+        // Above the game's pick: only by physics (lock speed and slip time at this mass and grade), never by a gear count,
+        // because every gearbox numbers its gears differently (Damien 13-10: "look at the gear ratio, not the number").
         bool raise = p_launch_max > 0 && S.mode != MODE_POWER && S.mode != MODE_M;
+        float limit = p_slip_s * (thr >= p_kick_pedal && !raise ? 0.6f : 1.0f);
+        pick = 1;
         for (int g = raise ? n_gears() : stock; g >= 1; g--) {
             float ratio = T.ratio[g - 1] * T.diff;
             float v_lock = p_launch_rpm / (ratio * 9.5493f) * r;
