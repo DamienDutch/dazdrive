@@ -1290,14 +1290,19 @@ static void emergency_hazards()
 // keep it at the warning. Both game parts are skipped only while ours is watching (s_aeb_watch).
 static const char *const aeb_name[] = { "off", "warning", "partial braking", "FULL braking", "holding" };
 
+// One alarm that climbs: each step sounds at once when it is reached and repeats while it lasts. A step back down
+// (the danger eased, the gas pedal, a new target) stays silent, so the warning never sounds again after the braking.
 static void aeb_beep(int st)
 {
+    static int top = AEB_OFF;  // highest step sounded in this event
     double now = wall_s();
-    if (st == AEB_WARN && now - AE.beep_at > 1.0) {
-        play_cue(CUE_AEB_WARN);
-        AE.beep_at = now;
-    } else if ((st == AEB_PARTIAL || st == AEB_FULL) && now - AE.beep_at > 0.8) {  // the braking sound lasts 0.7 s
-        play_cue(CUE_AEB_BRAKE);
+    if (st == AEB_OFF) { top = AEB_OFF; return; }
+    if (st > AEB_FULL || st < top) return;
+    bool up = st > top;
+    top = st;
+    double every = st == AEB_WARN ? 1.5 : 0.8;  // the braking sounds last 0.4-0.7 s
+    if (up || now - AE.beep_at > every) {
+        play_cue(st == AEB_WARN ? CUE_AEB_WARN : st == AEB_PARTIAL ? CUE_AEB_PARTIAL : CUE_AEB_FULL);
         AE.beep_at = now;
     }
 }
