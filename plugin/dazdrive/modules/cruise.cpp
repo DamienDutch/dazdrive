@@ -451,6 +451,7 @@ static int g_keys_ok, g_ret_ok;
 struct keydir { int ev, was_on; float before; double last_ev, t0, next; float s0; int seq, fired, block; };
 static keydir K[2];  // [0] = +, [1] = -
 static int s_prev_on;
+static double s_key_at;  // last press of a cruise key (on/off, +, -, resume): a drop right after it is the driver's own
 
 static void *action_of(char *ga, unsigned off)
 {
@@ -465,6 +466,7 @@ static void key_event(char *ga, void *act)
     int is_tog = act == action_of(ga, ACT_TOGGLE), is_inc = act == action_of(ga, ACT_INC),
         is_dec = act == action_of(ga, ACT_DEC), is_res = act == action_of(ga, ACT_RESUME);
     if (!act || !(is_tog || is_inc || is_dec || is_res)) return;
+    s_key_at = wall_s();
     if (g_ret_ok && p_ret_off > 0 && !(is_tog && on) && *(unsigned *)(ga + GA_RETARDER) > 0) {
         unsigned was = *(unsigned *)(ga + GA_RETARDER);
         o_retarder(ga, 0, 1);
@@ -502,6 +504,7 @@ static void key_apply(char *ga, int dir, float base, float step, const char *why
     if (dir < 0 && g_low_ok && p_min_set > 0) { if (r < p_min_set) r = p_min_set; }
     else if (dir < 0 && r < minv) {  // below the minimum: cruise off, like the game's dec
         *(unsigned char *)(ga + GA_ON) = 0; *(float *)(ga + GA_SET) = 0;
+        s_key_at = wall_s();
         logv(1, "Cruise: %s - from %.0f: below the minimum, cruise off", why, base);
         return;
     }
@@ -1626,11 +1629,18 @@ static void cr_frame()
     DEV_NOTE(cruise(T.cruise > 0.5f, T.cruise * 3.6f, g_acc ? g_level : -1, g_radar_ok ? s_radar.gap : NAN, s_radar.v,
                     s_radar.at, p_isa > 0, AE.st, AH.st, s_dip));
     if (!T.paused) {  // say when cruise drops and why it might have, and when it is back (a driver who pressed nothing wants to know)
-        static int was_on; static double off_at; static float set_kmh;
+        static int was_on; static double off_at, brake_at; static float set_kmh;
         int is_on = T.cruise > 0.5f;
         if (is_on) set_kmh = T.cruise * 3.6f;
+        if (T.in_brake > 0.05f || T.parking_brake) brake_at = wall_s();
         if (was_on && !is_on) {
             off_at = wall_s();
+            // Damien 13-10: a sound when the cruise drops by itself; not for his brake or his keys (he did it himself), not for
+            // our junction cancel (it has its own) or the AEB (its alarm says enough). Without the key hook we cannot tell: silent.
+            if (g_keys_ok && off_at - s_key_at > 0.5 && off_at - brake_at > 0.5 && off_at - s_jn_cancel_at > 0.5 && AE.st == AEB_OFF) {
+                play_cue(CUE_CRUISE_DROP);
+                logv(1, "Cruise: dropped without brake or key: sound");
+            }
             logline("Cruise: off at %.0f km/h (was set to %.0f): brake %.2f, throttle %.2f, gear %d, eco-roll %s, AEB %s, parking brake %s, air %.0f psi",
                     fabsf(T.speed) * 3.6f, set_kmh, T.in_brake, T.in_thr, T.gear, g_rolling ? "yes" : "no", aeb_name[AE.st], T.parking_brake ? "on" : "off", T.air_psi);
         } else if (!was_on && is_on && off_at > 0)

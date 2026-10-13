@@ -35,8 +35,11 @@ static const CueDef CUES[CUE_COUNT] = {
     /* AEB_FULL    */ { 0.38f, 7, { { W_SQ, 0.00f, 60, 1400, 0 }, { W_SQ, 0.09f, 60, 1800, 0 }, { W_SQ, 0.18f, 60, 1400, 0 },
                                     { W_SQ, 0.27f, 60, 1800, 0 }, { W_SQ, 0.36f, 60, 1400, 0 }, { W_SQ, 0.45f, 60, 1800, 0 },
                                     { W_SQ, 0.54f, 60, 1400, 0 } } },
-    // Cruise dropped or cancelled for you (a junction ahead): three falling bells. Provisional until Damien picks one of V1-V3.
+    // Cruise dropped without the driver's brake or keys, or cancelled for you (a junction ahead): three falling bells (Damien 13-10, V1)
     /* CRUISE_DROP */ { 0.32f, 3, { { W_BELL, 0, 220, 784, 0 }, { W_BELL, 0.16f, 220, 659, 0 }, { W_BELL, 0.32f, 380, 523, 0 } } },
+    // Lane assist steps aside for the indicator / is back: one short, quiet bell, low then higher (Damien 13-10, V1)
+    /* LANE_PAUSE  */ { 0.18f, 1, { { W_BELL, 0, 220, 392, 0 } } },
+    /* LANE_RESUME */ { 0.18f, 1, { { W_BELL, 0, 220, 523, 0 } } },
 };
 
 static const int RATE = 22050;

@@ -911,6 +911,7 @@ static void indicator_pause()
                 g_pause = 0; g_resume_at = now;
                 if (we_off && !lka) lka_set(ga, 1);
                 we_off = 0;
+                if (p_tone > 0 && was_on) play_cue(CUE_LANE_RESUME);
                 logline("Lane: indicator on for 20 s: assist back (no steering against the indicator)");
             }
             return;
@@ -920,6 +921,7 @@ static void indicator_pause()
             DEV_NOTE(ind_pause());
             lane_reset();
             if (p_ind_off > 0 && lka) { lka_set(ga, 0); we_off = 1; }
+            if (p_tone > 0 && lka) play_cue(CUE_LANE_PAUSE);  // only when there was an assist to pause
             logv(2, "Lane: indicator %s: assist paused%s", (fl & 4) ? "left" : "right",
                  !lka ? " (lane keeping was off)" : we_off ? ", lane keeping switched off" : "");
         }
@@ -950,6 +952,7 @@ static void indicator_pause()
         lka_set(ga, 1);
         logline("Lane: lane keeping went off during the lane change: switched on again (%.0f km/h)", kmh);
     } else logv(2, "Lane: indicator off, assist back%s", lane ? "" : " (no lane found within 4 s)");
+    if (p_tone > 0 && was_on && (lka || (p_ind_resume > 0 && kmh > fmaxf(p_min_kmh, 5) + 2))) play_cue(CUE_LANE_RESUME);
     we_off = 0;
 }
 
