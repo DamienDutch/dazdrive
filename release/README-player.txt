@@ -209,10 +209,13 @@ Letters
   B               Auto Hold / hill hold is braking (steady)
 
 Tones
-  one low / one middle / two rising / two short   Gearbox mode Eco / Normal / Power / M
-  one, two or three equal beeps (a low one: off)  ACC distance close / medium / far (off)
-  rising / falling pair                           Feature switched on / off
+  A soft bell is used where pitch is the message, a dry steady tone where the count or rhythm is.
+  low / middle / rising pair / two equal bells    Gearbox mode Eco / Normal / Power / M
+  one, two or three soft tones (slide down: off)  ACC distance close / medium / far (off)
+  rising / falling pair of bells                  Feature switched on / off
                                                   (speed-limit following, lane centering, crawl)
+  two short tones                                 AEB warning
+  a quick run of alternating tones                AEB is braking
 
 
 KNOWN LIMITS

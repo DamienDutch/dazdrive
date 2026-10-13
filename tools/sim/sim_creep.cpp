@@ -33,7 +33,7 @@ volatile char g_dash_flash, g_dash_status;
 volatile float g_creep_thr;
 volatile float g_clutch_ours = __builtin_nanf("");
 int input_held(int) { return 0; }
-void play_tones(const float *, int, int) {}
+void play_cue(int) {}
 float game_adaptive() { return 3; }
 void *game_cvar(const char *) { return 0; }
 void game_cvar_set(void *, float) {}

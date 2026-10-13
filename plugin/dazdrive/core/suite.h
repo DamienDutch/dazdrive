@@ -130,8 +130,10 @@ void telemetry_frame();  // derived values, called first in frame_end
 
 // ---------------------------------------------------------------- shared between modules
 
-// sound.cpp: short tones (freqs in Hz, 0 = pause), async; g_volume 0..1 (0 = silent)
-void play_tones(const float *freqs, int n, int ms);
+// sound.cpp: feedback sounds, async, one at a time; g_volume 0..1 (0 = silent)
+enum Cue { CUE_MODE_ECO, CUE_MODE_NORMAL, CUE_MODE_POWER, CUE_MODE_M, CUE_ACC_1, CUE_ACC_2, CUE_ACC_3, CUE_ACC_OFF,
+           CUE_ON, CUE_OFF, CUE_AEB_WARN, CUE_AEB_BRAKE, CUE_COUNT };
+void play_cue(int cue);
 // input.cpp: wheel/joystick buttons (numbered from 1); input_pressed = went down since the last poll
 void input_poll();
 int input_pressed(int button, int modifier);

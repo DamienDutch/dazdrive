@@ -436,8 +436,7 @@ static void crawl_toggle()
         if (!cv) cv = game_cvar("g_adaptive_shift");
         if (cv) game_cvar_set(cv, mode_before);
     }
-    static const float on[] = { 523, 659 }, off[] = { 659, 523 };
-    play_tones(g_user_on ? on : off, 2, 80);
+    play_cue(g_user_on ? CUE_ON : CUE_OFF);
     g_dash_flash = g_user_on ? 'C' : 'X';
     g_dash_flash_until = wall_s() + 1.5;
     logline("Creep: crawl switched %s", g_user_on ? "on" : "off");

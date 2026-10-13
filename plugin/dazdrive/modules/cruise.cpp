@@ -814,9 +814,8 @@ static int is_round(float g)
 // One beep per step of distance (short 1, middle 2, long 3), a low one for off.
 static void level_tone(int lv)
 {
-    static const float beeps[] = { 880, 880, 880 }, off[] = { 330 };
-    if (lv < 0) play_tones(off, 1, 200);
-    else play_tones(beeps, lv + 1, 70);
+    if (lv < 0) play_cue(CUE_ACC_OFF);
+    else play_cue(lv <= 0 ? CUE_ACC_1 : lv == 1 ? CUE_ACC_2 : CUE_ACC_3);
 }
 
 static float gap_s()
@@ -1295,12 +1294,10 @@ static void aeb_beep(int st)
 {
     double now = wall_s();
     if (st == AEB_WARN && now - AE.beep_at > 1.0) {
-        static const float w[] = { 1200, 0, 1200 };
-        play_tones(w, 3, 90);
+        play_cue(CUE_AEB_WARN);
         AE.beep_at = now;
-    } else if ((st == AEB_PARTIAL || st == AEB_FULL) && now - AE.beep_at > 0.5) {
-        static const float b[] = { 1600, 0, 1600, 0, 1600 };
-        play_tones(b, 5, 60);
+    } else if ((st == AEB_PARTIAL || st == AEB_FULL) && now - AE.beep_at > 0.8) {  // the braking sound lasts 0.7 s
+        play_cue(CUE_AEB_BRAKE);
         AE.beep_at = now;
     }
 }
@@ -1537,8 +1534,7 @@ static void aeb(char *g, float dt)
         else AE.close_since = 0;
         if (AE.close_since && now - AE.close_since > 2 && !AE.close_warned) {
             AE.close_warned = 1;
-            static const float w[] = { 1200, 0, 1200 };
-            play_tones(w, 3, 90);
+            play_cue(CUE_AEB_WARN);
             logline("AEB: very close behind the lead: %.1f m at %.0f km/h (%.2f s)", gap, kmh, tg);
         }
     }
@@ -1629,8 +1625,7 @@ static void cr_frame()
                 p_isa = p_isa > 0 ? 0 : 1;
                 s_isa_last = -1;
                 state_write();  // remembered
-                static const float on[] = { 784, 1047 }, off[] = { 1047, 784 };
-                play_tones(p_isa > 0 ? on : off, 2, 80);
+                play_cue(p_isa > 0 ? CUE_ON : CUE_OFF);
                 g_dash_flash = p_isa > 0 ? 'S' : 'X';  // S = following the speed signs, X = off (1.5 s)
                 g_dash_flash_until = wall_s() + 1.5;
                 logline("Cruise: speed limit following %s", p_isa > 0 ? "on" : "off");

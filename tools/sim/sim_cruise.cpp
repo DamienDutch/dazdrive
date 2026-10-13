@@ -47,7 +47,7 @@ void logline(const char *fmt, ...)
     if (!verbose) return;
     va_list ap; va_start(ap, fmt); printf("%7.1f  ", t_now); vprintf(fmt, ap); printf("\n"); va_end(ap);
 }
-void play_tones(const float *, int, int) {}
+void play_cue(int) {}
 int input_pressed(int, int) { return 0; }
 int input_held(int) { return 0; }
 static float g_cvar_adaptive = 3;

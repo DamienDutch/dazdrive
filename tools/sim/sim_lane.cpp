@@ -56,7 +56,7 @@ void logline(const char *fmt, ...)
     if (!verbose) return;
     va_list ap; va_start(ap, fmt); printf("%7.2f  ", t_now); vprintf(fmt, ap); printf("\n"); va_end(ap);
 }
-void play_tones(const float *, int, int) {}
+void play_cue(int) {}
 uintptr_t game_scan(const char *) { return 0; }
 int game_patch_call(uintptr_t, void *) { return 0; }
 float *game_patch_rip_float(uintptr_t, int, int, float) { return NULL; }

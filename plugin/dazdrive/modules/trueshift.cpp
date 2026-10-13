@@ -419,10 +419,8 @@ static void mode_update()
     static int logged = -1;
     if (m != logged) {
         if (logged >= 0 && p_tones > 0) {
-            // Eco low, Normal middle, Power rising, M two short
-            static const float eco[] = { 440 }, nor[] = { 587 }, pow_[] = { 587, 880 }, man[] = { 660, 0, 660 };
-            const float *f = m == MODE_ECO ? eco : m == MODE_POWER ? pow_ : m == MODE_M ? man : nor;
-            play_tones(f, m == MODE_POWER ? 2 : m == MODE_M ? 3 : 1, m == MODE_M ? 70 : 140);
+            // Eco low bell, Normal middle, Power rising pair, M two equal
+            play_cue(m == MODE_ECO ? CUE_MODE_ECO : m == MODE_POWER ? CUE_MODE_POWER : m == MODE_M ? CUE_MODE_M : CUE_MODE_NORMAL);
         }
         logged = m;
         logline("mode %s (g_adaptive_shift = %g)", mode_name[m], a);

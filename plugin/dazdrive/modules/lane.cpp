@@ -897,8 +897,7 @@ static void indicator_pause()
     if (we_off && lka && g_lka_expect != 1) {
         __atomic_fetch_and((unsigned char *)(ga + 0x1d1), (unsigned char)~0x20, __ATOMIC_SEQ_CST);
         we_off = 0; lka = 0;
-        static const float down[] = { 990, 660 };
-        if (p_tone > 0) play_tones(down, 2, 90);
+        if (p_tone > 0) play_cue(CUE_OFF);
         g_dash_flash = 'X';
         g_dash_flash_until = wall_s() + 1.5;
         logline("Lane: key pressed during the indicator: lane keeping off (stays off after the indicator)");
@@ -987,8 +986,7 @@ static void ln_frame()
             if (!on && fabsf(T.speed) * 3.6f < 56) slow_off = 1;  // went off at low speed (the game's rule or the key)
             else if (on) slow_off = 0;                           // switched on by the key at another speed: normal again
             g_lka_expect = -1;
-            static const float up[] = { 660, 990 }, down[] = { 990, 660 };
-            play_tones(on ? up : down, 2, 90);
+            play_cue(on ? CUE_ON : CUE_OFF);
             g_dash_flash = on ? 'L' : 'X';  // L = lane keeping on, X = off (1.5 s on the dashboard)
             g_dash_flash_until = wall_s() + 1.5;
             logline("Lane: lane keeping %s", on ? "on" : "off");
