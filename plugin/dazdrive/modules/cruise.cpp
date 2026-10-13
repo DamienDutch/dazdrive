@@ -27,7 +27,7 @@
 #include <string.h>
 
 static float p_key_slide, p_acc_calm, p_set_ease, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_ramp, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_eco_k, p_power_k, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
-static float p_jn_margin, p_jn_cancel_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
+static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = cruise module on" },
@@ -110,6 +110,7 @@ static param g_params[] = {
     { "aeb_max_decel", &p_aeb_max_dec, 6.5f, "AEB: the most it asks for in the full stage (m/s2)" },
     { "aeb_min_kmh", &p_aeb_kmh, 15, "AEB: only steps in above this speed (km/h); once braking it brakes to a stop. Slower is the ACC's job" },
     { "trace", &p_trace, 1, "1 = write cruise.csv (10 per second while cruise is on or Auto Hold holds) for analysis" },
+    { "approach_s", &p_approach_s, 2.5f, "own cruise throttle: the throttle eases off when the truck would reach the set speed within about this many seconds at the speed it is gaining now (also on a descent), so it arrives without overshooting. Eco 1.2x, Power 0.6x. 0 = off" },
     { "smooth", &p_smooth, 1, "1 = own smooth cruise throttle (no bursts after shifts; Eco gentle, Power keen), 0 = the game's" },
 };
 // Junction / roundabout slowing: always with the own ACC (friend 11-10: own ACC without it entered roundabouts at
@@ -714,6 +715,17 @@ static float cruise_body(void *ga, float dt, float pedal)
         if (wall_s() < steer_until && kmh > 8 && target > kmh) target = kmh;
     }
     float e = target - kmh;
+    // Overshoot (Damien 13-10: a resume from 68 to 90 gave full throttle for 12 s into a descent, 92.5 km/h): the P term looks at the
+    // error we will have in approach_s seconds at the speed we gain now, so the throttle eases off before the set speed is reached.
+    static float acc_f; static int acc_init;
+    float ep = e;
+    {
+        float acc_kmhs = T.accel * 3.6f;
+        if (!acc_init || !C.on) { acc_f = acc_kmhs; acc_init = 1; }
+        else acc_f += (acc_kmhs - acc_f) * fminf(1.0f, dt / 0.5f);
+        float tau = p_approach_s * (a == a && a > 3.01f ? 1.2f : (a == a && a > 0 && a < 2.0f ? 0.6f : 1.0f));
+        if (tau > 0 && acc_f > 0) ep = e - tau * acc_f;
+    }
     // Too fast for a bend and the throttle is already off: a gentle brake request
     // (game_actor+0x17c, 0..1; the game slews it and uses engine brake/retarder first).
     // with hysteresis (start 3 km/h over, keep until 0.5 under): no on/off pumping of the brakes
@@ -731,7 +743,7 @@ static float cruise_body(void *ga, float dt, float pedal)
     float kp = 0.25f, ki = 0.08f, rate = 0.6f;               // Normal / M (per km/h, per km/h·s, per s)
     if (a == a && a > 3.01f) { kp = 0.18f; ki = 0.05f; rate = 0.4f; }        // Eco: gentle, lets it sag a bit
     else if (a == a && a > 0 && a < 2.0f) { kp = 0.35f; ki = 0.12f; rate = 1.0f; }  // Power: keen
-    if (!C.on) { C.on = 1; C.u = stock; C.i = stock - kp * e; }   // bumpless start
+    if (!C.on) { C.on = 1; C.u = stock; C.i = stock - kp * ep; }   // bumpless start
     // at a standstill the open clutch is no shift: the throttle has to rise for Stop&Go to drive off (ts4r 189-193 and
     // 227-231 s: the lead pulled away, our throttle stayed frozen at 0.03, Damien had to give gas)
     int shifting = T.eff_clutch > 0.05f && kmh > 2;
@@ -740,7 +752,7 @@ static float cruise_body(void *ga, float dt, float pedal)
         if (g_sg_ok) { g_sg_hold = 1; g_feed = 0; }
         return pedal;
     }
-    float u_raw = kp * e + C.i;
+    float u_raw = kp * ep + C.i;
     // Following in a jam: gentle throttle at walking pace (ts4r 296-313 s, toll queue: full throttle / off every
     // second at 4-5 km/h against our own brake pulses; Damien: "full gas, gas off, full gas"). 0.4 from rest up to 1.0
     // at 18 km/h; and no wind-up while our ACC brakes.
