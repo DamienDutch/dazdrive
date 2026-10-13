@@ -26,7 +26,7 @@ static float p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, 
     p_max_skip, p_skip_acc, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
     p_eb_down, p_eb_light, p_eb_skip, p_m_manual, p_m_assist, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
-    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_dec, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_wet, p_stop, p_tones, p_crest_band;
+    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_wet, p_stop, p_tones, p_crest_band;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = TrueShift on, 0 = the game's own automatic" },
@@ -77,6 +77,8 @@ static param g_params[] = {
     { "eco_roll_under_eco_kmh", &p_roll_under_eco, 2.0f, "the same in Eco: a little more room, the most relaxed" },
     { "eco_roll_under_power_kmh", &p_roll_under_pw, 1.0f, "the same in Power: the strictest (keep it between 1 and 2 km/h; values around 0.5 give very short rolls that hunt)" },
     { "eco_roll_max_decel", &p_roll_dec, 0.04f, "eco-roll only where the truck would lose at most this much speed in neutral (m/s2; 0.04 = ~3 km/h in 20 s: a slight descent, not the flat)" },
+    { "eco_roll_max_decel_eco", &p_roll_dec_eco, 0.08f, "the same in Eco: a slightly steeper stretch may still be rolled (0.08 = ~6 km/h in 20 s)" },
+    { "eco_roll_min_kmh_eco", &p_roll_min_eco, 40, "Eco: the lowest speed that starts an eco-roll (km/h; Normal and Power: 50)" },
     { "eco_roll", &p_roll, 1, "1 = roll in neutral with the pedal released on gentle stretches (Eco, Normal and Power; not in M; never with any brake)" },
     { "tones", &p_tones, 1, "1 = a short tone when the mode changes (Eco low, Normal middle, Power rising, M two short)" },
     { "retarder_downshift", &p_ret_down, 0, "1 = the retarder also makes TrueShift keep the rpm up like the engine brake (a retarder does not need it); 0 = only the engine brake does" },
@@ -694,7 +696,8 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
         if (steep == steep && steep < -3.5f) return 0;
     }
     if (!S.rolling) {
-        if (kmh < 50 || sim_s() - S.roll_at < 10 || sim_s() - S.shift_at < 1) return 0;
+        bool eco = S.mode == MODE_ECO;  // Eco rolls more often: from a lower speed, on a slightly steeper stretch, with a shorter pause between rolls
+        if (kmh < (eco ? p_roll_min_eco : 50) || sim_s() - S.roll_at < (eco ? 5 : 10) || sim_s() - S.shift_at < 1) return 0;
         // Only when the speed would stay in the band for ~20 s (route: the
         // grade of the next 20 s; else the live grade).
         float a_pred = a_n;
@@ -709,7 +712,7 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
         // (the worse of now and the route's 20 s mean: sim R5b started at -0.03 predicted but -0.14 now and rolled 1.5 s)
         float a_chk = fminf(a_pred, a_n);
         if (cc && a_chk < 0 && (kmh - (set - under)) / 3.6f / -a_chk < 10) return 0;
-        if (a_pred > 0.075f || a_pred < -p_roll_dec) {
+        if (a_pred > 0.075f || a_pred < -(eco ? p_roll_dec_eco : p_roll_dec)) {
             // over a top: a short climb left and a gentle way down after it
             float crest = rk ? route_crest_m(v * 5) : -1;
             if (!(crest >= 0 && a_n > -0.5f && route_min_grade(crest, crest + v * 10) >= -3.5f)) return 0;
@@ -718,7 +721,7 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
         }
         return 1;
     }
-    return kmh <= S.roll_kmh + 6 && kmh >= S.roll_kmh - 12 && kmh >= 45 && grade_pct() > -4;
+    return kmh <= S.roll_kmh + 6 && kmh >= S.roll_kmh - 12 && kmh >= (S.mode == MODE_ECO ? p_roll_min_eco - 5 : 45) && grade_pct() > -4;
 }
 
 // M: the gear stays where the driver's shift hints put it; TrueShift only helps.
