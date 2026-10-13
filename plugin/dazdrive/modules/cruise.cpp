@@ -100,7 +100,7 @@ static param g_params[] = {
     { "aeb", &p_aeb, 1, "1 = own emergency brake assist (AEB): warning tones, then partial braking, then full braking, all ramped; it replaces the game's ACC emergency braking and the game's AEB (both empty the brake air). 0 = the game's" },
     { "aeb_evade_steer", &p_aeb_evade, 0.01f, "AEB: the indicator to one side plus steering that way by this much (share of the full steering range, 0.01 = ~4.5 degrees on a 900-degree wheel; or the truck turning that way at 1.4 deg/s) for 0.3 s = an evasive lane change: a warning or partial braking stands down for 3 s. 0 = off" },
     { "aeb_without_cruise", &p_aeb_manual, 1, "1 = the AEB also watches when you drive yourself (cruise off); needs the game's radar, which runs with an ACC distance, blind spot or emergency brake switched on in the options" },
-    { "aeb_warn_s", &p_aeb_warn_s, 3.0f, "AEB: warning tones when the time to collision drops below this (s)" },
+    { "aeb_warn_s", &p_aeb_warn_s, 3.0f, "AEB: warning tones when the time to collision drops below this (s), or earlier when more than ~1.5 m/s2 of braking would be needed (with cruise on: 2 s / 2.8 m/s2)" },
     { "aeb_partial_s", &p_aeb_part_s, 2.0f, "AEB: partial braking below this time to collision (s)" },
     { "aeb_full_s", &p_aeb_full_s, 1.2f, "AEB: full braking below this time to collision (s)" },
     { "aeb_partial_decel", &p_aeb_part_dec, 3.0f, "AEB: deceleration of the partial stage (m/s2; Mercedes ABA: ~3)" },
@@ -1319,7 +1319,10 @@ static void aeb_stage(int st, float gap, float kmh)
     if (st > AE.st && st <= AEB_FULL)
         logline("AEB: %s: lead %.1f m ahead at %.0f km/h (we %.0f), time to collision %.1f s, needs %.1f m/s2 (mass %.0f t)",
                 aeb_name[st], gap, AE.vl * 3.6f, kmh, AE.ttc, AE.a_need, AE.mass / 1000);
-    if (st == AEB_HOLD && AE.st != AEB_HOLD) logline("AEB: stopped %.1f m behind the lead: holding until gas or brake", gap);
+    if (st == AEB_HOLD && AE.st != AEB_HOLD) {
+        if (gap > 0) logline("AEB: stopped %.1f m behind the lead: holding until gas or brake", gap);
+        else logline("AEB: stopped (the radar lost the lead on the way): holding until gas or brake");
+    }
     if (st == AEB_OFF && AE.st != AEB_OFF) DEV_NOTE(aeb_over(AE.ev_max >= AEB_FULL ? 2 : AE.ev_max >= AEB_PARTIAL ? 1 : 0));
     if (st == AEB_OFF && AE.st != AEB_OFF)
         logline("AEB: over after %.1f s: highest %s, %.0f -> %.0f km/h, min gap %.1f m, min time to collision %.1f s, peak decel %.1f m/s2, air %.0f -> %.0f psi%s%s",
@@ -1579,6 +1582,18 @@ static void cr_frame()
     g_inc.flags = (g_inc.flags & ~(INC_AEB | INC_ISA)) | (AE.st != AEB_OFF ? INC_AEB : 0) | (p_isa > 0 ? INC_ISA : 0);
     DEV_NOTE(cruise(T.cruise > 0.5f, T.cruise * 3.6f, g_acc ? g_level : -1, g_radar_ok ? s_radar.gap : NAN, s_radar.v,
                     s_radar.at, p_isa > 0, AE.st, AH.st, s_dip));
+    if (!T.paused) {  // say when cruise drops and why it might have, and when it is back (a driver who pressed nothing wants to know)
+        static int was_on; static double off_at; static float set_kmh;
+        int is_on = T.cruise > 0.5f;
+        if (is_on) set_kmh = T.cruise * 3.6f;
+        if (was_on && !is_on) {
+            off_at = wall_s();
+            logline("Cruise: off at %.0f km/h (was set to %.0f): brake %.2f, throttle %.2f, gear %d, eco-roll %s, AEB %s, parking brake %s, air %.0f psi",
+                    fabsf(T.speed) * 3.6f, set_kmh, T.in_brake, T.in_thr, T.gear, g_rolling ? "yes" : "no", aeb_name[AE.st], T.parking_brake ? "on" : "off", T.air_psi);
+        } else if (!was_on && is_on && off_at > 0)
+            logline("Cruise: on again after %.0f s (%.0f km/h, %.0f rpm)", wall_s() - off_at, fabsf(T.speed) * 3.6f, T.rpm);
+        was_on = is_on;
+    }
     {
         static double flushed;
         if (g_csv && wall_s() - flushed > 2) { flushed = wall_s(); fflush(g_csv); csv_cap(&g_csv, "cruise.csv"); }

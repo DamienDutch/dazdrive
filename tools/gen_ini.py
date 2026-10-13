@@ -209,7 +209,7 @@ SETUP_GROUPS = [
         ("cruise", "hill_start", "b", "Hill start: brake holds briefly after stopping on a slope", False),
         ("cruise", "aeb", "b", "AEB: automatic emergency braking (warning tones, partial, then full braking)", False),
         ("cruise", "aeb_without_cruise", "b", "AEB also watches when you drive without cruise control", False),
-        ("cruise", "aeb_warn_s", "n", "AEB warns at this time to collision (s); partial braking at 2, full at 1.2", False),
+        ("cruise", "aeb_warn_s", "n", "AEB warns at this time to collision (s), or earlier when hard braking would be needed; partial braking at 2, full at 1.2", False),
         ("cruise", "curve_lat", "n", "Comfort in bends: sideways acceleration in m/s2 (lower = slower through bends)", False),
         ("cruise", "limiter_kmh", "n", "Cap the set speed at this value with the speed limiter on (0 = no cap)", False),
         ("cruise", "step_tap_kmh", "n", "A tap on + / - changes the set speed by this (0 = the game's step)", False),
