@@ -27,6 +27,7 @@
 #include <string.h>
 
 static float p_key_slide, p_acc_calm, p_set_ease, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_ramp, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_eco_k, p_power_k, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
+static float p_jn_margin, p_jn_cancel_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = cruise module on" },
@@ -64,6 +65,8 @@ static param g_params[] = {
     { "curve_lat", &p_curve_lat, 3.125f, "sideways acceleration (m/s2) allowed in bends at about 92 km/h, the same in every mode (higher = faster through bends). Slower bends get more, up to 1.23x (4 m/s2), like the allowance in a Mercedes-Benz patent" },
     { "junctions", &p_junc, 1, "1 = with navigation: also slow down before junctions where the route turns, and before roundabouts (needs curves = 1; always on with own_acc = 1)" },
     { "junction_lat", &p_junc_lat, 2.5f, "sideways acceleration (m/s2) allowed in a junction turn (v = sqrt(this x turn radius), at least 15 km/h)" },
+    { "junction_margin_kmh", &p_jn_margin, 10, "junctions and roundabouts: brake only down to the junction's speed plus this (km/h); the rest is yours. 0 = down to the junction speed itself" },
+    { "junction_cancel_s", &p_jn_cancel_s, 5, "this many seconds before a junction or roundabout we slowed for, the cruise is cancelled with a sound (the game's Resume brings the set speed back). 0 = never" },
     { "junction_min_deg", &p_junc_deg, 25, "turns smaller than this (degrees) are not slowed for" },
     { "roundabout_kmh", &p_rb_kmh, 25, "speed at the entry of a roundabout, also when going straight through" },
     { "roundabout_ratio", &p_rb_ratio, 1.4f, "a prefab with 2+ route curves counts as a roundabout when the path through it is this many times its entry-exit chord (lower = more prefabs count)" },
@@ -118,6 +121,8 @@ static int junc_on() { return p_curve > 0 && (p_junc > 0 || p_own_acc > 0); }
 
 typedef float (*cruise_fn)(void *ga, float dt, float pedal);
 static cruise_fn o_cruise;
+static double s_cb_on_since, s_jn_cancel_at;  // cruise_body: when the cruise came on, when we last cancelled it for a junction
+static int s_cb_was_on;
 static struct { float i, u; int on; } C;
 
 // State that cr_reset() must reach (was function-local).
@@ -591,11 +596,14 @@ static float cruise_body(void *ga, float dt, float pedal)
     if (g) { if (p_ah > 0 && g_low_ok) auto_hold(g, dt); else { s_want_hold = 0; hill_start(g); } }
     if (p_smooth <= 0 || !g || !*(unsigned char *)(g + GA_ON) || !(dt > 0 && dt < 0.5f)) {
         C.on = 0;
+        s_cb_was_on = 0;
         g_sg_hold = 0;
         g_feed = 0;
         return stock;
     }
     float set = *(float *)(g + GA_SET), acc = *(float *)(g + GA_ACC_TARGET);
+    if (!s_cb_was_on) s_cb_on_since = wall_s();
+    s_cb_was_on = 1;
     float target = set;
     float kmh = fabsf(T.speed) * 3.6f;
     float a = game_adaptive();
@@ -638,6 +646,27 @@ static float cruise_body(void *ga, float dt, float pedal)
                 ignore_until = wall_s() + 6;
             }
             if (wall_s() < ignore_until) vj = NAN;
+        }
+        // Damien 13-10: we cannot know a good junction speed, so brake only down to it plus a margin, and a few seconds before the
+        // junction cancel the cruise (sound) so the rest is the driver's. Like the game's own cancels only the on flag drops; the
+        // set speed stays and Resume brings it back.
+        float jn_orig_kmh = ji.limit_ms * 3.6f;
+        if (vj == vj && ji.limit_ms > 0 && p_jn_margin > 0) {
+            float lo = ji.limit_ms, m = p_jn_margin / 3.6f;
+            vj = sqrtf(fmaxf(0.0f, vj * vj - lo * lo) + (lo + m) * (lo + m));
+            ji.limit_ms = lo + m;
+        }
+        if (vj == vj && ji.limit_ms > 0 && p_jn_cancel_s > 0 && !T.paused) {
+            double now_c = wall_s();
+            float t_to = fmaxf(ji.dist_m - (ji.roundabout ? 15 : 8), 0.0f) / fmaxf(kmh / 3.6f, 1.0f);
+            if (t_to <= p_jn_cancel_s && kmh > jn_orig_kmh + 3 && now_c - s_cb_on_since > 5 && now_c - s_jn_cancel_at > 20) {
+                s_jn_cancel_at = now_c;
+                *(unsigned char *)(g + GA_ON) = 0;
+                play_cue(CUE_CRUISE_DROP);
+                logline("Cruise: %s in %.0f m (%.1f s) at %.0f km/h, its speed %.0f (+%.0f margin): cruise cancelled for you, Resume brings the set speed back",
+                        ji.roundabout ? "roundabout" : "junction", ji.dist_m, t_to, kmh, jn_orig_kmh, p_jn_margin);
+                return stock;
+            }
         }
         static double said_j;
         // Log as soon as a junction/roundabout limit is well under our speed and close (<= 5 s apart).

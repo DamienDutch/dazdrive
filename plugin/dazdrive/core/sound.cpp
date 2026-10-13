@@ -35,6 +35,8 @@ static const CueDef CUES[CUE_COUNT] = {
     /* AEB_FULL    */ { 0.38f, 7, { { W_SQ, 0.00f, 60, 1400, 0 }, { W_SQ, 0.09f, 60, 1800, 0 }, { W_SQ, 0.18f, 60, 1400, 0 },
                                     { W_SQ, 0.27f, 60, 1800, 0 }, { W_SQ, 0.36f, 60, 1400, 0 }, { W_SQ, 0.45f, 60, 1800, 0 },
                                     { W_SQ, 0.54f, 60, 1400, 0 } } },
+    // Cruise dropped or cancelled for you (a junction ahead): three falling bells. Provisional until Damien picks one of V1-V3.
+    /* CRUISE_DROP */ { 0.32f, 3, { { W_BELL, 0, 220, 784, 0 }, { W_BELL, 0.16f, 220, 659, 0 }, { W_BELL, 0.32f, 380, 523, 0 } } },
 };
 
 static const int RATE = 22050;

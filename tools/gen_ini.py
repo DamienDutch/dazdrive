@@ -334,7 +334,7 @@ FEATURES = [
      "info": "Looks at the route ahead and eases off before a sharp bend. If lifting is not enough it brakes gently, engine brake and retarder first. Needs a navigation route.",
      "keys": [["cruise", "curves", 1, 0], ["cruise", "curve_brake", 1, 0]]},
     {"id": "junc", "group": "Cruise control", "stage": "experimental", "since": "2019", "label": "JunctionSense", "desc": "Slows for junctions and roundabouts", "needs": ["bend"],
-     "info": "Slows for the turn at a junction and for roundabouts on your route, then picks the speed up again. The detector reads the road layout, which is not always right yet: it can brake for a bend that did not need it.",
+     "info": "Slows for the turn at a junction and for roundabouts on your route, but only down to its speed plus 10 km/h. About 5 seconds before the junction it cancels the cruise with a sound, so the last part is yours; press Resume afterwards to get your set speed back. The detector reads the road layout, which is not always right yet: it can brake for a bend that did not need it.",
      "keys": [["cruise", "junctions", 1, 0]]},
     {"id": "pcc", "group": "Cruise control", "stage": "stable", "since": "2012", "label": "Cruise looks ahead", "desc": "Carries speed into climbs, eases off before tops (predictive cruise)", "needs": ["cc"],
      "info": "Instead of holding one speed, the cruise lets the speed dip a little before a climb and carries speed into it, and eases off before a crest. Needs a navigation route. Real trucks: Scania Active Prediction, Mercedes PPC, Volvo I-See.",
