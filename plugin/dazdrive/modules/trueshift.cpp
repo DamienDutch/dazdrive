@@ -25,7 +25,7 @@
 static float p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, p_min_gap, p_dwell_ud, p_dwell_du,
     p_max_skip, p_skip_acc, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
-    p_eb_down, p_eb_light, p_eb_skip, p_m_manual, p_m_assist, p_m_lug, p_letter, p_start_fix, p_start_up, p_slip_s, p_launch_torque, p_launch_rpm,
+    p_eb_down, p_eb_light, p_eb_skip, p_m_manual, p_m_assist, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
     p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_dec, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_wet, p_stop, p_tones, p_crest_band;
 
 static param g_params[] = {
@@ -63,7 +63,7 @@ static param g_params[] = {
     { "m_lug_rpm", &p_m_lug, 1000, "M mode with m_assist: one gear down below this rpm with a lot of pedal and no pull" },
     { "dash_letter", &p_letter, 1, "1 = the dashboard shows the mode (D, E, P, M) instead of A" },
     { "start_gear_fix", &p_start_fix, 1, "1 = lower the game's start gear when the launch would be too slow" },
-    { "start_gear_up", &p_start_up, 2, "up to this many gears above the game's start gear when the load and the road allow it (a hard pull-away no longer revs gear 1 to the limiter; a climb or a heavy trailer still starts low). Not in Power or M. 0 = off" },
+    { "launch_max_kmh", &p_launch_max, 14, "a start gear above the game's pick is allowed when the clutch would be closed by this speed (km/h at launch_rpm) and the slip time stays within launch_slip_s: on a light or downhill start the truck no longer revs a low gear to the limiter. Not in Power or M. 0 = never above the game's pick" },
     { "launch_slip_s", &p_slip_s, 1.0f, "longest clutch-slip time accepted for a start gear" },
     { "launch_torque", &p_launch_torque, 0.6f, "share of max torque the clutch passes while starting" },
     { "launch_rpm", &p_launch_rpm, 1000, "rpm at which the clutch closes when starting" },
@@ -1316,12 +1316,14 @@ static int stub_start(void *self)
         float r = wheel_radius(), f_res = resist(0);
         float limit = p_slip_s * (thr >= p_kick_pedal ? 0.6f : 1.0f);
         pick = 1;
-        int top = stock;
-        if (p_start_up > 0 && S.mode != MODE_POWER && S.mode != MODE_M) top = stock + (int)p_start_up < n_gears() ? stock + (int)p_start_up : n_gears();
-        for (int g = top; g >= 1; g--) {
+        // Above the game's pick: only by physics (lock speed and slip time at this mass, grade and pedal), never by a gear count,
+        // because every gearbox numbers its gears differently.
+        bool raise = p_launch_max > 0 && S.mode != MODE_POWER && S.mode != MODE_M;
+        for (int g = raise ? n_gears() : stock; g >= 1; g--) {
             float ratio = T.ratio[g - 1] * T.diff;
             float v_lock = p_launch_rpm / (ratio * 9.5493f) * r;
             float a = (S.eng.torque * p_launch_torque * ratio * p_eta / r - f_res) / S.mass;
+            if (g > stock && v_lock * 3.6f > p_launch_max) continue;
             if (a > 0 && v_lock / a <= limit) { pick = g; break; }
         }
     }
