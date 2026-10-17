@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DazDrive setup</title>
 <style>
-/* One page, in layers: Start (open your ini / guide me) -> 1 truck era (timeline) -> 2 feature switches ->
-   3 fine-tuning (collapsed per module) -> 4 save, with a sticky bar at the bottom.
-   "Guide me" turns the same sections into a wizard: one step at a time with Back / Next in the bar. */
+/* A wizard by default (Damien 17-10): Start (open your ini, continue, or start fresh) -> 1 truck era (timeline) ->
+   2 feature switches -> 3 fine-tuning (per module: Presets / Advanced / Custom) -> 4 save, one step at a time with
+   Back / Next in the bar. "Show everything on one page" (or ?all) shows the same sections as one page. */
 :root{--bg:#f3f4f1;--card:#fff;--fg:#1c2421;--mute:#5d6863;--line:#d8ddd8;--acc:#d2611a;--accfg:#fff;--on:#2f7d4f;--onbg:#e7f3ec;
   --warn:#9a5b06;--bad:#c0262d;--code:#eef0ec;--dash:#1b1f1e;--dashfg:#f1f3ef;--dashmute:#9aa6a0;--bar:rgba(255,255,255,.92);--glow:rgba(210,97,26,.25)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121615;--card:#1b201e;--fg:#e6ebe8;--mute:#9aa6a0;--line:#2f3633;--acc:#f08a3c;--accfg:#1a0d03;
@@ -153,14 +153,40 @@ ol.facts{list-style:decimal inside}
 /* wizard mode: one step at a time */
 body.wiz [data-step]{display:none}
 body.wiz [data-step].cur{display:block}
-body.wiz #s-start,body.wiz .offnote{display:none}
+body.wiz #guide{display:none}
 body.wiz .bar .wiznav{display:flex}
 body.wiz .bar .normal{display:none}
 body.wiz .bar .status{display:none}
-.wizhead{display:none;align-items:center;gap:10px;margin:8px 0 0;font-size:.85rem;color:var(--mute)}
+.wizhead{display:none;align-items:center;gap:6px;margin:8px 0 0;font-size:.85rem;color:var(--mute);flex-wrap:wrap}
 body.wiz .wizhead{display:flex}
-.wizhead .prog{flex:1;height:6px;background:var(--line);border-radius:3px;overflow:hidden}
-.wizhead .prog i{display:block;height:100%;background:var(--acc);transition:width .2s}
+.wizhead .wsteps{display:flex;gap:4px;flex:1;flex-wrap:wrap}
+.wizhead .wst{font-size:.82rem;padding:3px 10px;border-radius:99px;color:var(--mute)}
+.wizhead .wst.done{color:var(--fg);border-color:var(--on)}
+.wizhead .wst[aria-current=step]{background:var(--acc);border-color:var(--acc);color:var(--accfg);font-weight:600}
+#s-start .start{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+/* fine-tuning layers: Presets / Advanced / Custom */
+.tabs{display:flex;gap:0;margin:10px 0 4px;border:1px solid var(--line);border-radius:9px;overflow:hidden;width:max-content;max-width:100%}
+.tabs .tab{border:0;border-radius:0;padding:6px 14px;background:var(--card);font-size:.92rem}
+@media (max-width:560px){.tabs .tab{padding:6px 9px;font-size:.85rem;white-space:nowrap}}
+.big[hidden]{display:none}
+.tabs .tab+.tab{border-left:1px solid var(--line)}
+.tabs .tab[aria-selected=true]{background:var(--fg);color:var(--bg);font-weight:600}
+.panel[hidden]{display:none}
+.knob{padding:10px 0;border-top:1px solid var(--line)}
+.knob label.name{display:grid;grid-template-columns:1fr auto;gap:0 10px;cursor:pointer}
+.knob label.name small{grid-column:1/-1}
+.knob output{font:600 .9rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--acc);white-space:nowrap}
+.knob input[type=range]{width:100%;margin:8px 0 0;accent-color:var(--acc)}
+.knob select{width:100%;margin-top:6px}
+.knob.tg{display:flex;gap:10px;align-items:flex-start}
+.knob.tg input{width:22px;height:22px;margin-top:2px;flex:none;accent-color:var(--on)}
+.knob.tg label.name{display:block;flex:1}
+.knob .odd{color:var(--warn);font-size:.8rem}
+.marks{position:relative;height:1.6em;margin:0 9px}
+.marks button{position:absolute;transform:translateX(-50%);font-size:.75rem;padding:0 6px;border-radius:99px;color:var(--mute);white-space:nowrap}
+.marks button.on{color:var(--acc);border-color:var(--acc)}
+.rawnote{font-size:.88rem;color:var(--warn);margin:6px 0}
+.row .key{font:600 .88rem ui-monospace,SFMono-Regular,Menlo,monospace}
 </style>
 </head>
 <body>
@@ -173,19 +199,21 @@ body.wiz .wizhead{display:flex}
 </ul>
 </div></header>
 <main>
-<div class="wizhead"><span id="wizstep"></span><div class="prog"><i id="wizprog"></i></div><button class="link" id="wizexit" type="button">Show everything</button></div>
+<nav class="wizhead" aria-label="Steps"><div class="wsteps" id="wsteplist"></div><button class="link" id="wizexit" type="button">Show everything on one page</button></nav>
 
-<section class="card" id="s-start">
-<h2>Start</h2>
-<p class="mute">Most players only need step 1 and the save button. The rest is optional.</p>
+<section class="card" data-step data-title="Start" id="s-start">
+<h2>Do you already have a dazdrive.ini?</h2>
+<p class="mute">Open it and this page starts from your own settings: you change only what you want, instead of setting everything up again. Settings that are new in this version get their standard value.</p>
 <div class="start">
-<button class="big" id="guide" type="button"><b>🧭 Guide me step by step</b><small>One question at a time, skip what you do not need.</small></button>
-<label class="big"><b>📂 Open my dazdrive.ini</b><small>Change what you have instead of starting over.</small><input type="file" id="open" accept=".ini,text/plain"></label>
+<label class="big"><b>📂 Yes, open my dazdrive.ini</b><small>It is in <code>plugins\dazdrive\</code>, next to this page.</small><input type="file" id="open" accept=".ini,text/plain"></label>
+<button class="big" id="resume" type="button" hidden><b>↩️ Continue where I left off</b><small id="resumewhen"></small></button>
+<button class="big" id="fresh" type="button"><b>✨ No, start fresh</b><small>Pick how smart your truck is and go from there.</small></button>
 </div>
 <p class="note" id="restore" hidden></p>
+<p><button class="link" id="guide" type="button">🧭 Guide me step by step</button></p>
 </section>
 
-<section class="card" data-step="1" id="s-era">
+<section class="card" data-step data-title="Truck year" id="s-era">
 <p class="note" id="restore2" hidden></p>
 <h2><span class="n">1</span> How smart is your truck?</h2>
 <p class="mute">Pick a year: what real trucks had by then. The newest years include parts that are new in DazDrive too.</p>
@@ -194,22 +222,26 @@ body.wiz .wizhead{display:flex}
 <p class="legend"><span><span class="stage stable">Stable</span> ridden a lot</span><span><span class="stage beta">Beta</span> ridden a little, not confirmed yet</span><span><span class="stage experimental">Experimental</span> not proven yet</span></p>
 </section>
 
-<section class="card" data-step="2" id="s-feat">
+<section class="card" data-step data-title="Features" id="s-feat">
 <h2><span class="n">2</span> Features <span class="count" id="count"></span></h2>
 <p class="mute">Tap a name for what it does. The switch turns it on or off; a half switch means partly on (see Fine-tuning).</p>
 <div id="tiles"></div>
 </section>
 
-<section data-step="3" id="s-tune">
+<section data-step data-title="Fine-tuning" id="s-tune">
 <div class="card" style="margin-bottom:0">
 <h2><span class="n">3</span> Fine-tuning <span class="opt">optional</span></h2>
-<p class="mute" style="margin:0">👍 Standard suits most players · open a module for presets · 🔧 Custom shows every setting</p>
+<ul class="facts" style="margin:0">
+<li>👍 <b>Presets</b>: a few good choices per module, enough for most players</li>
+<li>🎚️ <b>Advanced</b>: a handful of easy controls, one control can set several settings at once</li>
+<li>🔧 <b>Custom</b>: every raw setting with a one-line help, for those who know exactly what they want</li>
+</ul>
 </div>
 <div id="modules"></div>
 <p class="mute offnote" id="offnote"></p>
 </section>
 
-<section class="card" data-step="4" id="s-save">
+<section class="card" data-step data-title="Save" id="s-save">
 <h2><span class="n">4</span> Save</h2>
 <ol class="facts" id="savesteps"></ol>
 <p id="msg" class="mute"></p>
@@ -283,27 +315,56 @@ function featureState(f, vals) {
   if (!same(vals[f.keys[0][0]][f.keys[0][1]], f.keys[0][2])) return "false";
   return on === f.keys.length ? "true" : "mixed";
 }
-// the keys a module's tuning presets set (union over its presets)
-function tuningKeys(g) {
-  var ks = [], seen = {};
-  g.tuning.forEach(function (t) { Object.keys(t.over).forEach(function (s) { Object.keys(t.over[s]).forEach(function (k) {
-    if (!seen[s + "." + k]) { seen[s + "." + k] = 1; ks.push([s, k]); } }); }); });
-  return ks;
+// fine-tuning has three layers per module: Presets (the chips), Advanced (the knobs: one control can set several keys) and
+// Custom (every raw key the module owns). Keys a feature tile sets belong to step 2 and never decide the layer.
+var FEATKEY = null;
+function featKeys(D) {
+  if (!FEATKEY) { FEATKEY = {}; D.features.forEach(function (f) { f.keys.forEach(function (k) { FEATKEY[k[0] + "." + k[1]] = 1; }); }); }
+  return FEATKEY;
 }
-function applyTuning(g, t, base, vals) {
-  tuningKeys(g).forEach(function (sk) {
-    var s = sk[0], k = sk[1];
-    vals[s][k] = t.over[s] && (k in t.over[s]) ? t.over[s][k] : base[s][k];
-  });
+function knobKeys(kb) {
+  if (kb.kind === "toggle") return kb.keys.map(function (k) { return k[0] + "." + k[1]; });
+  return [kb.key[0] + "." + kb.key[1]].concat((kb.follow || []).map(function (f) { return f[0][0] + "." + f[0][1]; }));
 }
-function matchTuning(g, base, vals) {
-  var ks = tuningKeys(g);
+function roundTo(x, r) { return +(Math.round(x / r) * r).toFixed(6); }
+// a follow key at slider position x: piecewise linear through the knob's points, the end stretches extended (gen_ini knob_at)
+function knobFollow(kb, x, i) {
+  var f = kb.follow[i], pts = kb.at.map(function (a, j) { return [+a, +f[1][j]]; }).sort(function (a, b) { return a[0] - b[0]; }), j = 0;
+  while (j < pts.length - 2 && x > pts[j + 1][0]) j++;
+  var p = pts[j], q = pts[j + 1];
+  return roundTo(p[1] + (q[1] - p[1]) * (x - p[0]) / (q[0] - p[0]), f[2]);
+}
+// x: the slider value (range), true/false (toggle) or the option value (choice)
+function setKnob(kb, x, vals) {
+  if (kb.kind === "toggle") { kb.keys.forEach(function (k) { vals[k[0]][k[1]] = x ? k[2] : k[3]; }); return; }
+  vals[kb.key[0]][kb.key[1]] = num(x);
+  if (kb.kind === "range") (kb.follow || []).forEach(function (f, i) { vals[f[0][0]][f[0][1]] = num(knobFollow(kb, +x, i)); });
+}
+// can the knob show these values: a toggle all on or all off, a choice one of its options, a range in reach with its followers in place
+function knobFits(kb, vals) {
+  if (kb.kind === "toggle") return [2, 3].some(function (w) { return kb.keys.every(function (k) { return same(vals[k[0]][k[1]], k[w]); }); });
+  var v = vals[kb.key[0]][kb.key[1]];
+  if (!isNum(v)) return false;
+  if (kb.kind === "choice") return kb.options.some(function (o) { return same(o[0], v); });
+  return +v >= kb.min && +v <= kb.max && (kb.follow || []).every(function (f, i) { return same(vals[f[0][0]][f[0][1]], knobFollow(kb, +v, i)); });
+}
+function presetOf(t, base, s, k) { return t.over[s] && (k in t.over[s]) ? t.over[s][k] : base[s][k]; }
+function ownKeys(D, g) { var fk = featKeys(D); return g.scope.filter(function (sk) { return !fk[sk[0] + "." + sk[1]]; }); }
+// a preset puts every key of the module back (on top of the era), except the feature switches
+function applyPreset(D, g, t, base, vals) {
+  ownKeys(D, g).forEach(function (sk) { vals[sk[0]][sk[1]] = presetOf(t, base, sk[0], sk[1]); });
+}
+// {layer: "preset", i} when the values are exactly a preset, "advanced" when only the knobs moved, else "custom"
+function detectLayer(D, g, base, vals) {
+  var own = ownKeys(D, g), kk = {};
   for (var i = 0; i < g.tuning.length; i++) {
-    var t = g.tuning[i], ok = true;
-    ks.forEach(function (sk) { var s = sk[0], k = sk[1], want = t.over[s] && (k in t.over[s]) ? t.over[s][k] : base[s][k]; if (!same(vals[s][k], want)) ok = false; });
-    if (ok) return i;
+    var t = g.tuning[i];
+    if (own.every(function (sk) { return same(vals[sk[0]][sk[1]], presetOf(t, base, sk[0], sk[1])); })) return { layer: "preset", i: i };
   }
-  return -1;
+  g.knobs.forEach(function (kb) { knobKeys(kb).forEach(function (id) { kk[id] = 1; }); });
+  if (g.knobs.length && own.every(function (sk) { return kk[sk[0] + "." + sk[1]] || same(vals[sk[0]][sk[1]], base[sk[0]][sk[1]]); })
+      && g.knobs.every(function (kb) { return knobFits(kb, vals); })) return { layer: "advanced" };
+  return { layer: "custom" };
 }
 var STAGES = ["stable", "beta", "experimental"];
 function eraStage(D, era) {
@@ -346,7 +407,7 @@ function nearestEra(D, vals) {
   });
   return best;
 }
-if (typeof module !== "undefined") module.exports = { buildIni: buildIni, presetValues: presetValues, featureState: featureState, applyTuning: applyTuning, matchTuning: matchTuning, parseIni: parseIni, applyIni: applyIni, nearestEra: nearestEra, DATA: DATA };
+if (typeof module !== "undefined") module.exports = { buildIni: buildIni, presetValues: presetValues, featureState: featureState, setKnob: setKnob, knobFits: knobFits, applyPreset: applyPreset, detectLayer: detectLayer, parseIni: parseIni, applyIni: applyIni, nearestEra: nearestEra, DATA: DATA };
 
 if (typeof document !== "undefined") (function () {
   var D = DATA, era = D.eras[0].id, vals, inputs = {}, tiles = [], mods = [], STORE = "dazdrive.setup";
@@ -406,12 +467,13 @@ if (typeof document !== "undefined") (function () {
     eb.appendChild(el("b", null, e.name + " (" + e.year + ")")); eb.appendChild(el("span", "mute", e.blurb));
     var base = presetValues(D, era), off = [];
     mods.forEach(function (m) {
-      var hit = m.custom ? -1 : matchTuning(m.g, base, vals);
-      if (hit < 0 && !m.custom) { m.custom = true; }
-      m.chips.forEach(function (c, i) { c.setAttribute("aria-pressed", String(m.custom ? i === m.chips.length - 1 : i === hit)); });
-      m.desc.textContent = m.custom ? "Every setting of this module, one by one." : m.g.tuning[hit].desc;
-      m.cur.textContent = m.custom ? "Custom" : m.g.tuning[hit].name;
-      m.box.hidden = !m.custom;
+      var det = detectLayer(D, m.g, base, vals), pre = det.layer === "preset";
+      if (!m.tab) m.tab = det.layer;   // after an era change or an opened ini: show the layer the values are in
+      m.chips.forEach(function (c, i) { c.setAttribute("aria-pressed", String(pre && i === det.i)); });
+      m.desc.textContent = pre ? m.g.tuning[det.i].desc : "None of the presets: your own values under " + (det.layer === "advanced" ? "Advanced" : "Custom") + ". A preset puts the whole module back.";
+      m.cur.textContent = pre ? m.g.tuning[det.i].name : det.layer === "advanced" ? "Advanced" : "Custom";
+      Object.keys(m.tabs).forEach(function (k) { m.tabs[k].setAttribute("aria-selected", String(k === m.tab)); m.panels[k].hidden = k !== m.tab; });
+      m.knobs.forEach(function (r) { r.show(); });
       var ow = m.g.off_when;
       m.card.hidden = !!(ow && same(vals[ow[0]][ow[1]], ow[2]));  // switched off in step 2: nothing to tune
       if (m.card.hidden) off.push(m.g.title);
@@ -427,6 +489,7 @@ if (typeof document !== "undefined") (function () {
     else if (shipped && e === shipped && isPreset(e)) st.appendChild(el("span", "ok", " · Standard (as shipped)"));
     else if (c) st.appendChild(el("span", "chg", " · " + c + " change" + (c > 1 ? "s" : "")));
     else st.appendChild(el("span", "ok", " · as preset"));
+    $("wsteps").innerHTML = st.innerHTML;   // the wizard's bar shows the same status between Back and Next
   }
   function bind(sec, key, type, node, err, label) {
     inputs[sec + "." + key] = { sec: sec, key: key, type: type, el: node, err: err, label: label };
@@ -445,7 +508,7 @@ if (typeof document !== "undefined") (function () {
     else { ctl = el("input"); ctl.type = "text"; ctl.inputMode = "decimal"; }
     ctl.id = id;
     var lab = el("label", "name"), err = null; lab.htmlFor = id;
-    lab.appendChild(el("span", null, label));
+    lab.appendChild(el("span", "key", label));
     if (exp) { lab.appendChild(document.createTextNode(" ")); lab.appendChild(el("span", "tag", exp === "beta" ? "beta" : "experimental")); }
     lab.appendChild(el("small", null, help[sec + "." + key] || ""));
     if (kind === "n") {   // the error text sits with the field, not only its red border
@@ -458,7 +521,7 @@ if (typeof document !== "undefined") (function () {
   }
   function setEra(id) {
     era = id; vals = presetValues(D, era);
-    mods.forEach(function (m) { m.custom = false; });
+    mods.forEach(function (m) { m.tab = null; });
   }
   // load an ini text: values in, era = the nearest one, custom tuning shows as Custom
   function loadIni(text) {
@@ -466,7 +529,7 @@ if (typeof document !== "undefined") (function () {
     if (!n) return 0;
     vals = fresh;
     era = nearestEra(D, vals)[0];
-    mods.forEach(function (m) { m.custom = false; });
+    mods.forEach(function (m) { m.tab = null; });
     refresh();
     return n;
   }
@@ -540,45 +603,90 @@ if (typeof document !== "undefined") (function () {
     th.appendChild(grid);
   });
 
-  // 3. one collapsed card per module: tuning chips + Custom with every setting
-  var host = $("modules");
+  // 3. one collapsed card per module, in three layers: Presets (chips), Advanced (knobs), Custom (every raw key)
+  var host = $("modules"), kid = 0;
+  function fmtVal(v, unit) { return num(v) + (unit ? " " + unit : ""); }
+  function knobRow(kb, m) {
+    var row = el("div", "knob" + (kb.kind === "toggle" ? " tg" : "")), id = "k_" + (kid++), lab = el("label", "name"), ctl, out = el("output"), mk = null;
+    lab.htmlFor = id;
+    lab.appendChild(el("span", null, kb.label));
+    if (kb.kind === "range") lab.appendChild(out);
+    var odd = el("span", "odd", "");
+    lab.appendChild(el("small", null, kb.help)); lab.appendChild(odd);
+    if (kb.kind === "toggle") {
+      ctl = el("input"); ctl.type = "checkbox";
+      ctl.addEventListener("change", function () { setKnob(kb, ctl.checked, vals); refresh(); });
+      row.appendChild(ctl); row.appendChild(lab);
+    } else if (kb.kind === "choice") {
+      ctl = el("select");
+      kb.options.forEach(function (o) { var op = el("option", null, o[1]); op.value = o[0]; ctl.appendChild(op); });
+      ctl.addEventListener("change", function () { setKnob(kb, ctl.value, vals); refresh(); });
+      row.appendChild(lab); row.appendChild(ctl);
+    } else {
+      ctl = el("input"); ctl.type = "range"; ctl.min = kb.min; ctl.max = kb.max; ctl.step = kb.step;
+      ctl.addEventListener("input", function () { setKnob(kb, ctl.value, vals); refresh(); });
+      row.appendChild(lab); row.appendChild(ctl);
+      if (kb.presets) {   // the presets as marks under the slider: they are points on it
+        var marks = el("div", "marks"); mk = [];
+        kb.at.forEach(function (x, i) {
+          var b = el("button", null, m.g.tuning[i].name); b.type = "button";
+          b.style.left = ((x - kb.min) / (kb.max - kb.min) * 100) + "%";
+          b.addEventListener("click", function () { setKnob(kb, x, vals); refresh(); });
+          marks.appendChild(b); mk.push(b);
+        });
+        row.appendChild(marks);
+      }
+    }
+    ctl.id = id;
+    m.knobs.push({ show: function () {
+      var fits = knobFits(kb, vals);
+      if (kb.kind === "toggle") ctl.checked = kb.keys.every(function (k) { return same(vals[k[0]][k[1]], k[2]); });
+      else {
+        var v = vals[kb.key[0]][kb.key[1]];
+        if (document.activeElement !== ctl) ctl.value = kb.kind === "choice" ? num(v) : v;
+        if (kb.kind === "range") out.textContent = fmtVal(v, kb.unit);
+        if (mk) mk.forEach(function (b, i) { b.classList.toggle("on", same(v, kb.at[i])); });
+      }
+      odd.textContent = fits ? "" : "Changed under Custom: moving this puts it back in line.";
+    } });
+    return row;
+  }
   D.groups.forEach(function (g) {
     var card = el("details", "card tune"), sum = el("summary");
     sum.appendChild(el("span", null, g.title));
-    var m = { g: g, chips: [], custom: false, cur: el("span", "cur", "") };
+    var m = { g: g, chips: [], tab: null, cur: el("span", "cur", ""), tabs: {}, panels: {}, knobs: [] };
     sum.appendChild(m.cur);
     card.appendChild(sum);
     var body = el("div", "body");
     body.appendChild(el("p", "mute", g.about[0]));
     if (g.about.length > 1) { var ul = el("ul", "facts"); g.about.slice(1).forEach(function (t) { ul.appendChild(el("li", null, t)); }); body.appendChild(ul); }
-    var chips = el("div", "chips");
+    var tabs = el("div", "tabs"); tabs.setAttribute("role", "tablist");
+    [["preset", "👍 Presets"], ["advanced", "🎚️ Advanced"], ["custom", "🔧 Custom"]].forEach(function (x) {
+      if (x[0] === "advanced" && !g.knobs.length) return;
+      var b = el("button", "tab", x[1]); b.type = "button"; b.setAttribute("role", "tab");
+      b.addEventListener("click", function () { m.tab = x[0]; refresh(); });
+      tabs.appendChild(b); m.tabs[x[0]] = b;
+    });
+    body.appendChild(tabs);
+    var pp = el("div", "panel"), chips = el("div", "chips");
     m.chips = g.tuning.map(function (t) {
       var c = el("button", "chip", t.name); c.type = "button";
-      c.addEventListener("click", function () { m.custom = false; applyTuning(g, t, presetValues(D, era), vals); refresh(); });
+      c.addEventListener("click", function () { applyPreset(D, g, t, presetValues(D, era), vals); refresh(); });
       chips.appendChild(c);
       return c;
     });
-    var cc = el("button", "chip", "Custom"); cc.type = "button";
-    cc.addEventListener("click", function () { m.custom = true; refresh(); });
-    chips.appendChild(cc); m.chips.push(cc);
-    body.appendChild(chips);
-    m.desc = el("p", "chipdesc"); body.appendChild(m.desc);
-    var box = el("div", "custom"); m.box = box;
-    g.items.forEach(function (it) { box.appendChild(item(it[0], it[1], it[2], it[3], it[4], it[5])); });
-    if (g.advanced) {
-      var shown = {};
-      D.groups.forEach(function (x) { if (x.advanced === g.advanced) x.items.forEach(function (it) { shown[it[0] + "." + it[1]] = 1; }); });
-      var det = el("details"); det.appendChild(el("summary", null, ""));
-      var n = 0;
-      D.tables[g.advanced].forEach(function (r) {
-        if (shown[g.advanced + "." + r[0]]) return;
-        n++;
-        det.appendChild(item(g.advanced, r[0], "n", r[0], false));
-      });
-      det.firstChild.textContent = "Advanced: " + n + " more [" + g.advanced + "] keys";
-      if (n) box.appendChild(det);
+    pp.appendChild(chips);
+    m.desc = el("p", "chipdesc"); pp.appendChild(m.desc);
+    body.appendChild(pp); m.panels.preset = pp;
+    if (g.knobs.length) {
+      var ap = el("div", "panel");
+      g.knobs.forEach(function (kb) { ap.appendChild(knobRow(kb, m)); });
+      body.appendChild(ap); m.panels.advanced = ap;
     }
-    body.appendChild(box);
+    var cp = el("div", "panel");
+    cp.appendChild(el("p", "rawnote", "🔧 The raw settings of dazdrive.ini, each with the plugin's own one-line help. No safety net: the page only checks that a value is a number. Switches (1 / 0) also come on and off in step 2."));
+    g.scope.forEach(function (sk) { cp.appendChild(item(sk[0], sk[1], sk[2], sk[1], false)); });
+    body.appendChild(cp); m.panels.custom = cp;
     card.appendChild(body);
     m.card = card;
     mods.push(m);
@@ -611,7 +719,7 @@ if (typeof document !== "undefined") (function () {
   function blocked() {
     if (!badList.length) return false;
     var i = badList[0], steps = document.querySelectorAll("[data-step]");
-    mods.forEach(function (m) { if (m.box.contains(i.el)) m.custom = true; });
+    mods.forEach(function (m) { if (m.panels.custom.contains(i.el)) m.tab = "custom"; });
     refresh();
     for (var p = i.el.parentNode; p; p = p.parentNode) if (p.tagName === "DETAILS") p.open = true;
     if (document.body.classList.contains("wiz")) for (var j = 0; j < steps.length; j++) if (steps[j].contains(i.el)) wshow(j);
@@ -648,47 +756,65 @@ if (typeof document !== "undefined") (function () {
   $("copy").addEventListener("click", doCopy);
   $("wcopy").addEventListener("click", doCopy);
 
-  // start: open an ini, or pick up what was saved here before
+  // start (the wizard's first question): open your ini, continue with what was saved here, or start fresh.
+  // Nothing is loaded behind the player's back: the saved settings only come back when they pick "Continue".
+  function wiz() { return document.body.classList.contains("wiz"); }
+  function afterStart() { if (wiz()) wshow(1); }
+  function took(n) {
+    var e = eraOf(D, era), c = changes();
+    return n + " settings taken over, closest to " + e.year + " " + e.name + (c ? " with " + c + " change" + (c > 1 ? "s" : "") : "") + ". Next keeps them; picking another year starts again from that year. ";
+  }
   $("open").addEventListener("change", function () {
     var f = this.files && this.files[0]; if (!f) return;
     var rd = new FileReader();
     rd.onload = function () {
       var n = loadIni(rd.result);
-      setNotice(n ? "📂 Opened " + f.name + ": " + n + " settings taken over. " : "That file has no DazDrive settings in it. ", n > 0);
+      if (!n) { setNotice("That file has no DazDrive settings in it. Pick another one, or start fresh.", false); return; }
+      setNotice("📂 Opened " + f.name + ": " + took(n), true);
+      afterStart();
     };
     rd.readAsText(f);
     this.value = "";
   });
-  // the notice sits in the Start card and, for the wizard (which hides that card), at the top of step 1
+  // the notice sits in the Start card and, for the wizard (which shows one step at a time), at the top of step 1
   function setNotice(text, withFresh) {
     ["restore", "restore2"].forEach(function (id) {
       var r = $(id); r.hidden = false; r.textContent = text;
-      if (withFresh) { var b = el("button", "link", "Start fresh"); b.type = "button"; b.addEventListener("click", startFresh); r.appendChild(b); }
+      if (withFresh) { var b = el("button", "link", "Start fresh instead"); b.type = "button"; b.addEventListener("click", startFresh); r.appendChild(b); }
     });
   }
   function startFresh() {
-    try { localStorage.removeItem(STORE); } catch (e) {}
-    setEra(recommended, false); $("restore").hidden = true; $("restore2").hidden = true; refresh();
+    setEra(recommended); $("restore").hidden = true; $("restore2").hidden = true; refresh();
   }
-  (function restore() {
-    var s = null;
-    try { s = JSON.parse(localStorage.getItem(STORE) || "null"); } catch (e) {}
-    if (!s || !s.ini || !loadIni(s.ini)) return;
-    var d = new Date(s.when);
-    setNotice("↩️ Picked up what you saved here on " + d.toLocaleDateString() + (s.version !== D.version ? " (with version " + s.version + ")" : "") + ". ", true);
-  })();
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(STORE) || "null"); } catch (e) {}
+  if (saved && saved.ini && parseIni(saved.ini)) {
+    $("resume").hidden = false;
+    $("resumewhen").textContent = "What you saved with this page on " + new Date(saved.when).toLocaleDateString() + (saved.version !== D.version ? " (version " + saved.version + ")" : "") + ".";
+  }
+  $("resume").addEventListener("click", function () {
+    var n = loadIni(saved.ini); if (!n) return;
+    setNotice("↩️ Continued with what you saved here on " + new Date(saved.when).toLocaleDateString() + ": " + took(n), true);
+    afterStart();
+  });
+  $("fresh").addEventListener("click", function () { startFresh(); afterStart(); });
 
-  // wizard: the same sections, one at a time
-  var wsteps = Array.prototype.slice.call(document.querySelectorAll("[data-step]")), wi = 0;
+  // wizard (the default): the same sections, one at a time, with the steps as buttons on top
+  var wsteps = Array.prototype.slice.call(document.querySelectorAll("[data-step]")), wi = 0, seen = 0;
+  var wbtns = wsteps.map(function (sec, j) {
+    var b = el("button", "wst", sec.getAttribute("data-title")); b.type = "button";
+    b.addEventListener("click", function () { wshow(j); });
+    $("wsteplist").appendChild(b);
+    return b;
+  });
   function wshow(i) {
-    wi = Math.max(0, Math.min(wsteps.length - 1, i));
+    wi = Math.max(0, Math.min(wsteps.length - 1, i)); seen = Math.max(seen, wi);
     wsteps.forEach(function (s, j) { s.classList.toggle("cur", j === wi); });
-    var h = wsteps[wi].querySelector("h2"), title = h ? h.textContent.replace(/^\d+\s*/, "").replace(/\s*optional$/, "").replace(/\d+ \/ \d+ on$/, "").trim() : "";
-    $("wizstep").textContent = "Step " + (wi + 1) + " of " + wsteps.length + ": " + title;
-    $("wsteps").textContent = (wi + 1) + " / " + wsteps.length;
-    $("wizprog").style.width = ((wi + 1) / wsteps.length * 100) + "%";
+    wbtns.forEach(function (b, j) { if (j === wi) b.setAttribute("aria-current", "step"); else b.removeAttribute("aria-current"); b.classList.toggle("done", j <= seen && j !== wi); });
+    var h = wsteps[wi].querySelector("h2");
     $("wback").disabled = wi === 0;
     var last = wi === wsteps.length - 1, opt = /optional/.test(h ? h.textContent : "");
+    $("wnext").hidden = wi === 0;   // the first question is answered with its own three buttons
     $("wnext").textContent = last ? "Save dazdrive.ini" : opt ? "Skip ›" : "Next ›";
     $("wnext").className = last || !opt ? "primary" : "";
     $("wcopy").hidden = !last;
@@ -700,12 +826,13 @@ if (typeof document !== "undefined") (function () {
   $("wnext").addEventListener("click", function () { if (wi === wsteps.length - 1) doSave(); else wshow(wi + 1); });
 
   refresh();
-  if (/[?&]guide/.test(location.search)) { document.body.classList.add("wiz"); wshow(0); }  // ?guide = start as the wizard
+  if (!/[?&]all/.test(location.search)) { document.body.classList.add("wiz"); wshow(0); }  // ?all = everything on one page
 
   // ?selftest: checks the logic headlessly (tools/check_setup.py reads the <pre id="selftest">)
   if (/[?&]selftest/.test(location.search)) (function () {
-    var out = { fails: [] }, saved = JSON.parse(JSON.stringify(vals)), savedEra = era;
+    var out = { fails: [] }, keep = JSON.parse(JSON.stringify(vals)), keepEra = era;
     function check(name, ok) { if (!ok) out.fails.push(name); }
+    check("wizard opens on the import question", wiz() && wi === 0 && wsteps[0].id === "s-start" && $("wnext").hidden);
     setEra(recommended, false); out.rec = recommended; out.iniRec = buildIni(D, recommended, vals);
     D.eras.forEach(function (e) {
       setEra(e.id, false);
@@ -717,9 +844,43 @@ if (typeof document !== "undefined") (function () {
     var f = D.features[0]; check("feature on", featureState(f, vals) === "true");
     f.keys.forEach(function (k) { vals[k[0]][k[1]] = k[3]; }); check("feature off", featureState(f, vals) === "false");
     check("changes after one feature", changes() >= 1);
-    var cc = null; D.groups.forEach(function (g) { if (g.id === "cc") cc = g; });
-    setEra("2020", false);
-    applyTuning(cc, cc.tuning[1], presetValues(D, "2020"), vals); check("tuning apply/match", matchTuning(cc, presetValues(D, "2020"), vals) === 1);
+    // the three layers: every preset is found back as itself and fits every knob; a knob moved off the presets is
+    // Advanced, also after a round trip through an ini; a raw key no knob covers makes it Custom
+    var base = presetValues(D, recommended), kk = {};
+    D.groups.forEach(function (g) {
+      g.tuning.forEach(function (t, i) {
+        var v = presetValues(D, recommended); applyPreset(D, g, t, base, v);
+        var d = detectLayer(D, g, base, v); check("preset " + g.id + "/" + t.name, d.layer === "preset" && d.i === i);
+        g.knobs.forEach(function (kb) { check("preset on knob " + g.id + "/" + t.name + "/" + kb.label, knobFits(kb, v)); });
+      });
+      g.knobs.forEach(function (kb) {
+        knobKeys(kb).forEach(function (id) { kk[id] = 1; });
+        var v = presetValues(D, recommended);
+        if (kb.kind === "range") setKnob(kb, +kb.max - kb.step, v);
+        else if (kb.kind === "toggle") setKnob(kb, !kb.keys.every(function (k) { return same(v[k[0]][k[1]], k[2]); }), v);
+        else setKnob(kb, kb.options.filter(function (o) { return !same(o[0], v[kb.key[0]][kb.key[1]]); })[0][0], v);
+        var d = detectLayer(D, g, base, v), w = presetValues(D, recommended);
+        // a knob can land on a preset (Bug hunt is log_level 2 + traces): then preset is the right answer too
+        check("knob " + g.id + "/" + kb.label, d.layer === "advanced" || d.layer === "preset");
+        applyIni(D, parseIni(buildIni(D, recommended, v)), w);
+        check("knob via ini " + g.id + "/" + kb.label, detectLayer(D, g, base, w).layer === d.layer);
+      });
+      var raw = ownKeys(D, g).filter(function (sk) { return !kk[sk[0] + "." + sk[1]]; })[0];
+      if (raw) { var v = presetValues(D, recommended); v[raw[0]][raw[1]] = num(+v[raw[0]][raw[1]] + 1); check("raw " + g.id, detectLayer(D, g, base, v).layer === "custom"); }
+    });
+    // the page: an opened ini with the following distance moved shows Cruise under Advanced
+    var ccm = null; mods.forEach(function (m) { if (m.g.id === "cc") ccm = m; });
+    var v2 = presetValues(D, recommended); setKnob(ccm.g.knobs[0], 1.6, v2);
+    loadIni(buildIni(D, recommended, v2));
+    check("opened ini shows Advanced", ccm.tab === "advanced" && ccm.cur.textContent === "Advanced" && !ccm.panels.advanced.hidden && vals.cruise.acc_short_s === "1.25" && vals.cruise.acc_long_s === "1.95");
+    // the page's own controls: the slider, a mark under it and a preset chip
+    var gap = ccm.panels.advanced.querySelector("input[type=range]");
+    gap.value = "1.6"; gap.dispatchEvent(new Event("input"));
+    check("slider sets Advanced", ccm.cur.textContent === "Advanced" && vals.cruise.acc_short_s === "1.25" && /1\.6 s/.test(ccm.panels.advanced.textContent));
+    ccm.panels.advanced.querySelectorAll(".marks button")[1].click();
+    check("mark sets the Relaxed gaps", vals.cruise.acc_short_s === "1.5" && vals.cruise.acc_middle_s === "2" && vals.cruise.acc_long_s === "2.5");
+    ccm.chips[0].click(); ccm.tabs.preset.click();
+    check("chip sets Close", ccm.cur.textContent === "Close" && !ccm.panels.preset.hidden && ccm.panels.advanced.hidden && ccm.chips[0].getAttribute("aria-pressed") === "true");
     // decimal comma, error text with the field, Save blocked with a reason, the "as shipped" label, tiles that set more keys
     setEra(recommended, false); refresh();
     check("shipped label", $("status").textContent.indexOf("Standard (as shipped)") > 0);
@@ -736,7 +897,7 @@ if (typeof document !== "undefined") (function () {
     setFeature(byId.sg, false); check("stop&go off: min_kmh 30", vals.cruise.min_kmh === "30");
     setFeature(byId.cc, false); setFeature(byId.aeb, true); check("AEB needs SteadyCruise", featureState(byId.cc, vals) === "true");
     $("toast").hidden = true;
-    vals = saved; era = savedEra; refresh();
+    vals = keep; era = keepEra; mods.forEach(function (m) { m.tab = null; }); refresh();
     var pre = el("pre"); pre.id = "selftest"; pre.textContent = JSON.stringify(out); document.body.appendChild(pre);
   })();
 })();

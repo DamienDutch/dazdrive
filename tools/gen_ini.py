@@ -172,93 +172,100 @@ def build(preset):
     return "\n".join(out) + "\n"
 
 
-# --- the browser setup page (tools/dazdrive-setup.tmpl.html + this data -> dazdrive-setup.html). Items:
-# (section, key, kind b|n|c, label, tag, options for c). tag: False = none, True or "experimental" = the red experimental
-# tag, "beta" = the beta tag; it follows the stage of the tile that switches the item on. Every key not listed lands under "Advanced".
+# --- the browser setup page (tools/dazdrive-setup.tmpl.html + this data -> dazdrive-setup.html).
+# Fine-tuning has three layers per module (Damien 17-10):
+#   Presets  = the chips in "tuning" (a preset sets only keys that a knob also sets, so every preset is a knob position);
+#   Advanced = "knobs": a few easy controls, one control may set several keys (see below);
+#   Custom   = every raw ini key of the module with the plugin's own help line (no curation, no safety net).
+# A module owns the keys of its "section"; with "prefix" only the keys that start with it (smooth start inside [creep]).
+# The trace keys of every section belong to Logging. Keys a feature tile sets (step 2) are not tuning: they never decide the layer.
+# Knob kinds:
+#   ("range", label, help, unit, min, max, step, (sec, key), at, follow): a slider on (sec, key). "follow" = [((sec, key), [values], round)]:
+#       keys that move along, piecewise linear through the points at[i] -> values[i] (beyond the ends with the slope of the
+#       last stretch), rounded to a multiple of "round". With "presets" the points are the module's presets in order.
+#   ("toggle", label, help, [(sec, key, on, off), ...])
+#   ("choice", label, help, (sec, key), [[value, text], ...])
 SETUP_GROUPS = [
-    {"id": "ts", "off_when": ["trueshift", "enabled", "0"], "title": "Gearbox (TrueShift)", "advanced": "trueshift",
+    {"id": "ts", "off_when": ["trueshift", "enabled", "0"], "title": "Gearbox (TrueShift)", "section": "trueshift",
      "tuning": [{"name": "Standard", "desc": "As tuned on real rides", "over": {}}],
      "about": ["Shifts like a real truck automatic.", "⚙️ Low rpm, skips gears at full throttle", "🗺️ Reads your navigation route: climbs, tops, junctions", "🧠 Learns when an upshift did not hold"],
-     "items": [
-        ("trueshift", "enabled", "b", "TrueShift: the gearbox logic", False),
-        ("trueshift", "eco_roll", "b", "Eco-roll: neutral on gentle descents (Eco 2, Normal 1.5, Power 1 km/h under the set speed)", False),
-        ("trueshift", "smooth_stop", "b", "Smooth stop: open the clutch around idle when braking to a stop", False),
-        ("trueshift", "wet_wipers", "b", "Wet road (wipers on): softer start, earlier upshifts", False),
-        ("trueshift", "no_creep", "b", "Never creep on the clutch at idle when crawl mode is off", False),
-        ("trueshift", "lookahead", "b", "Use the navigation route ahead (climbs, tops, junctions)", False),
-        ("trueshift", "dash_letter", "b", "Show the gearbox mode (D, E, P, M) on the dashboard", False),
-        ("trueshift", "tones", "b", "Short tone when the gearbox mode changes", False),
-        ("trueshift", "hint_hold_s", "n", "Seconds a gear chosen with the shift-hint buttons is held", False)]},
-    {"id": "cc", "title": "Cruise control and ACC", "advanced": "cruise",
-     "tuning": [{"name": "Close", "desc": "ACC gaps 1.0 / 1.25 / 1.5 s: busy traffic, feels normal at the game's scale; bends 3.125 m/s2", "over": {}},
-                {"name": "Relaxed", "desc": "ACC gaps 1.5 / 2.0 / 2.5 s: more room; bends 2.75 m/s2",
+     "knobs": [
+        {"kind": "choice", "label": "M (manual) mode", "help": "What the gearbox still does by itself in M, picked with the gearbox-mode key.",
+         "key": ["trueshift", "m_style"], "options": [["0", "European: every shift is yours, a tone when the engine over-revs (like Volvo, Mercedes)"],
+                                                      ["1", "Protected: also one gear up at the rev limiter and one down before a stall (like Eaton)"],
+                                                      ["2", "Assisted: also kickdown and downshifts when you brake to a stop"]]},
+        {"kind": "range", "label": "Gear held after + / −", "help": "How long a gear you picked with the shift-hint buttons stays in (0 = off).",
+         "unit": "s", "min": 0, "max": 30, "step": 1, "key": ["trueshift", "hint_hold_s"]},
+        {"kind": "toggle", "label": "Wipers on means a wet road", "help": "Softer start, earlier upshifts in low gears, softer kickdown.",
+         "keys": [["trueshift", "wet_wipers", 1, 0]]},
+        {"kind": "toggle", "label": "Show the mode on the dashboard", "help": "D, E, P or M instead of the game's A.",
+         "keys": [["trueshift", "dash_letter", 1, 0]]},
+        {"kind": "toggle", "label": "Tone when the mode changes", "help": "Eco low, Normal middle, Power rising, M two short.",
+         "keys": [["trueshift", "tones", 1, 0]]}]},
+    {"id": "cc", "title": "Cruise control and ACC", "section": "cruise",
+     "tuning": [{"name": "Close", "desc": "ACC gaps 1.0 / 1.25 / 1.5 s: busy traffic, feels normal at the game's scale; bends 3.125 m/s²", "over": {}},
+                {"name": "Relaxed", "desc": "ACC gaps 1.5 / 2.0 / 2.5 s: more room; bends 2.75 m/s²",
                  "over": {"cruise": {"acc_short_s": 1.5, "acc_middle_s": 2, "acc_long_s": 2.5, "curve_lat": 2.75}}},
-                {"name": "Real truck", "desc": "ACC gaps 2.4 / 3.0 / 3.6 s like Detroit and Bendix; Stop&Go drives off by itself only after < 2 s; bends 2.4 m/s2",
+                {"name": "Real truck", "desc": "ACC gaps 2.4 / 3.0 / 3.6 s like Detroit and Bendix; Stop & Go drives off by itself only after < 2 s; bends 2.4 m/s²",
                  "over": {"cruise": {"acc_short_s": 2.4, "acc_middle_s": 3, "acc_long_s": 3.6, "curve_lat": 2.4, "stop_go_auto_s": 2}}}],
-     "about": ["SteadyCruise, ACC and AEB on top of the game's own cruise control.", "🚫 No throttle bursts after shifts", "🗺️ Bends and descents need a navigation route", "🧪 Experimental items only come on in the ~2020 and 2024 years"],
-     "items": [
-        ("cruise", "enabled", "b", "Cruise module", False),
-        ("cruise", "smooth", "b", "SteadyCruise: our own calm cruise throttle (most cruise features need it)", False),
-        ("cruise", "curves", "b", "Slow down gently before sharp bends", False),
-        ("cruise", "curve_brake", "b", "...and brake gently when lifting is not enough", False),
-        ("cruise", "descent", "b", "Hold the set speed downhill (engine brake / retarder)", False),
-        ("cruise", "emergency_hazards", "b", "Hazard lights by themselves after an emergency stop", False),
-        ("cruise", "acc_calm_cut_in", "b", "ACC stays calm when someone cuts in or pulls away", False),
-        ("cruise", "acc_cycle_up", "b", "ACC distance key steps C, 1, 2, 3 (the game: far, middle, close)", False),
-        ("cruise", "retarder_off_on_set", "b", "Switch the retarder off when you press cruise set/resume", False),
-        ("cruise", "hill_start", "b", "Hill start: brake holds briefly after stopping on a slope", False),
-        ("cruise", "aeb", "b", "AEB: automatic emergency braking (warning tones, partial, then full braking)", False),
-        ("cruise", "aeb_without_cruise", "b", "AEB also watches when you drive without cruise control", False),
-        ("cruise", "aeb_warn_s", "n", "AEB warns at this time to collision (s), or earlier when hard braking would be needed; partial braking at 2, full at 1.2", False),
-        ("cruise", "curve_lat", "n", "Comfort in bends: sideways acceleration in m/s2 (lower = slower through bends)", False),
-        ("cruise", "limiter_kmh", "n", "Cap the set speed at this value with the speed limiter on (0 = no cap)", False),
-        ("cruise", "step_tap_kmh", "n", "A tap on + / - changes the set speed by this (0 = the game's step)", False),
-        ("cruise", "set_ease_kmh_s", "n", "A lower set speed is eased down at this km/h per second (0 = at once)", False),
-        ("cruise", "min_kmh", "n", "Lowest speed at which cruise can be switched on (the game: 30)", False),
-        ("cruise", "junctions", "b", "JunctionSense: slow down before junction turns and roundabouts (always on with the own ACC)", True),
-        ("cruise", "predictive", "b", "Carry a little speed into climbs, ease off before tops", False),
-        ("cruise", "own_acc", "b", "Own, smoother ACC speed target from the lead vehicle", "beta"),
-        ("cruise", "auto_hold", "b", "Auto Hold: stay braked after stopping until you give gas", "beta"),
-        ("cruise", "stop_go", "b", "ACC keeps going in a jam (stop and go)", "beta"),
-        ("cruise", "stop_go_auto_s", "n", "Stop&Go drives off by itself only after a stop shorter than this (s; 0 = always; real trucks: 2)", False),
-        ("cruise", "acc_short_s", "n", "ACC gap at the short setting (s; real trucks 2.4-3.6, but the game is scaled)", False),
-        ("cruise", "acc_middle_s", "n", "ACC gap at the middle setting (s)", False),
-        ("cruise", "acc_long_s", "n", "ACC gap at the long setting (s)", False),
-        ("cruise", "speed_limit", "b", "Follow speed limits with the set speed (ISA) from the start", "beta"),
-        ("cruise", "speed_limit_offset_kmh", "n", "Set speed = limit plus this (km/h), with ISA", False)]},
-    {"id": "lka", "off_when": ["lane", "mode", "0"], "title": "Lane centering", "advanced": "lane",
+     "about": ["SteadyCruise, ACC and AEB on top of the game's own cruise control.", "🚫 No throttle bursts after shifts", "🗺️ Bends and descents need a navigation route"],
+     "knobs": [
+        {"kind": "range", "presets": True, "label": "Following distance", "help": "The ACC gap at the middle distance setting; short and long move along. Real trucks keep about 3 s, at the game's scale 1.25-2 s feels normal.",
+         "unit": "s", "min": 1, "max": 3.5, "step": 0.05, "key": ["cruise", "acc_middle_s"], "at": [1.25, 2, 3],
+         "follow": [[["cruise", "acc_short_s"], [1, 1.5, 2.4], 0.05], [["cruise", "acc_long_s"], [1.5, 2.5, 3.6], 0.05]]},
+        {"kind": "range", "presets": True, "label": "Speed through bends", "help": "Sideways push allowed in a bend (m/s²): lower = slower and calmer, higher = brisker.",
+         "unit": "m/s²", "min": 2, "max": 3.5, "step": 0.025, "key": ["cruise", "curve_lat"], "at": [3.125, 2.75, 2.4], "follow": []},
+        {"kind": "toggle", "label": "Stop & Go drives off by itself only after a short stop", "help": "Like real trucks: after a stop longer than 2 s you press resume or the throttle.",
+         "keys": [["cruise", "stop_go_auto_s", 2, 0]]},
+        {"kind": "choice", "label": "Emergency braking warns", "help": "When the warning tones start; braking itself stays at 2 s (partial) and 1.2 s (full).",
+         "key": ["cruise", "aeb_warn_s"], "options": [["3.5", "Early (3.5 s before a crash)"], ["3", "Normal (3 s)"], ["2.5", "Late (2.5 s)"]]},
+        {"kind": "range", "label": "Speed limits: set speed = limit plus", "help": "With Follow speed limits (ISA) on.",
+         "unit": "km/h", "min": 0, "max": 10, "step": 1, "key": ["cruise", "speed_limit_offset_kmh"]},
+        {"kind": "choice", "label": "A tap on cruise + / −", "help": "Changes the set speed by this much.",
+         "key": ["cruise", "step_tap_kmh"], "options": [["0", "The game's own step"], ["1", "1 km/h"], ["2", "2 km/h"], ["5", "5 km/h"], ["10", "10 km/h"]]},
+        {"kind": "range", "label": "Speed limiter caps the set speed at", "help": "With the game's speed limiter on (0 = no cap).",
+         "unit": "km/h", "min": 0, "max": 100, "step": 1, "key": ["cruise", "limiter_kmh"]},
+        {"kind": "toggle", "label": "Emergency braking also without cruise", "help": "AEB watches when you drive yourself too (needs an ACC distance set).",
+         "keys": [["cruise", "aeb_without_cruise", 1, 0]]},
+        {"kind": "toggle", "label": "Distance key steps further away", "help": "Off, close, middle, far (the game: far, middle, close).",
+         "keys": [["cruise", "acc_cycle_up", 1, 0]]},
+        {"kind": "toggle", "label": "Cruise set switches the retarder off", "help": "The game refuses cruise while the retarder lever is on.",
+         "keys": [["cruise", "retarder_off_on_set", 1, 0]]}]},
+    {"id": "lka", "off_when": ["lane", "mode", "0"], "title": "Lane centering", "section": "lane",
      "tuning": [{"name": "Standard", "desc": "The law and the self-learning as tuned on real rides", "over": {}}],
      "about": ["🧪 Experimental. Off = the game's own lane assist.", "🛣️ Calm, from 20 km/h, off while you indicate, learns how your wheel responds", "✋ Keep your hands near the wheel"],
-     "items": [
-        ("lane", "mode", "c", "Lane centering law", True, [["0", "0: the game's own"], ["2", "2: model-based (experimental)"]]),
-        ("lane", "min_kmh", "n", "Lane centering steers from this speed (the game: 55)", False),
-        ("lane", "keep_on", "b", "Stays on at any speed, can be switched on standing still", False),
-        ("lane", "indicator_pause", "b", "Indicator pauses lane centering, back on after the lane change", False),
-        ("lane", "tone", "b", "Tone when lane centering switches on/off", False)]},
-    {"id": "crawl", "off_when": ["creep", "enabled", "0"], "title": "Crawl / maneuver mode", "advanced": "creep",
+     "knobs": [
+        {"kind": "toggle", "label": "Tone when it switches on or off", "help": "Rising for on, falling for off.", "keys": [["lane", "tone", 1, 0]]},
+        {"kind": "toggle", "label": "Back on by itself after a lane change", "help": "When lane keeping went off while you indicated.", "keys": [["lane", "indicator_resume", 1, 0]]}]},
+    {"id": "crawl", "off_when": ["creep", "enabled", "0"], "title": "Crawl / maneuver mode", "section": "creep",
      "tuning": [{"name": "Standard", "desc": "Crawls at 5 km/h", "over": {}},
                 {"name": "Slow", "desc": "Crawls at 3 km/h, for tight docks", "over": {"creep": {"creep_kmh": 3}}}],
      "about": ["🧪 Experimental. Walking pace in gears 1, 2 and R.", "🎮 Hold Adaptive Automatic Transmission Mode at a standstill: on/off", "🦶 Brake = slower, throttle = a bit more"],
-     "items": [
-        ("creep", "enabled", "b", "Crawl mode available", True),
-        ("creep", "start_on", "b", "Crawl switched on when the game starts", False),
-        ("creep", "toggle_mode_key", "b", "Hold Adaptive Automatic Transmission Mode at a standstill to switch crawl on or off", False),
-        ("creep", "creep_kmh", "n", "Crawl speed (km/h)", False)]},
-    {"id": "smoothstart", "off_when": ["creep", "smooth_start", "0"], "title": "Smooth start", "advanced": "creep",
+     "knobs": [
+        {"kind": "range", "presets": True, "label": "Crawl speed", "help": "With both pedals released; the brake makes it slower.",
+         "unit": "km/h", "min": 2, "max": 7, "step": 0.5, "key": ["creep", "creep_kmh"], "at": [5, 3], "follow": []},
+        {"kind": "range", "label": "Maneuvering top speed", "help": "What a little throttle can ask for while maneuvering.",
+         "unit": "km/h", "min": 6, "max": 15, "step": 1, "key": ["creep", "manoeuvre_kmh"]},
+        {"kind": "toggle", "label": "Crawl on when the game starts", "help": "Otherwise hold the gearbox-mode key at a standstill.", "keys": [["creep", "start_on", 1, 0]]},
+        {"kind": "toggle", "label": "Gearbox-mode key switches crawl", "help": "Hold it at a standstill to switch crawl on or off.", "keys": [["creep", "toggle_mode_key", 1, 0]]}]},
+    {"id": "smoothstart", "off_when": ["creep", "smooth_start", "0"], "title": "Smooth start", "section": "creep", "prefix": "smooth_start",
      "tuning": [{"name": "Standard", "desc": "The engine rises with the pedal, the clutch slips, then closes gently", "over": {}}],
      "about": ["🧪 Experimental. Pulling away in a forward gear from a standstill.", "🦶 The pedal sets how high the engine revs while the clutch slips", "✋ A shift, lifting off, the brake or about 14 km/h ends it"],
-     "items": [
-        ("creep", "smooth_start", "b", "Smooth start: DazDrive closes the clutch itself when you pull away", True),
-        ("creep", "smooth_start_rpm_light", "n", "Engine speed above idle with a light pedal (rpm)", False),
-        ("creep", "smooth_start_rpm_full", "n", "Engine speed with the pedal flat (rpm)", False)]},
-    {"id": "log", "title": "Logging", "advanced": "core",
+     "knobs": [
+        {"kind": "range", "label": "Pulling away: gentle or firm", "help": "Engine rpm with the pedal flat while the clutch slips; the light-pedal rpm moves along. Lower = gentler, higher = firmer.",
+         "unit": "rpm", "min": 900, "max": 1600, "step": 50, "key": ["creep", "smooth_start_rpm_full"], "at": [1000, 1200, 1500],
+         "follow": [[["creep", "smooth_start_rpm_light"], [150, 200, 300], 10]]}]},
+    {"id": "log", "title": "Logging", "section": "core",
      "tuning": [{"name": "Standard", "desc": "A quiet log, plus an incident file when something goes wrong", "over": {}},
                 {"name": "Bug hunt", "desc": "Also every shift in the log and large csv traces, only when asked", "over": {"core": {"log_level": 2}, "trueshift": {"trace": 1}, "cruise": {"trace": 1}, "creep": {"trace": 1}}}],
      "about": ["🐞 When something goes wrong (the gearbox hunts, you fight a shift, the rpm hits the limiter, ...) the plugin saves the 20 s before and 15 s after in the incidents folder. Attach those files to a bug report.", "Bug hunt writes big csv files: only when asked."],
-     "items": [("core", "log_level", "c", "How much goes into dazdrive.log", False, [["0", "0: quiet (incidents are saved separately)"], ["1", "1: + every shift"], ["2", "2: + csv traces (large)"]]),
-               ("core", "incident_mb", "n", "Size of the incidents folder (MB, 0 = no incident files)", False)]},
+     "knobs": [
+        {"kind": "choice", "label": "How much goes into dazdrive.log", "help": "Incidents are saved separately at every level.",
+         "key": ["core", "log_level"], "options": [["0", "Quiet"], ["1", "Also every shift"], ["2", "Also csv traces (large)"]]},
+        {"kind": "toggle", "label": "Write csv traces", "help": "trueshift.csv, cruise.csv, creep.csv; needs the log at its highest level.",
+         "keys": [["trueshift", "trace", 1, 0], ["cruise", "trace", 1, 0], ["creep", "trace", 1, 0]]},
+        {"kind": "range", "label": "Incidents folder size", "help": "0 = no incident files.", "unit": "MB", "min": 0, "max": 40, "step": 1, "key": ["core", "incident_mb"]}]},
 ]
-
 
 # --- wheel buttons: none. Everything is switched with the game's own keys (see the feature texts), so the page has no button step.
 BUTTONS = []
@@ -355,7 +362,7 @@ FEATURES = [
      "info": "Our own adaptive cruise control on top of the game's radar: follows the vehicle in front smoothly, brakes early and gently, and does not react hard when someone cuts in. The gap is in seconds (short, middle, long) with the game's distance key. With Slow for bends on, it also slows for junctions.",
      "keys": [["cruise", "own_acc", 1, 0]]},
     {"id": "sg", "group": "Cruise control", "stage": "beta", "since": "2011", "label": "Stop & Go", "desc": "ACC keeps going in a jam", "needs": ["cc", "acc"],
-     "info": "The ACC keeps working in a jam: it brakes to a stop behind the vehicle in front and drives off with it by itself. With the \"Real truck\" tuning (step 4) it does that only after a stop shorter than 2 s; after a longer stop you press resume or the throttle. Switching it on also sets the lowest cruise speed to 5 km/h (the game: 30), so the cruise can be switched on in a jam.",
+     "info": "The ACC keeps working in a jam: it brakes to a stop behind the vehicle in front and drives off with it by itself. With the \"Real truck\" preset (step 3, Fine-tuning) it does that only after a stop shorter than 2 s; after a longer stop you press resume or the throttle. Switching it on also sets the lowest cruise speed to 5 km/h (the game: 30), so the cruise can be switched on in a jam.",
      "keys": [["cruise", "stop_go", 1, 0], ["cruise", "min_kmh", 5, 30]]},
     {"id": "hold", "group": "Cruise control", "stage": "beta", "since": "2011", "label": "Auto Hold", "desc": "Stays braked at a stop until you give gas", "needs": ["cc"],
      "info": "After you stop, the brake stays on by itself until you press the throttle, like Auto Hold in a modern truck: no creeping at a traffic light.",
@@ -398,14 +405,94 @@ def check_eras(tables):
                 raise SystemExit(f"era {e['id']} has '{f['label']}' off, but it is stable and real trucks had it from ~{f['since']}")
 
 
+def setup_scopes(order, tables):
+    """Which module owns which ini key on the setup page: [[sec, key, kind b|n]] per group id. Every key exactly once."""
+    scopes = {g["id"]: [] for g in SETUP_GROUPS}
+    for sec in order:
+        for k, d, h in tables[sec]:
+            gid = None
+            if k == "trace":
+                gid = "log"
+            else:
+                for g in SETUP_GROUPS:
+                    if g["section"] == sec and g.get("prefix") and k.startswith(g["prefix"]):
+                        gid = g["id"]
+                if gid is None:
+                    gid = next((g["id"] for g in SETUP_GROUPS if g["section"] == sec and not g.get("prefix")), None)
+            if gid is None:
+                raise SystemExit(f"setup page: no module owns [{sec}] {k}")
+            # a switch when the help starts with "1 = " (the plugin's convention for on/off keys)
+            scopes[gid].append([sec, k, "b" if re.match(r"1 = ", h) and d in (0, 1) else "n"])
+    return scopes
+
+
+def knob_keys(kb):
+    if kb["kind"] == "toggle":
+        return [(s, k) for s, k, _, _ in kb["keys"]]
+    return [tuple(kb["key"])] + [tuple(f[0]) for f in kb.get("follow", [])]
+
+
+def knob_at(kb, x, i):
+    """Value of follow key i at slider position x: piecewise linear through the points, the end stretches extended."""
+    pts = sorted(zip(kb["at"], kb["follow"][i][1]))
+    j = 0
+    while j < len(pts) - 2 and x > pts[j + 1][0]:
+        j += 1
+    (x0, y0), (x1, y1) = pts[j], pts[j + 1]
+    r = kb["follow"][i][2]
+    return round((y0 + (y1 - y0) * (x - x0) / (x1 - x0)) / r) * r
+
+
+def check_knobs(tables, known):
+    """Knob keys exist and are not set by a feature tile; a preset only sets knob keys (so it is a knob position); a range
+    with "presets" goes through the presets' values; follow keys at a point give exactly that point's value."""
+    feat = {(s, k) for f in FEATURES for s, k, _, _ in f["keys"]}
+    shipped = era_values(tables, [e for e in ERAS if e.get("shipped")][0])
+    for g in SETUP_GROUPS:
+        kk = set()
+        for kb in g["knobs"]:
+            for s, k in knob_keys(kb):
+                if k not in known[s]:
+                    raise SystemExit(f"knob {g['id']}/{kb['label']}: [{s}] {k} does not exist in the source any more")
+                if (s, k) in feat:
+                    raise SystemExit(f"knob {g['id']}/{kb['label']}: [{s}] {k} is set by a feature tile")
+                kk.add((s, k))
+            if kb["kind"] == "range":
+                pts = kb.get("at", [])
+                if any(not kb["min"] <= x <= kb["max"] for x in pts) or any(len(f[1]) != len(pts) for f in kb.get("follow", [])):
+                    raise SystemExit(f"knob {g['id']}/{kb['label']}: points outside min..max or of unequal length")
+                for i, f in enumerate(kb.get("follow", [])):
+                    for x, y in zip(pts, f[1]):
+                        if abs(knob_at(kb, x, i) - y) > 1e-9:
+                            raise SystemExit(f"knob {g['id']}/{kb['label']}: {f[0][1]} at {x} rounds to {knob_at(kb, x, i)}, not {y}")
+                if kb.get("presets"):
+                    if len(pts) != len(g["tuning"]):
+                        raise SystemExit(f"knob {g['id']}/{kb['label']}: one point per preset")
+                    for t, x, i in zip(g["tuning"], pts, range(len(pts))):
+                        for (s, k), want in [(tuple(kb["key"]), x)] + [(tuple(f[0]), f[1][i]) for f in kb["follow"]]:
+                            got = t["over"].get(s, {}).get(k, shipped[s][k])
+                            if abs(float(got) - want) > 1e-9:
+                                raise SystemExit(f"knob {g['id']}/{kb['label']}: preset {t['name']} has [{s}] {k} = {got}, the knob {want}")
+        for t in g["tuning"]:
+            for s, kv in t["over"].items():
+                for k in kv:
+                    if (s, k) not in kk:
+                        raise SystemExit(f"preset {g['id']}/{t['name']}: [{s}] {k} has no knob, so Advanced could not show it")
+
+
+def knob_data(kb):
+    d = dict(kb)
+    if kb["kind"] == "toggle":
+        d["keys"] = [[s, k, fmt(on), fmt(off)] for s, k, on, off in kb["keys"]]
+    return d
+
+
 def build_html():
     order, tables = load()
     known = {s: {k for k, _, _ in tables[s]} for s in order}
     check_eras(tables)
-    for g in SETUP_GROUPS:
-        for it in g["items"]:
-            if it[1] not in known[it[0]]:
-                raise SystemExit(f"setup page item [{it[0]}] {it[1]} does not exist in the source any more")
+    scopes = setup_scopes(order, tables)
+    check_knobs(tables, known)
     for e in ERAS:
         for s, kv in e["over"].items():
             for k in kv:
@@ -436,9 +523,9 @@ def build_html():
         "intro": SECTION_INTRO,
         "standard_header": STANDARD_HEADER,
         "buttons": BUTTONS,
-        "groups": [{"id": g["id"], "off_when": g.get("off_when"), "title": g["title"], "about": g["about"], "advanced": g["advanced"],
+        "groups": [{"id": g["id"], "off_when": g.get("off_when"), "title": g["title"], "about": g["about"],
                     "tuning": [dict(t, over={sec: {k: fmt(v) for k, v in kv.items()} for sec, kv in t["over"].items()}) for t in g["tuning"]],
-                    "items": [list(i) for i in g["items"]]} for g in SETUP_GROUPS],
+                    "knobs": [knob_data(kb) for kb in g["knobs"]], "scope": scopes[g["id"]]} for g in SETUP_GROUPS],
         "eras": [dict(e, over={s: {k: fmt(v) for k, v in kv.items()} for s, kv in e["over"].items()}) for e in ERAS],
         "features": [dict(f, keys=[[s, k, fmt(on), fmt(off)] for s, k, on, off in f["keys"]]) for f in FEATURES],
     }

@@ -105,7 +105,9 @@ The included `dazdrive.ini` matches the year "~2010 (Modern)" on the setup page:
 "on" above. To change that, open `plugins\dazdrive\dazdrive-setup.html` in a browser (works offline,
 sends nothing): pick how smart your truck is (~1995, ~2000, ~2010, ~2015, ~2020 or 2024), switch
 single features, save the ini next to the page and restart the game (no button setup: DazDrive uses the keys you bound in the game).
-"Guide me" walks you through it one step at a time. Full details, controls, dash letters and tones:
+The page walks you through it one step at a time and starts by opening your current `dazdrive.ini`, so you
+only change what you want; per module you can fine-tune with Presets, Advanced (a few easy controls) or Custom
+(every raw setting). Full details, controls, dash letters and tones:
 `README.txt` in the zip ([source](release/README-player.txt)).
 
 **Keys to bind.** There is no button setup: DazDrive uses the keys you bind in the game (Options > Controls).

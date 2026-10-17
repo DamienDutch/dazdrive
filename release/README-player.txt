@@ -69,9 +69,11 @@ SETTINGS: THE SETUP PAGE
 ------------------------
 
 - Open plugins\dazdrive\dazdrive-setup.html in any browser (works offline, installs nothing).
-- Pick how smart your truck is (~1995, ~2000, ~2010, ~2015, ~2020 or 2024) and switch single
-  features. There is no button setup: DazDrive uses the keys you already bound in the game (see
-  CONTROLS). "Guide me" walks you through it step by step.
+- It walks you through it step by step. First it asks for your current dazdrive.ini: open it and
+  you only change what you want. Then pick how smart your truck is (~1995, ~2000, ~2010, ~2015,
+  ~2020 or 2024), switch single features and, if you like, fine-tune each module: Presets (a few
+  good choices), Advanced (a handful of easy controls) or Custom (every raw setting). There is no
+  button setup: DazDrive uses the keys you already bound in the game (see CONTROLS).
 - Press "Save dazdrive.ini", take it from your Downloads and put it next to the page
   (overwrite the old one).
 - Restart the game.
@@ -135,7 +137,7 @@ Cruise
     set speed is reached by easing down.
   - ACC distances: 1 = 1.0 s, 2 = 1.25 s, 3 = 1.5 s. It follows the vehicle ahead smoothly, brakes
     early and stays calm when someone cuts in. With Stop & Go it also stops behind a stopping
-    vehicle and drives off with it by itself (the "real truck" tuning on the setup page asks for
+    vehicle and drives off with it by itself (the "Real truck" preset on the setup page asks for
     resume or the throttle after a longer stop instead).
   - AEB: warning tones, then partial braking, then full braking. It replaces the game's own
     emergency braking, which empties the brake air.
