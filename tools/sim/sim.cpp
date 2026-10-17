@@ -519,14 +519,21 @@ int main(int argc, char **argv)
         m_trueshift.reset(RESET_HARD, "sim: back to the diesel");
     }
     float st;
-    M.v = 0; T.speed = 0;  // the start-gear checks are from a standstill (else the engage-at-speed path answers)
     run("L1 13.4 t, Eco, game starts in 4 at 12 km/h, full throttle (ride 12-10 1 > 4 > 5 > 6)", {13400, 12, 4, 50, 10.0f, 1.0f}, c_full);
     run("L2 13.4 t, Eco, from 14 km/h in 3, light throttle 0.4", {13400, 14, 3, 50, 10.0f, 1.0f}, c_light);
+    // The start-gear checks are from a standstill (else the engage-at-speed path answers): L1/L2 end at ~70 km/h.
+    // s_start reads the pedal from T (set by the physics step only), so set it here too.
+    M.v = 0; T.speed = 0; T.in_thr = 0.5f;
     M.wet = 1; T.wipers = 1; m_trueshift.frame(); M.mass = 26000; M.grade_pct = 0; M.pedal = 0.5f; st = (float)s_start(SELF); printf("\nstart gear 26 t flat WET: %g (game 1)\n", st);
     M.wet = 0; T.wipers = 0; m_trueshift.frame(); st = (float)s_start(SELF); printf("start gear 26 t flat dry: %g (game 1)\n", st);
     M.mass = 40000; M.grade_pct = 8; M.pedal = 0.5f; st = (float)s_start(SELF); printf("\nstart gear 40 t on 8%%: %g (game 1)\n", st);
     M.mass = 10000; M.grade_pct = 0; st = (float)s_start(SELF); printf("start gear 10 t flat: %g (game 4)\n", st);
     M.mass = 10000; M.grade_pct = 10; st = (float)s_start(SELF); printf("start gear 10 t on 10%%: %g (game 4)\n", st);
+    // Ride 13-10 (617 s, 2087 s): 25 t, full pedal, downhill: 4->1 (start) at 12 km/h, 2000 rpm, then 1->4 (rev limit skip).
+    M.mass = 25000; M.grade_pct = 0; T.in_thr = 1.0f; st = (float)s_start(SELF); printf("\nstart gear 25 t flat, full pedal: %g (game 1)\n", st);
+    M.grade_pct = -4; st = (float)s_start(SELF); printf("start gear 25 t on -4%%, full pedal: %g (game 1)\n", st);
+    M.v = T.speed = 12 / 3.6f; st = (float)s_start(SELF); printf("engage 25 t on -4%%, full pedal, rolling 12 km/h: %g (game 1; expect a gear near 1000-1300 rpm, not 1)\n", st);
+    M.v = 0; T.speed = 0; M.mass = 10000; M.grade_pct = 10; T.in_thr = 0.5f; (void)s_start(SELF);  // back to the state the car runs started from
 
     use_car();
     run("CAR1 2.5 t pickup, light 0.35 from 15 km/h", {2500, 15, 2, 40}, c_car_light);
