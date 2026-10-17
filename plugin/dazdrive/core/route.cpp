@@ -239,12 +239,6 @@ static void build(char *task)
     R.why = "zero-length route segment";
     if (len < 0.1f) return;
 
-    // Driving along the route? (SDK heading: 0 = north = -z, counter-clockwise.)
-    float hd = (float)T.place.orientation.heading * 6.2831853f;
-    float fx = -sinf(hd), fz = -cosf(hd);
-    R.why = "heading off the route";
-    if ((fx * dx + fz * dz) / len < 0.3f) return;
-
     float t = ((tx - a[0]) * dx + (tz - a[2]) * dz) / len;  // truck's position along the segment
     t = t < 0 ? 0 : (t > len ? len : t);
     // Off the route: more than 80 m from the segment (was: from the nearest node, which turned the look-ahead
@@ -252,6 +246,13 @@ static void build(char *task)
     float ox = a[0] + dx / len * t - tx, oz = a[2] + dz / len * t - tz;
     R.why = "off the route";
     if (ox * ox + oz * oz > 80.0f * 80.0f) { R.lost = 1; return; }
+
+    // Driving along the route? (SDK heading: 0 = north = -z, counter-clockwise.)
+    float hd = (float)T.place.orientation.heading * 6.2831853f;
+    float fx = -sinf(hd), fz = -cosf(hd);
+    R.why = "heading off the route";
+    if ((fx * dx + fz * dz) / len < 0.3f) return;
+
     R.pitems = items; R.pn = n; R.pseg = seg;
     R.njn = 0;
     if (JC.on) find_junctions(task, items, n, seg, len, t);
