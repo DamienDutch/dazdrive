@@ -29,6 +29,7 @@ static struct R_t {
     int lost;
     const char *pitems;     // physical items / count / segment of the last build (for route_probe_limit)
     unsigned long long pn, pseg;
+    const char *why;        // why the last build failed (for the log)
 } R;
 
 typedef unsigned long long u64;
@@ -196,6 +197,7 @@ static void build(char *task)
 {
     char *items = *(char **)(task + 0x58);
     u64 n = *(u64 *)(task + 0x60);
+    R.why = "no route";
     if (!items || n < 2 || n > 200000 || !mem_readable(items, n * 0x20)) return;
     float tx = (float)T.place.position.x, tz = (float)T.place.position.z;
 
@@ -214,7 +216,10 @@ static void build(char *task)
         }
     R.task = task;
     R.k = best;
-    R.lost = bd > 80.0f * 80.0f;
+    // Far from every node = off the route. Nodes can be up to ~300 m apart on a highway (probe run 2: 15 % of the
+    // gaps > 160 m), so near one node is not the test: the distance to the segment is checked below.
+    R.lost = bd > 400.0f * 400.0f;
+    R.why = "off the route";
     if (R.lost) return;
 
     // Segment the truck is on: (best-1, best) or (best, best+1), by projection.
@@ -228,17 +233,25 @@ static void build(char *task)
             if (t < 1.0f) seg = best - 1;
         }
     }
+    R.why = "route node unreadable";
     if (!node_pos(items, seg, a) || !node_pos(items, seg + 1, b)) return;
     float dx = b[0] - a[0], dz = b[2] - a[2], len = sqrtf(dx * dx + dz * dz);
+    R.why = "zero-length route segment";
     if (len < 0.1f) return;
 
     // Driving along the route? (SDK heading: 0 = north = -z, counter-clockwise.)
     float hd = (float)T.place.orientation.heading * 6.2831853f;
     float fx = -sinf(hd), fz = -cosf(hd);
+    R.why = "heading off the route";
     if ((fx * dx + fz * dz) / len < 0.3f) return;
 
     float t = ((tx - a[0]) * dx + (tz - a[2]) * dz) / len;  // truck's position along the segment
     t = t < 0 ? 0 : (t > len ? len : t);
+    // Off the route: more than 80 m from the segment (was: from the nearest node, which turned the look-ahead
+    // off for 1-7 s in the middle of every long highway segment, ts5a/ts5c: 24-30 times a ride).
+    float ox = a[0] + dx / len * t - tx, oz = a[2] + dz / len * t - tz;
+    R.why = "off the route";
+    if (ox * ox + oz * oz > 80.0f * 80.0f) { R.lost = 1; return; }
     R.pitems = items; R.pn = n; R.pseg = seg;
     R.njn = 0;
     if (JC.on) find_junctions(task, items, n, seg, len, t);
@@ -289,6 +302,7 @@ static void build(char *task)
     R.n = i;
     R.junction_m = junction_m;
     R.ok = i >= 4;
+    R.why = "route ends here";
 }
 
 void route_reset()
@@ -313,8 +327,8 @@ void route_update()
     static int logged = -1;
     if (R.ok != logged) {
         logged = R.ok;
-        logline(R.ok ? "route look-ahead on (%.0f m ahead)" : "route look-ahead off (no route or off it)",
-                (float)((R.n - 1) * STEP));
+        if (R.ok) logline("route look-ahead on (%.0f m ahead)", (float)((R.n - 1) * STEP));
+        else logline("route look-ahead off (%s)", R.why ? R.why : "no route");
     }
 }
 
