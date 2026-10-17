@@ -72,13 +72,18 @@ long, min gap 1 s too slow in low gears, upshift pull requirement too strict at 
 
 ## Modes
 - The game's own keybind for the adaptive transmission cycles the cvar `g_adaptive_shift`: Eco (10) -> Normal (3) -> Power (1.6667) -> off (0) -> Eco, one step per press, each step visible in the log
-  within 1 s. DazDrive uses that keybind as the mode source and turns the game's "off" slot into the fourth mode **M** (assisted manual), so the cycle is Eco -> Normal -> Power -> M.
+  within 1 s. DazDrive uses that keybind as the mode source and turns the game's "off" slot into the fourth mode **M** (manual), so the cycle is Eco -> Normal -> Power -> M.
 - With cruise control on the game sets `game_actor+0x199` = 1 (it ignores the adaptive mode while cruising); the cvar itself stays as it was. TrueShift ignores that flag, so the mode survives cruise control.
 - **Eco / Power** move the shift points and the cruise floor by `eco_rpm` -75 / `power_rpm` +150, with a force reserve for an early upshift of 1.2 / 1.5 (Normal 1.3); the demand-driven downshift starts at
   pedal 0.9 / 0.75 (Normal 0.85).
-- **M (assisted manual)**: the gear stays where the driver's shift hints put it, but kickdown still works, the rev limiter gets one gear up, stall protection, downshifts when braking to a stop (below the low-speed
-  handover the game picks as usual) and one gear down when lugging (below `m_lug_rpm` 1000 rpm with a lot of pedal and no pull; `m_assist` 0 turns kickdown and lugging help off). `m_full_manual` 1 = rev
-  limiter and stall protection only.
+- **M (manual)**: the gear stays where the driver's shift hints put it. How much TrueShift helps is `m_style`, after the driver manuals of real AMTs (17-10):
+  - `0` **European** (default; Volvo I-Shift: in M "the transmission will not automatically change gears"; Mercedes PowerShift: the driver initiates every shift): no shift of TrueShift's own, also at
+    the rev limiter (under power the governor holds the rpm). A warning tone (`CUE_OVERSPEED`, every 1.5 s, also with `tones` 0) when the engine is over 103 % of its limit for 0.5 s: the wheels push it
+    (downhill, a downshift too far), where an upshift would also cut the engine brake. No stall protection: below the low-speed handover (`handback_kmh`) the game picks the gear in every style.
+  - `1` **protected** (Eaton UltraShift PLUS: even in MANUAL it "shifts or inhibits shifts to prevent engine overspeed or underspeed"): one gear up at 96 % of the limit (99 % with engine brake or
+    retarder) and down before the engine stalls (below idle + 120 rpm).
+  - `2` **assisted** (no truck source; like a VW DSG): as 1, plus kickdown, downshifts when braking to a stop and one gear down when lugging (below `m_lug_rpm` 1000 rpm with a lot of pedal and no pull).
+  - The old keys `m_full_manual` and `m_assist` are gone (an old ini logs them as unknown keys): every DLL-written ini had `m_assist=1`, so mapping them would have kept everyone on the old help.
 - **Dashboard letter**: the game does not show the mode by itself (the dashboard stays on "A" in every mode, it is not driven by the cvar), so TrueShift writes it. The transmission's `auto_mode_name`
   string_dyn at `tx+0x258` (tx = resolve(inner+0xfe8); fallback `[inner+0x150]+0x358`) is checked (size 1, manual name "M" at +0x278) and its first character overwritten 4x/s from the SDK frame via
   `game_actor+0x1d68` (only when that equals the gearbox the hooks saw). The letter is D/E/P/M, also stopped and in N (a steady letter rather than "A" at every stop), and a plain A in reverse. The HUD reads it

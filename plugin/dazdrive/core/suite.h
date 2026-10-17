@@ -133,7 +133,7 @@ void telemetry_frame();  // derived values, called first in frame_end
 // sound.cpp: feedback sounds, async, one at a time; g_volume 0..1 (0 = silent)
 enum Cue { CUE_MODE_ECO, CUE_MODE_NORMAL, CUE_MODE_POWER, CUE_MODE_M, CUE_ACC_1, CUE_ACC_2, CUE_ACC_3, CUE_ACC_OFF,
            CUE_ON, CUE_OFF, CUE_AEB_WARN, CUE_AEB_PARTIAL, CUE_AEB_FULL, CUE_CRUISE_DROP,
-           CUE_LANE_PAUSE, CUE_LANE_RESUME, CUE_COUNT };
+           CUE_LANE_PAUSE, CUE_LANE_RESUME, CUE_OVERSPEED, CUE_COUNT };
 void play_cue(int cue);
 // input.cpp: wheel/joystick buttons (numbered from 1); input_pressed = went down since the last poll
 void input_poll();

@@ -40,6 +40,8 @@ static const CueDef CUES[CUE_COUNT] = {
     // Lane assist steps aside for the indicator / is back: one short, quiet bell, low then higher (Damien 13-10, V1)
     /* LANE_PAUSE  */ { 0.18f, 1, { { W_BELL, 0, 220, 392, 0 } } },
     /* LANE_RESUME */ { 0.18f, 1, { { W_BELL, 0, 220, 523, 0 } } },
+    // M: the engine over its limit (wheels push it), every 1.5 s while it lasts. Placeholder until Damien picks one (17-10)
+    /* OVERSPEED   */ { 0.30f, 1, { { W_TRI, 0, 260, 587, 0 } } },
 };
 
 static const int RATE = 22050;

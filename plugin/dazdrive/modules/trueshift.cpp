@@ -25,7 +25,7 @@
 static float p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, p_min_gap, p_dwell_ud, p_dwell_du,
     p_max_skip, p_skip_acc, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
-    p_eb_down, p_eb_light, p_eb_skip, p_m_manual, p_m_assist, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
+    p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
     p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_wet, p_stop, p_tones, p_crest_band;
 
 static param g_params[] = {
@@ -58,9 +58,8 @@ static param g_params[] = {
     { "ebrake_downshift", &p_eb_down, -1, "engine brake downshifts: -1 = full when the engine's def asks for it (engine_brake_downshift), else by level; 0 = always by level; 1 = always full" },
     { "ebrake_skip", &p_eb_skip, 1, "1 = engine brake / retarder downshifts go two gears at a time when that still fits the brake range (half the shifts, half the game's throttle blips)" },
     { "ebrake_light_rpm", &p_eb_light, 1100, "rpm the lightest engine brake/retarder stage keeps (the full stage keeps the engine's brake range)" },
-    { "m_full_manual", &p_m_manual, 0, "M mode: 1 = only rev limiter and stall protection, 0 = also downshifts when stopping" },
-    { "m_assist", &p_m_assist, 1, "M mode: 1 = also kickdown and one gear down when lugging (like a VW DSG), 0 = full pedal at low rpm is yours" },
-    { "m_lug_rpm", &p_m_lug, 1000, "M mode with m_assist: one gear down below this rpm with a lot of pedal and no pull" },
+    { "m_style", &p_m_style, 0, "M mode: 0 = European (like Volvo, Mercedes): every shift is yours, also at the rev limiter; a warning tone when the engine goes over its limit (the wheels push it, e.g. downhill). 1 = protected (like Eaton): also one gear up at the rev limiter and one down before the engine stalls. 2 = assisted (like a VW DSG): also kickdown, downshifts when braking to a stop and one gear down when lugging" },
+    { "m_lug_rpm", &p_m_lug, 1000, "M mode with m_style 2: one gear down below this rpm with a lot of pedal and no pull" },
     { "dash_letter", &p_letter, 1, "1 = the dashboard shows the mode (D, E, P, M) instead of A" },
     { "start_gear_fix", &p_start_fix, 1, "1 = lower the game's start gear when the launch would be too slow" },
     { "launch_max_kmh", &p_launch_max, 14, "a start gear above the game's pick is allowed when the clutch would be closed by this speed (km/h at launch_rpm) and the slip time stays within launch_slip_s: on a light or downhill start the truck no longer revs a low gear to the limiter. Not in Power or M. 0 = never above the game's pick (the game picks by a number in the truck definition: 4 solo, 1 with a trailer, whatever the gear ratios are). With this on, a full pedal does not demand a quicker clutch than a normal one" },
@@ -724,16 +723,21 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
     return kmh <= S.roll_kmh + 6 && kmh >= S.roll_kmh - 12 && kmh >= (S.mode == MODE_ECO ? p_roll_min_eco - 5 : 45) && grade_pct() > -4;
 }
 
-// M: the gear stays where the driver's shift hints put it; TrueShift only helps.
+// M: the gear stays where the driver's shift hints put it. m_style (Damien 17-10, after the manuals of Volvo I-Shift,
+// Mercedes PowerShift and Eaton UltraShift): 0 European = no shift of our own (overspeed_tone warns instead),
+// 1 protected = rev limiter and stall only (Eaton), 2 assisted = also kickdown, stopping and lugging (like a VW DSG).
+// Below the low-speed handover the game picks the gear in every style (the start gear after a stop).
 static int decide_manual(int cur, float rpm, float v, double since, const char **why)
 {
     int n = n_gears(), ebrake = T.motor_brake || T.retarder > 0 || S.eb_level > 0.01f;
     double now = sim_s();
     float brake = fmaxf(T.in_brake, T.eff_brake);
+    *why = "M";
+    if (p_m_style < 1) return cur;
     if (rpm > S.eng.rpm_limit * (ebrake ? 0.99f : 0.96f) && cur < n) { *why = "M: rev limit"; return cur + 1; }
     if (rpm < idle_rpm() + 120 && cur > 1) { *why = "M: stall"; return pick_down(cur, v, eco_dn(1) + 300); }
-    if (p_m_manual > 0) { *why = "M"; return cur; }
-    if (p_m_assist > 0 && S.kick_until > now && rpm < S.eng.range[R_POWER][0] + 100 && cur > 1 && since > 0.3) {
+    if (p_m_style < 2) return cur;
+    if (S.kick_until > now && rpm < S.eng.range[R_POWER][0] + 100 && cur > 1 && since > 0.3) {
         int l = pick_down(cur, v, pw_mid() + 100);
         if (l < cur) { *why = "M: kickdown"; return l; }
     }
@@ -742,7 +746,7 @@ static int decide_manual(int cur, float rpm, float v, double since, const char *
         if (l < cur) { *why = "M: stopping"; return l; }
     }
     float fmax = force_at(cur, v, 1.0f);
-    if (p_m_assist > 0 && S.thr > 0.8f && rpm < p_m_lug && cur > 1 && since > 2 &&
+    if (S.thr > 0.8f && rpm < p_m_lug && cur > 1 && since > 2 &&
         (T.accel < 0.05f || fmax - resist(v) < S.mass * 0.03f)) {
         *why = "M: lugging";
         return cur - 1;
@@ -1445,6 +1449,29 @@ static void watch_engine()
     } else if (!lo_at || now > lo_at) lo_at = 0;
 }
 
+// M: the engine over its limit (the wheels push it: downhill, or a downshift that was too low). Like the Mercedes and
+// Volvo manuals: a warning tone, no shift. Under power the governor keeps the rpm at the limit, so this stays quiet.
+static void overspeed_tone()
+{
+    static double over_at, tone_at;
+    static int said;
+    double now = sim_s();
+    if (now < tone_at) tone_at = 0;  // the sim clock started again (new session)
+    float lim = S.eng.rpm_limit > 500 ? S.eng.rpm_limit : T.rpm_limit;
+    int on = g_active && takeover() && S.mode == MODE_M && T.engine_on && !T.paused && T.gear > 0 && lim > 500;
+    if (!on || T.rpm < 0.98f * lim) { over_at = 0; said = 0; return; }
+    if (T.rpm < 1.03f * lim) return;
+    if (!over_at) over_at = now;
+    if (now - over_at < 0.5 || now - tone_at < 1.5) return;
+    tone_at = now;
+    play_cue(CUE_OVERSPEED);  // a warning, not feedback: also with tones 0
+    if (!said) {
+        said = 1;
+        logline("M: engine over its limit, %.0f of %.0f rpm in gear %d at %.0f km/h, grade %.1f%%: warning tone", T.rpm, lim, T.gear,
+                fabsf(T.speed) * 3.6f, grade_pct());
+    }
+}
+
 static void ts_frame()
 {
     g_rolling = S.rolling || S.roll_exit > 0;  // neutral by our choice, also until the exit gear is in
@@ -1455,7 +1482,7 @@ static void ts_frame()
         g_inc.target = on && S.commanded > 0 ? S.commanded : 0;
         g_inc.grade_pct = on ? grade_pct() : NAN;
         g_inc.flags = (g_inc.flags & ~(INC_ROLL | INC_HOLD)) | (g_rolling ? INC_ROLL : 0) | (S.hold_until > sim_s() ? INC_HOLD : 0);
-        if (on) watch_engine();
+        if (on) { watch_engine(); overspeed_tone(); }
     }
     DEV_NOTE(gearbox(g_active && !S.unsupported && !manual_box() ? mode_letter[S.mode] : 0, S.mass, grade_pct()));
     {

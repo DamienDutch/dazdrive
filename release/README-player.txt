@@ -121,7 +121,8 @@ TrueShift (gearbox)
   load, grade and the route ahead instead of fixed rpm. Lower rpm when it can, learns when an
   upshift does not pull, skips gears when the box is slow, kickdown, engine brake and retarder
   aware, clutch opens near idle when you brake to a stop (Smooth stop). Modes Eco, Normal (D),
-  Power, M (manual with help). Eco-roll puts it in neutral on gentle descents. With "Gearbox looks
+  Power, M (manual: every shift is yours, like Volvo or Mercedes; a warning tone when the wheels
+  push the engine over its limit). Eco-roll puts it in neutral on gentle descents. With "Gearbox looks
   ahead" it also uses the navigation route to pick gears for climbs and tops.
 
 Cruise
@@ -200,7 +201,7 @@ The plugin writes a letter on the dashboard's gear indicator and plays short, qu
 tone=0 in [lane] the lane tones).
 
 Letters
-  D / E / P / M   Gearbox mode: Normal / Eco / Power / Manual with help (A in reverse)
+  D / E / P / M   Gearbox mode: Normal / Eco / Power / Manual (A in reverse)
   1 / 2 / 3       ACC distance just chosen: close / medium / far (for 1.5 s).
                   C = plain cruise, ACC off. acc_letter=1 shows A instead
   S / X           Speed-limit following on / off (1.5 s). X also for crawl and lane off

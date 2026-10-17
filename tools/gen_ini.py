@@ -310,7 +310,7 @@ ERAS = [
 FEATURES = [
     # group, stage, since (first in a real European truck, docs/eras.md), info (the popup), needs (feature ids that must be on)
     {"id": "ts", "group": "Gearbox", "stage": "stable", "since": "1995", "label": "TrueShift gearbox", "desc": "Shifts like a real truck automatic",
-     "info": "Takes over the gear choice of the game's automatic. It picks the gear from engine torque, weight, grade and the route ahead instead of fixed rpm, keeps the revs low when it can, skips gears when the box is slow and learns when an upshift did not pull. The driving modes Eco, Normal, Power and M (manual, with help) are cycled with the game's own \"Adaptive Automatic Transmission Mode\" key.",
+     "info": "Takes over the gear choice of the game's automatic. It picks the gear from engine torque, weight, grade and the route ahead instead of fixed rpm, keeps the revs low when it can, skips gears when the box is slow and learns when an upshift did not pull. The driving modes Eco, Normal, Power and M (manual) are cycled with the game's own \"Adaptive Automatic Transmission Mode\" key.",
      "keys": [["trueshift", "enabled", 1, 0]]},
     {"id": "roll", "group": "Gearbox", "stage": "stable", "since": "2006", "label": "Eco-roll", "desc": "Rolls in neutral on gentle descents to save fuel",
      "info": "On a gentle descent with the cruise on, the gearbox goes to neutral and the truck rolls without burning fuel. Never with the brake, engine brake or retarder, and it re-engages as soon as the speed drifts too far from the set speed.",

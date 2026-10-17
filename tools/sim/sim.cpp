@@ -406,6 +406,16 @@ static void c_m_hint(double t)
     if (t > 8 && done < 3 && !M.state && fmod(t, 4) < 0.05) { done++; M.target = M.gear + 1; M.state = 1; M.shift_end = t_now + 0.5; printf("  (hint up)\n"); }
 }
 
+static void run_m()
+{
+    run("M1 M mode, 40 t, full throttle from 50 in 8", {40000, 50, 8, 40, 0}, c_m_full);
+    run("M2 M mode, 40 t, full throttle, 7% climb", {40000, 60, 10, 50, 0}, c_m_climb);
+    run("M3 M mode, 40 t, braking to a stop from 60 in 10", {40000, 60, 10, 30, 0}, c_m_stop);
+    run("M4 M mode, 40 t, 0.5 pedal, three hint-ups", {40000, 40, 7, 25, 0}, c_m_hint);
+    run("M5 M mode, 40 t, 0.5 pedal, three hint-up presses the game ignores (ride 3)", {40000, 40, 7, 25, 0}, c_m_btn);
+    sim_btn = 0;
+}
+
 int main(int argc, char **argv)
 {
     verbose = argc > 1 && !strcmp(argv[1], "-v");
@@ -445,12 +455,12 @@ int main(int argc, char **argv)
     run("D5 40 t, 5% down holding 70, engine brake stage 1/3, toggle off", {40000, 72, 12, 40, 3, 0.5f, 0, 0, 0.33f}, c_eb);
     run("E1 40 t, 0.6 throttle, hint down at t=15 s", {40000, 50, 9, 35}, c_hint);
     run("E2 40 t low speed: 0.5 pedal from 0, brake, creep, stop", {40000, 0, 1, 70}, c_lowspeed);
-    run("M1 M mode, 40 t, full throttle from 50 in 8", {40000, 50, 8, 40, 0}, c_m_full);
-    run("M2 M mode, 40 t, full throttle, 7% climb", {40000, 60, 10, 50, 0}, c_m_climb);
-    run("M3 M mode, 40 t, braking to a stop from 60 in 10", {40000, 60, 10, 30, 0}, c_m_stop);
-    run("M4 M mode, 40 t, 0.5 pedal, three hint-ups", {40000, 40, 7, 25, 0}, c_m_hint);
-    run("M5 M mode, 40 t, 0.5 pedal, three hint-up presses the game ignores (ride 3)", {40000, 40, 7, 25, 0}, c_m_btn);
-    sim_btn = 0;
+    // M with m_style 2 (assisted: rev limit, stall, kickdown, stopping, lugging) here, 0 and 1 at the end: the sim carries
+    // its state from run to run, so more runs here would move every result after them
+    set_param("m_style", 2);
+    printf("\n--- m_style = 2 ---");
+    run_m();
+    set_param("m_style", 0);
 
     run("R1 40 t holds 80, 4% climb at 1.5-2.5 km, NO route", {40000, 80, 11, 150, 3, 0.5f, 0, -1, -1, r_climb, 0}, c_hold80);
     run("R1b same WITH route (climb ahead)", {40000, 80, 11, 150, 3, 0.5f, 0, -1, -1, r_climb, 1}, c_hold80);
@@ -534,6 +544,14 @@ int main(int argc, char **argv)
     M.grade_pct = -4; st = (float)s_start(SELF); printf("start gear 25 t on -4%%, full pedal: %g (game 1)\n", st);
     M.v = T.speed = 12 / 3.6f; st = (float)s_start(SELF); printf("engage 25 t on -4%%, full pedal, rolling 12 km/h: %g (game 1; expect a gear near 1000-1300 rpm, not 1)\n", st);
     M.v = 0; T.speed = 0; M.mass = 10000; M.grade_pct = 10; T.in_thr = 0.5f; (void)s_start(SELF);  // back to the state the car runs started from
+
+    // m_style 0 European (no shift of our own) and 1 protected (rev limit, stall only)
+    for (float st : std::initializer_list<float>{0.0f, 1.0f}) {
+        set_param("m_style", st);
+        printf("\n--- m_style = %.0f ---", st);
+        run_m();
+    }
+    set_param("m_style", 0);
 
     use_car();
     run("CAR1 2.5 t pickup, light 0.35 from 15 km/h", {2500, 15, 2, 40}, c_car_light);

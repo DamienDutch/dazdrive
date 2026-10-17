@@ -32,7 +32,7 @@ static const struct { const char *sec, *key; float lo, hi; } k_bounds[] = {
     { "trueshift", "power_reserve", 1, 5 }, { "trueshift", "reserve", 1, 5 }, { "trueshift", "launch_torque", 0.1f, 1 },
     { "trueshift", "launch_rpm", 400, 2500 }, { "trueshift", "rolling_resistance", 0.001f, 0.05f }, { "trueshift", "drag_area", 0.3f, 30 },
     { "trueshift", "efficiency", 0.5f, 1 }, { "trueshift", "idle_rpm", 300, 1500 }, { "trueshift", "eco_roll_max_decel", 0, 1 },
-    { "trueshift", "air_charge_psi", 0, 150 }, { "trueshift", "air_charge_rpm", 500, 2500 },
+    { "trueshift", "air_charge_psi", 0, 150 }, { "trueshift", "m_style", 0, 2 }, { "trueshift", "air_charge_rpm", 500, 2500 },
     { "cruise", "acc_short_s", 0.4f, 6 }, { "cruise", "acc_middle_s", 0.4f, 6 }, { "cruise", "acc_long_s", 0.4f, 6 },
     { "cruise", "acc_min_m", 3, 60 }, { "cruise", "acc_max_m", 20, 400 },
     { "cruise", "speed_limit_hold_s", 0.2f, 5 }, { "cruise", "speed_limit_offset_kmh", -20, 30 },
