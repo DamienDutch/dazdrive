@@ -454,7 +454,7 @@ function isNum(s) { return /^\s*-?(\d+\.?\d*|\.\d+)\s*$/.test(s); }
 // an ini file -> {section: {key: value}}; comments and unknown lines are skipped
 function whenText(iso) {   // "today at 22:43" when it is from today, else the date
   var d = new Date(iso), n = new Date();
-  if (d.toDateString() === n.toDateString()) return "today at " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === n.toDateString()) return "today at " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
   return d.toLocaleDateString();
 }
 function parseIni(text) {
