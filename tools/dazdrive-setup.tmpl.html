@@ -241,7 +241,7 @@ body.explain .tiles{grid-template-columns:1fr}
 <p class="story" id="erastory"></p>
 <dl class="eralist" id="eradetail"></dl>
 </div>
-<p class="legend"><span><span class="stage stable">Stable</span> ridden a lot</span><span><span class="stage beta">Beta</span> ridden a little, not confirmed yet</span><span><span class="stage experimental">Experimental</span> not proven yet</span></p>
+<p class="legend"><span><span class="stage stable">Stable</span> tested a lot</span><span><span class="stage beta">Beta</span> light testing, not confirmed yet</span><span><span class="stage experimental">Experimental</span> not proven yet</span></p>
 </section>
 
 <section class="card" data-step data-title="Features" id="s-feat">
@@ -622,7 +622,7 @@ if (typeof document !== "undefined") (function () {
     var f = dlgF, on = featureState(f, vals) !== "false";
     $("i_title").textContent = f.label;
     $("i_stage").textContent = f.stage || "stable"; $("i_stage").className = "stage " + (f.stage || "stable");
-    $("i_since").textContent = f.since ? "Real trucks: since ~" + f.since + " · DazDrive: " + ({stable: "ridden a lot", beta: "ridden a little, not confirmed yet", experimental: "not proven yet"})[f.stage || "stable"] : "";
+    $("i_since").textContent = f.since ? "Real trucks: since ~" + f.since + " · DazDrive: " + ({stable: "tested a lot", beta: "light testing, not confirmed yet", experimental: "not proven yet"})[f.stage || "stable"] : "";
     $("i_text").textContent = f.info || f.desc;
     var nd = $("i_needs"); nd.textContent = "";
     if (f.needs && f.needs.length) {

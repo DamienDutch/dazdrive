@@ -20,7 +20,7 @@ VERSION = re.search(r'#define SUITE_VERSION "([^"]*)"', open(f"{ROOT}/core/suite
 
 # --- the "standard" preset: what a player gets who just drops the DLL in. Everything not listed keeps the compiled
 # default (= the developer's), so a key that is ON in the standard preset is simply not listed unless it needs a comment.
-# Rule: ON = stable (ridden a lot, found safe); OFF = beta or experimental, not ridden enough, or specific to one setup.
+# Rule: ON = stable (tested a lot, found safe); OFF = beta or experimental, not tested enough, or specific to one setup.
 # The shipped preset IS the "~2010 Modern" year of the setup page: ERAS "2010" has no overrides (build_html checks it),
 # so the page shows it as "Standard (as shipped)". The look-ahead items (lookahead, curves, curve_brake, predictive) are
 # stable but come on only from ~2015 / ~2020 on the page, so they are off here.
@@ -349,7 +349,7 @@ ERAS = [
 ]
 
 # --- quick switches: one tile per feature, each sets one or more keys. [section, key, value when on, value when off]
-# stage: stable = ridden a lot, beta = built and ridden a little, experimental = not proven yet. An era
+# stage: stable = tested a lot, beta = light testing, experimental = not proven yet. An era
 # on the page shows the weakest stage of the features it switches on. A tile's first key is the feature itself, the others
 # refine it (the tile is "mixed" while only some of its keys have the "on" value).
 FEATURES = [
@@ -370,7 +370,7 @@ FEATURES = [
      "info": "At walking pace in gears 1, 2 and R the clutch slips like in a real truck automatic: the truck creeps by itself. The brake makes it slower, the throttle a bit faster. Switch it on or off by holding the Adaptive Automatic Transmission Mode key at a standstill.",
      "keys": [["creep", "enabled", 1, 0]]},
     {"id": "start", "group": "Gearbox", "stage": "experimental", "since": "2009", "label": "Smooth start", "desc": "Closes the clutch itself when you pull away, like a real truck automatic",
-     "info": "Pulling away in a forward gear from a standstill, DazDrive closes the clutch itself instead of the game's quick, fixed way: the engine rises to a speed that follows the pedal (a little for a light pedal, high for a flat one, a bit more with a heavy load), the clutch slips to hold it until the wheels catch up, then closes gently. It works with or without crawl mode. A shift, lifting off the pedal, the brake or about 14 km/h ends it and the game takes over. New and not ridden much: if it feels wrong, switch it off.",
+     "info": "Pulling away in a forward gear from a standstill, DazDrive closes the clutch itself instead of the game's quick, fixed way: the engine rises to a speed that follows the pedal (a little for a light pedal, high for a flat one, a bit more with a heavy load), the clutch slips to hold it until the wheels catch up, then closes gently. It works with or without crawl mode. A shift, lifting off the pedal, the brake or about 14 km/h ends it and the game takes over. New and lightly tested: if it feels wrong, switch it off.",
      "keys": [["creep", "smooth_start", 1, 0]]},
     {"id": "cc", "group": "Cruise control", "stage": "stable", "since": "1990", "label": "SteadyCruise", "desc": "Calm cruise control, no throttle bursts after shifts",
      "info": "Replaces the game's cruise throttle with a calm one: no bursts of full throttle after every shift and no hunting around the set speed. Most other cruise features build on it.",

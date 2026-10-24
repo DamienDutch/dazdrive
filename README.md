@@ -79,7 +79,7 @@ The game already has an automatic, cruise control and lane assist. This changes 
 | **JunctionSense** | experimental | off (~2020) | Slows for junctions and roundabouts on your route. |
 | Lane centering | experimental | off (~2020) | Keeps the truck in its lane (self-learning). Keep your hands near the wheel: it is an assistant, not an autopilot. |
 
-Stable = ridden a lot. Beta = built and ridden a little, not confirmed yet. Experimental = not
+Stable = tested a lot. Beta = light testing, not confirmed yet. Experimental = not
 proven yet. Where a feature has an established industry name (ACC, AEB, Auto Hold, ISA, PCC) it uses
 that name; where it has none, it has its own (TrueShift, SteadyCruise, JunctionSense). The year in
 brackets is the truck year on the setup page that switches the feature on.

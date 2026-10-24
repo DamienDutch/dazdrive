@@ -83,8 +83,8 @@ WHAT IS ON BY DEFAULT
 ---------------------
 
 The dazdrive.ini in this zip matches the year "~2010 (Modern)" on the setup page. The stage says how
-much a feature has been driven: stable = ridden a lot; beta = built and ridden a little, not
-confirmed yet; experimental = not proven yet.
+much a feature has been driven: stable = tested a lot; beta = light testing, not confirmed
+yet; experimental = not proven yet.
 
 Short names: ACC = adaptive cruise control, AEB = automatic emergency braking, ISA = intelligent
 speed assistance (following the speed limits), PCC = predictive cruise control.
