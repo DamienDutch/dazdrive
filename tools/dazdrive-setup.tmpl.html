@@ -6,12 +6,12 @@
 <title>DazDrive setup</title>
 <style>
 /* One step at a time (wizard), or everything on one page (?all). Light or dark with the system. */
-:root{--bg:#f3f4f1;--card:#fff;--fg:#1c2421;--mute:#5d6863;--line:#d8ddd8;--acc:#d2611a;--accfg:#fff;--on:#2f7d4f;--onbg:#e7f3ec;
+:root{--bg:#f3f4f1;--card:#fff;--fg:#1c2421;--mute:#5d6863;--line:#d8ddd8;--acc:#d2611a;--accfg:#fff;--on:#2f7d4f;--onbg:#e7f3ec;--sel:#fbf0e6;
   --warn:#9a5b06;--bad:#c0262d;--code:#eef0ec;--dash:#1b1f1e;--dashfg:#f1f3ef;--dashmute:#9aa6a0;--bar:rgba(255,255,255,.92);--glow:rgba(210,97,26,.25)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121615;--card:#1b201e;--fg:#e6ebe8;--mute:#9aa6a0;--line:#2f3633;--acc:#f08a3c;--accfg:#1a0d03;
-  --on:#6cc28f;--onbg:#17291f;--warn:#e7a54f;--bad:#ff7b80;--code:#101413;--dash:#0c0f0e;--dashfg:#f1f3ef;--dashmute:#8e9994;--bar:rgba(27,32,30,.92);--glow:rgba(240,138,60,.3);color-scheme:dark}}
+  --on:#6cc28f;--onbg:#17291f;--sel:#2a211a;--warn:#e7a54f;--bad:#ff7b80;--code:#101413;--dash:#0c0f0e;--dashfg:#f1f3ef;--dashmute:#8e9994;--bar:rgba(27,32,30,.92);--glow:rgba(240,138,60,.3);color-scheme:dark}}
 :root[data-theme="dark"]{--bg:#121615;--card:#1b201e;--fg:#e6ebe8;--mute:#9aa6a0;--line:#2f3633;--acc:#f08a3c;--accfg:#1a0d03;
-  --on:#6cc28f;--onbg:#17291f;--warn:#e7a54f;--bad:#ff7b80;--code:#101413;--dash:#0c0f0e;--dashfg:#f1f3ef;--dashmute:#8e9994;--bar:rgba(27,32,30,.92);--glow:rgba(240,138,60,.3);color-scheme:dark}
+  --on:#6cc28f;--onbg:#17291f;--sel:#2a211a;--warn:#e7a54f;--bad:#ff7b80;--code:#101413;--dash:#0c0f0e;--dashfg:#f1f3ef;--dashmute:#8e9994;--bar:rgba(27,32,30,.92);--glow:rgba(240,138,60,.3);color-scheme:dark}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 main{max-width:860px;margin:0 auto;padding:12px 16px 110px}
@@ -194,6 +194,40 @@ body:not(.wiz) .wizhead .wsteps{display:none}
 details.more{margin:10px 0 0}
 details.more>summary{color:var(--acc);cursor:pointer}
 .story{margin:16px 0 0}
+/* fine-tuning: modules on the left, the chosen one on the right, everything big */
+.pane{display:grid;grid-template-columns:240px 1fr;gap:22px;align-items:start;margin-top:14px}
+.side{display:grid;gap:10px}
+.big2{font:inherit;color:var(--fg);background:var(--card);border:2px solid var(--line);border-radius:14px;padding:16px 18px;cursor:pointer;text-align:left;display:grid;gap:3px;min-width:0;width:100%}
+.big2 b{font-size:1.05rem}
+.big2 small{margin:0}
+.big2:hover{border-color:var(--acc)}
+.big2[aria-pressed=true]{border-color:var(--acc);background:var(--sel);box-shadow:inset 0 0 0 1px var(--acc)}
+.side .big2[aria-pressed=true]{border-left-width:6px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.h3b{font-size:.85rem;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:24px 0 8px}
+.h3b:first-child{margin-top:0}
+.pn>h2{font-size:1.25rem;margin:0 0 14px}
+.ctl{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin:12px 0}
+.ctl .top{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.ctl .top b{font-size:1.02rem}
+.ctl .val{font:700 1.25rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--acc);white-space:nowrap}
+.ctl>small.x{margin-top:6px}
+.ctl input[type=range]{width:100%;height:34px;margin:10px 0 0;accent-color:var(--acc)}
+.opts{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+.opt2{font:inherit;color:var(--fg);background:var(--bg);border:2px solid var(--line);border-radius:12px;padding:10px 18px;min-height:46px;cursor:pointer}
+.opt2:hover{border-color:var(--acc)}
+.opt2[aria-pressed=true]{border-color:var(--acc);background:var(--acc);color:var(--accfg);font-weight:700}
+.optlist{margin:8px 0 0;padding-left:1.2em;font-size:.88rem;color:var(--mute)}
+.optlist li{margin:2px 0}
+.tg2{display:flex;justify-content:space-between;align-items:center;gap:14px}
+.tg2 .sw{flex:none}
+.tg2 .sw[aria-pressed=true]{background:var(--on)}
+.tg2 .sw[aria-pressed=true]::after{left:21px}
+.ctl .odd{display:block;color:var(--warn);font-size:.82rem;margin-top:6px}
+.note2{color:var(--warn);font-size:.9rem;margin:10px 0 0}
+.raw{margin:22px 0 0;color:var(--acc);cursor:pointer;text-decoration:underline;background:none;border:0;font:inherit;padding:6px 0}
+.rawbox{margin-top:8px}
+@media(max-width:700px){.pane{grid-template-columns:1fr}.side{grid-auto-flow:column;grid-auto-columns:minmax(150px,1fr);overflow-x:auto;padding-bottom:6px}}
 /* Extra info: extra text is hidden until the switch in the step bar is on (what must be seen, like stages and "needs", never is .x) */
 .x{display:none}
 body.explain .x{display:block}
@@ -251,16 +285,10 @@ body.explain .tiles{grid-template-columns:1fr}
 </div>
 </section>
 
-<section data-step data-title="Fine-tuning" id="s-tune">
-<div class="card" style="margin-bottom:0">
+<section class="card" data-step data-title="Fine-tuning" id="s-tune">
 <h2><span class="n">3</span> Fine-tuning <span class="opt">optional</span></h2>
-<ul class="facts x" style="margin:0">
-<li><b>Presets</b>: a few good choices, enough for most</li>
-<li><b>Advanced</b>: a few easy controls</li>
-<li><b>Custom</b>: every raw setting</li>
-</ul>
-</div>
-<div id="modules"></div>
+<p class="mute x">Pick a module. A preset sets several things at once. Adjust changes single things. All raw settings lists every setting of the module in the ini.</p>
+<div class="pane"><div class="side" id="modside"></div><div id="modpanels"></div></div>
 <p class="mute offnote" id="offnote"></p>
 <div class="start go">
 <button class="big" type="button" data-go="s-save"><b>Continue</b><small>Save your settings</small></button>
@@ -515,16 +543,17 @@ if (typeof document !== "undefined") (function () {
     var base = presetValues(D, era), off = [];
     mods.forEach(function (m) {
       var det = detectLayer(D, m.g, base, vals), pre = det.layer === "preset";
-      if (!m.tab) m.tab = det.layer;   // after an era change or an opened ini: show the layer the values are in
       m.chips.forEach(function (c, i) { c.setAttribute("aria-pressed", String(pre && i === det.i)); });
-      m.desc.textContent = pre ? m.g.tuning[det.i].desc : "Your own values (" + (det.layer === "advanced" ? "Advanced" : "Custom") + "). A preset resets this module.";
+      m.desc.textContent = pre ? "" : "Your own values (" + (det.layer === "advanced" ? "Advanced" : "Custom") + "). A preset resets this module.";
       m.cur.textContent = pre ? m.g.tuning[det.i].name : det.layer === "advanced" ? "Advanced" : "Custom";
-      Object.keys(m.tabs).forEach(function (k) { m.tabs[k].setAttribute("aria-selected", String(k === m.tab)); m.panels[k].hidden = k !== m.tab; });
       m.knobs.forEach(function (r) { r.show(); });
       var ow = m.g.off_when;
-      m.card.hidden = !!(ow && same(vals[ow[0]][ow[1]], ow[2]));  // switched off in step 2: nothing to tune
-      if (m.card.hidden) off.push(m.g.title);
+      m.off = !!(ow && same(vals[ow[0]][ow[1]], ow[2]));  // switched off in step 2: nothing to tune
+      m.side.hidden = m.off;
+      if (m.off) off.push(m.g.title);
     });
+    if (!selMod || selMod.off) { selMod = null; mods.forEach(function (m) { if (!selMod && !m.off) selMod = m; }); }
+    mods.forEach(function (m) { m.side.setAttribute("aria-pressed", String(m === selMod)); m.panel.hidden = m !== selMod; });
     $("offnote").textContent = off.length ? "Hidden because they are off: " + off.join(", ") + "." : "";
     $("preview").textContent = buildIni(D, era, vals);
     // Save and Copy stay clickable: with a bad field a click says why and jumps to it (a disabled button says nothing)
@@ -651,94 +680,98 @@ if (typeof document !== "undefined") (function () {
     th.appendChild(grid);
   });
 
-  // 3. one collapsed card per module, in three layers: Presets (chips), Advanced (knobs), Custom (every raw key)
-  var host = $("modules"), kid = 0;
+  // 3. fine-tuning: the modules on the left, the chosen one on the right: Preset (big buttons), Adjust (big controls), All raw settings
+  var kid = 0, selMod = null;
   function fmtVal(v, unit) { return num(v) + (unit ? " " + unit : ""); }
+  function optParts(t) { var i = t.indexOf(": "); return i > 0 ? [t.slice(0, i), t.slice(i + 2)] : [t, ""]; }
   function knobRow(kb, m) {
-    var row = el("div", "knob" + (kb.kind === "toggle" ? " tg" : "")), id = "k_" + (kid++), lab = el("label", "name"), ctl, out = el("output"), mk = null;
-    lab.htmlFor = id;
-    lab.appendChild(el("span", null, kb.label));
-    if (kb.kind === "range") lab.appendChild(out);
-    var odd = el("span", "odd", "");
-    lab.appendChild(el("small", "x", kb.help)); lab.appendChild(odd);
+    var row = el("div", "ctl"), top = el("div", "top"), out = el("span", "val"), odd = el("small", "odd", ""), ctl, mk = null, opts = null;
     if (kb.kind === "toggle") {
-      ctl = el("input"); ctl.type = "checkbox";
-      ctl.addEventListener("change", function () { setKnob(kb, ctl.checked, vals); refresh(); });
-      row.appendChild(ctl); row.appendChild(lab);
-    } else if (kb.kind === "choice") {
-      ctl = el("select");
-      kb.options.forEach(function (o) { var op = el("option", null, o[1]); op.value = o[0]; ctl.appendChild(op); });
-      ctl.addEventListener("change", function () { setKnob(kb, ctl.value, vals); refresh(); });
-      row.appendChild(lab); row.appendChild(ctl);
+      row.className = "ctl tg2";
+      var txt = el("span"); txt.appendChild(el("b", null, kb.label)); txt.appendChild(el("small", "x", kb.help)); txt.appendChild(odd);
+      ctl = el("button", "sw"); ctl.type = "button"; ctl.setAttribute("role", "switch"); ctl.setAttribute("aria-label", kb.label);
+      ctl.addEventListener("click", function () { setKnob(kb, ctl.getAttribute("aria-pressed") !== "true", vals); refresh(); });
+      row.appendChild(txt); row.appendChild(ctl);
     } else {
-      ctl = el("input"); ctl.type = "range"; ctl.min = kb.min; ctl.max = kb.max; ctl.step = kb.step;
-      ctl.addEventListener("input", function () { setKnob(kb, ctl.value, vals); refresh(); });
-      row.appendChild(lab); row.appendChild(ctl);
-      if (kb.presets) {   // the presets as marks under the slider: they are points on it
-        var marks = el("div", "marks"); mk = [];
-        kb.at.forEach(function (x, i) {
-          var b = el("button", null, m.g.tuning[i].name); b.type = "button";
-          b.style.left = ((x - kb.min) / (kb.max - kb.min) * 100) + "%";
-          b.addEventListener("click", function () { setKnob(kb, x, vals); refresh(); });
-          marks.appendChild(b); mk.push(b);
+      top.appendChild(el("b", null, kb.label)); if (kb.kind === "range") top.appendChild(out);
+      row.appendChild(top); row.appendChild(el("small", "x", kb.help));
+      if (kb.kind === "choice") {
+        var bx = el("div", "opts"), ul = el("ul", "optlist x"); opts = [];
+        kb.options.forEach(function (o) {
+          var pr = optParts(o[1]), b = el("button", "opt2", pr[0]); b.type = "button";
+          b.addEventListener("click", function () { setKnob(kb, o[0], vals); refresh(); });
+          bx.appendChild(b); opts.push(b);
+          if (pr[1]) { var li = el("li"); li.appendChild(el("b", null, pr[0] + ": ")); li.appendChild(document.createTextNode(pr[1])); ul.appendChild(li); }
         });
-        row.appendChild(marks);
+        row.appendChild(bx); if (ul.children.length) row.appendChild(ul);
+      } else {
+        ctl = el("input"); ctl.type = "range"; ctl.min = kb.min; ctl.max = kb.max; ctl.step = kb.step;
+        ctl.addEventListener("input", function () { setKnob(kb, ctl.value, vals); refresh(); });
+        row.appendChild(ctl);
+        if (kb.presets) {   // the presets as marks under the slider: they are points on it
+          var marks = el("div", "marks"); mk = [];
+          kb.at.forEach(function (x, i) {
+            var b = el("button", null, m.g.tuning[i].name); b.type = "button";
+            b.style.left = ((x - kb.min) / (kb.max - kb.min) * 100) + "%";
+            b.addEventListener("click", function () { setKnob(kb, x, vals); refresh(); });
+            marks.appendChild(b); mk.push(b);
+          });
+          row.appendChild(marks);
+        }
       }
+      row.appendChild(odd);
     }
-    ctl.id = id;
     m.knobs.push({ show: function () {
       var fits = knobFits(kb, vals);
-      if (kb.kind === "toggle") ctl.checked = kb.keys.every(function (k) { return same(vals[k[0]][k[1]], k[2]); });
+      if (kb.kind === "toggle") ctl.setAttribute("aria-pressed", String(kb.keys.every(function (k) { return same(vals[k[0]][k[1]], k[2]); })));
       else {
         var v = vals[kb.key[0]][kb.key[1]];
-        if (document.activeElement !== ctl) ctl.value = kb.kind === "choice" ? num(v) : v;
-        if (kb.kind === "range") out.textContent = fmtVal(v, kb.unit);
-        if (mk) mk.forEach(function (b, i) { b.classList.toggle("on", same(v, kb.at[i])); });
+        if (kb.kind === "choice") opts.forEach(function (b, i) { b.setAttribute("aria-pressed", String(same(kb.options[i][0], num(v)) || same(kb.options[i][0], v))); });
+        else {
+          if (document.activeElement !== ctl) ctl.value = v;
+          out.textContent = fmtVal(v, kb.unit);
+          if (mk) mk.forEach(function (b, i) { b.classList.toggle("on", same(v, kb.at[i])); });
+        }
       }
       odd.textContent = fits ? "" : "Set under Custom. Moving this resets it.";
     } });
     return row;
   }
   D.groups.forEach(function (g) {
-    var card = el("details", "card tune"), sum = el("summary");
-    sum.appendChild(el("span", null, g.title));
-    var m = { g: g, chips: [], tab: null, cur: el("span", "cur", ""), tabs: {}, panels: {}, knobs: [] };
-    sum.appendChild(m.cur);
-    card.appendChild(sum);
-    var body = el("div", "body");
-    body.appendChild(el("p", "mute x", g.about[0]));
-    if (g.about.length > 1) { var ul = el("ul", "facts x"); g.about.slice(1).forEach(function (t) { ul.appendChild(el("li", null, t)); }); body.appendChild(ul); }
-    var tabs = el("div", "tabs"); tabs.setAttribute("role", "tablist");
-    [["preset", "Presets"], ["advanced", "Advanced"], ["custom", "Custom"]].forEach(function (x) {
-      if (x[0] === "advanced" && !g.knobs.length) return;
-      var b = el("button", "tab", x[1]); b.type = "button"; b.setAttribute("role", "tab");
-      b.addEventListener("click", function () { m.tab = x[0]; refresh(); });
-      tabs.appendChild(b); m.tabs[x[0]] = b;
-    });
-    body.appendChild(tabs);
-    var pp = el("div", "panel"), chips = el("div", "chips");
+    var m = { g: g, chips: [], cur: el("small", "mute", ""), panels: {}, knobs: [], off: false };
+    m.side = el("button", "big2"); m.side.type = "button";
+    m.side.appendChild(el("b", null, g.title)); m.side.appendChild(m.cur);
+    m.side.addEventListener("click", function () { selMod = m; refresh(); });
+    $("modside").appendChild(m.side);
+    var pn = el("div", "pn");
+    pn.appendChild(el("h2", null, g.title));
+    pn.appendChild(el("p", "mute x", g.about[0]));
+    pn.appendChild(el("div", "h3b", "Preset"));
+    var grid = el("div", "grid2");
     m.chips = g.tuning.map(function (t) {
-      var c = el("button", "chip", t.name); c.type = "button";
+      var c = el("button", "big2"); c.type = "button";
+      c.appendChild(el("b", null, t.name)); if (t.desc) c.appendChild(el("small", "mute", t.desc));
       c.addEventListener("click", function () { applyPreset(D, g, t, presetValues(D, era), vals); refresh(); });
-      chips.appendChild(c);
+      grid.appendChild(c);
       return c;
     });
-    pp.appendChild(chips);
-    m.desc = el("p", "chipdesc"); pp.appendChild(m.desc);
-    body.appendChild(pp); m.panels.preset = pp;
+    pn.appendChild(grid); m.panels.preset = grid;
+    m.desc = el("p", "note2"); pn.appendChild(m.desc);
     if (g.knobs.length) {
-      var ap = el("div", "panel");
+      pn.appendChild(el("div", "h3b", "Adjust"));
+      var ap = el("div");
       g.knobs.forEach(function (kb) { ap.appendChild(knobRow(kb, m)); });
-      body.appendChild(ap); m.panels.advanced = ap;
+      pn.appendChild(ap); m.panels.advanced = ap;
     }
-    var cp = el("div", "panel");
-    cp.appendChild(el("p", "rawnote x", "The raw settings of dazdrive.ini, each with the plugin's own one-line help. No safety net: the page only checks that a value is a number. Switches (1 / 0) also come on and off in step 2."));
+    var rb = el("button", "raw", "All raw settings"); rb.type = "button";
+    var cp = el("div", "rawbox"); cp.hidden = true;
+    rb.addEventListener("click", function () { cp.hidden = !cp.hidden; rb.textContent = cp.hidden ? "All raw settings" : "Hide raw settings"; });
+    cp.appendChild(el("p", "rawnote x", "The raw settings of dazdrive.ini, each with the plugin's own one-line help. No safety net: the page only checks that a value is a number."));
     g.scope.forEach(function (sk) { cp.appendChild(item(sk[0], sk[1], sk[2], sk[1], false)); });
-    body.appendChild(cp); m.panels.custom = cp;
-    card.appendChild(body);
-    m.card = card;
+    pn.appendChild(rb); pn.appendChild(cp); m.panels.custom = cp; m.rawBtn = rb;
+    m.panel = pn;
     mods.push(m);
-    host.appendChild(card);
+    $("modpanels").appendChild(pn);
   });
 
   // 5. save: straight into the folder where the browser allows it (Chrome, Edge), otherwise via Downloads
@@ -765,7 +798,7 @@ if (typeof document !== "undefined") (function () {
   function blocked() {
     if (!badList.length) return false;
     var i = badList[0], steps = document.querySelectorAll("[data-step]");
-    mods.forEach(function (m) { if (m.panels.custom.contains(i.el)) m.tab = "custom"; });
+    mods.forEach(function (m) { if (m.panels.custom.contains(i.el)) { selMod = m; m.panels.custom.hidden = false; m.rawBtn.textContent = "Hide raw settings"; } });
     refresh();
     for (var p = i.el.parentNode; p; p = p.parentNode) if (p.tagName === "DETAILS") p.open = true;
     if (document.body.classList.contains("wiz")) for (var j = 0; j < steps.length; j++) if (steps[j].contains(i.el)) wshow(j);
@@ -930,15 +963,15 @@ if (typeof document !== "undefined") (function () {
     var ccm = null; mods.forEach(function (m) { if (m.g.id === "cc") ccm = m; });
     var v2 = presetValues(D, recommended); setKnob(ccm.g.knobs[0], 1.6, v2);
     loadIni(buildIni(D, recommended, v2));
-    check("opened ini shows Advanced", ccm.tab === "advanced" && ccm.cur.textContent === "Advanced" && !ccm.panels.advanced.hidden && vals.cruise.acc_short_s === "1.25" && vals.cruise.acc_long_s === "1.95");
+    check("opened ini shows Advanced", ccm.cur.textContent === "Advanced" && vals.cruise.acc_short_s === "1.25" && vals.cruise.acc_long_s === "1.95");
     // the page's own controls: the slider, a mark under it and a preset chip
     var gap = ccm.panels.advanced.querySelector("input[type=range]");
     gap.value = "1.6"; gap.dispatchEvent(new Event("input"));
     check("slider sets Advanced", ccm.cur.textContent === "Advanced" && vals.cruise.acc_short_s === "1.25" && /1\.6 s/.test(ccm.panels.advanced.textContent));
     ccm.panels.advanced.querySelectorAll(".marks button")[1].click();
     check("mark sets the Relaxed gaps", vals.cruise.acc_short_s === "1.5" && vals.cruise.acc_middle_s === "2" && vals.cruise.acc_long_s === "2.5");
-    ccm.chips[0].click(); ccm.tabs.preset.click();
-    check("chip sets Close", ccm.cur.textContent === "Close" && !ccm.panels.preset.hidden && ccm.panels.advanced.hidden && ccm.chips[0].getAttribute("aria-pressed") === "true");
+    ccm.chips[0].click();
+    check("chip sets Close", ccm.cur.textContent === "Close" && ccm.chips[0].getAttribute("aria-pressed") === "true");
     // decimal comma, error text with the field, Save blocked with a reason, the "as shipped" label, tiles that set more keys
     setEra(recommended, false); refresh();
     check("shipped label", $("status").textContent.indexOf("Standard (as shipped)") > 0);

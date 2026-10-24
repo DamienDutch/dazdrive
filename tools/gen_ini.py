@@ -218,11 +218,11 @@ SETUP_GROUPS = [
      "tuning": [{"name": "Standard", "desc": "Tuned in test drives", "over": {}}],
      "about": ["How TrueShift shifts."],
      "knobs": [
-        {"kind": "choice", "label": "M (manual) mode", "help": "What the gearbox still does itself in M.",
+        {"kind": "choice", "label": "M mode", "help": "M is manual mode: you shift with + and −. This sets what the gearbox still does by itself there.",
          "key": ["trueshift", "m_style"], "options": [["0", "European: you shift everything, a tone warns of over-revving (Volvo, Mercedes)"],
                                                       ["1", "Protected: also shifts up at the rev limiter and down before a stall (Eaton)"],
                                                       ["2", "Assisted: also kickdown, and downshifts when you stop"]]},
-        {"kind": "range", "label": "Gear held after + / −", "help": "Seconds a gear you picked stays in. 0 = off.",
+        {"kind": "range", "label": "Gear stays in after + or −", "help": "How long a gear you picked stays in, in seconds. 0 = off.",
          "unit": "s", "min": 0, "max": 30, "step": 1, "key": ["trueshift", "hint_hold_s"]},
         {"kind": "toggle", "label": "Show the mode on the dashboard", "help": "D, E, P or M instead of the game's A.",
          "keys": [["trueshift", "dash_letter", 1, 0]]},
@@ -270,7 +270,7 @@ SETUP_GROUPS = [
      "knobs": [
         {"kind": "range", "presets": True, "label": "Crawl speed", "help": "Speed with both pedals released. The brake slows it.",
          "unit": "km/h", "min": 2, "max": 7, "step": 0.5, "key": ["creep", "creep_kmh"], "at": [5, 3], "follow": []},
-        {"kind": "range", "label": "Top speed", "help": "How fast a little throttle can go while maneuvering.",
+        {"kind": "range", "label": "Top speed with throttle", "help": "How fast a little throttle can go while maneuvering.",
          "unit": "km/h", "min": 6, "max": 15, "step": 1, "key": ["creep", "manoeuvre_kmh"]},
         {"kind": "toggle", "label": "Crawl on when the game starts", "help": "Otherwise hold the gearbox-mode key at a standstill.", "keys": [["creep", "start_on", 1, 0]]},
         {"kind": "toggle", "label": "Gearbox-mode key switches crawl", "help": "Hold it at a standstill to switch crawl on or off.", "keys": [["creep", "toggle_mode_key", 1, 0]]}]},
