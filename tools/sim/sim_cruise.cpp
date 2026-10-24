@@ -18,6 +18,7 @@ char g_dir[MAX_PATH];
 const layout *L;
 game_addrs G;
 volatile int g_rolling, g_cruise_smooth, g_crawl_on;
+volatile float g_roll_boost_kmh;
 volatile float g_pcc_need_kmh = NAN;
 volatile float g_creep_brake;
 int g_log_level = 2;

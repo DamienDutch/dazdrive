@@ -24,6 +24,7 @@ static const char k_flavor[] = "dazdrive-flavor=" DZ_STR(DAZDRIVE_FLAVOR);
 
 static int g_started, g_inactive;  // g_inactive: nothing hooked, so nothing is registered either (the plugin sits idle)
 volatile int g_rolling, g_cruise_smooth, g_crawl_on;
+volatile float g_roll_boost_kmh;
 volatile float g_pcc_need_kmh = __builtin_nanf("");
 volatile float g_creep_brake;
 volatile char g_dash_flash, g_dash_status;

@@ -14,6 +14,7 @@
 
 telemetry T;
 volatile int g_rolling, g_cruise_smooth, g_crawl_on;
+volatile float g_roll_boost_kmh;
 volatile float g_pcc_need_kmh = NAN;
 int g_log_level = 2;
 incident_ctx g_inc = { 0, 0, 0, NAN, NAN };
@@ -58,20 +59,32 @@ float wheel_radius();
 extern module m_trueshift;
 
 // ---- truck model (Volvo FH 2400 Nm from probe runs)
-static float RATIO[12] = { 11.73f, 9.21f, 7.09f, 5.57f, 4.35f, 3.41f, 2.7f, 2.12f, 1.63f, 1.28f, 1.0f, 0.78f };
+static float RATIO[16] = { 11.73f, 9.21f, 7.09f, 5.57f, 4.35f, 3.41f, 2.7f, 2.12f, 1.63f, 1.28f, 1.0f, 0.78f };
 static float CURVE[8][2] = { {0,0},{600,0.62f},{900,1},{1230,1},{1600,0.77f},{1700,0.69f},{1800,0.44f},{2000,0} };
 static float CDA = 6, TORQUE = 2400, LIMIT = 1900, DIFF = 2.85f, RADIUS = 0.506f, RANGES[4][2] = { {1500,1900},{750,1450},{900,1250},{1200,1650} };
 static int NG = 12;
+static void use_renault()  // Renault T, Optidriver Xtended AT02614F (12+2), DE13 TC 480: 2700 Nm, diff 3.40 (24-10 ride)
+{
+    float r[16] = { 32.04f, 17.2f };
+    for (int k = 0; k < 12; k++) r[2 + k] = 11.73f * powf(0.79f / 11.73f, k / 11.0f);
+    float c[8][2] = { {0,0},{700,0.60f},{900,0.97f},{1250,1},{1500,0.9f},{1700,0.72f},{1900,0.45f},{2100,0} };
+    memcpy(RATIO, r, sizeof r); memcpy(CURVE, c, sizeof c);
+    float g[4][2] = { {1500,1900},{750,1450},{900,1250},{1200,1600} };
+    memcpy(RANGES, g, sizeof g);
+    TORQUE = 2700; CDA = 6; LIMIT = 1900; DIFF = 3.40f; RADIUS = 0.538f; NG = 14;
+    T.fwd_gears = 14; T.diff = DIFF;
+    for (int i = 0; i < 16; i++) T.ratio[i] = RATIO[i];
+}
 static void use_car()  // a pickup-like car: 6 speeds, 450 Nm
 {
-    float r[12] = { 4.17f, 2.34f, 1.52f, 1.14f, 0.87f, 0.69f };
+    float r[16] = { 4.17f, 2.34f, 1.52f, 1.14f, 0.87f, 0.69f };
     float c[8][2] = { {0,0},{700,0.55f},{1500,0.9f},{2000,1},{4000,1},{5000,0.85f},{5800,0.6f},{6200,0} };
     memcpy(RATIO, r, sizeof r); memcpy(CURVE, c, sizeof c);
     float g[4][2] = { {3000,5000},{1500,3000},{1800,2600},{3000,5000} };
     memcpy(RANGES, g, sizeof g);
     TORQUE = 450; CDA = 1.0f; LIMIT = 6000; DIFF = 3.55f; RADIUS = 0.39f; NG = 6;
     T.fwd_gears = 6; T.diff = DIFF;
-    for (int i = 0; i < 12; i++) T.ratio[i] = RATIO[i];
+    for (int i = 0; i < 16; i++) T.ratio[i] = RATIO[i];
 }
 static struct {
     int gear, target, state, parked, engaged; double shift_end; float v, mass, grade_pct, pedal, cc, brake; int force, ebrake, ret;
@@ -323,7 +336,7 @@ static void hold(float kmh, float gain = 0.25f)
 static void cruise(float kmh)
 {
     M.cruise_kmh = kmh; M.pedal = 0;
-    float e = kmh / 3.6f - M.v;
+    float e = (kmh + g_roll_boost_kmh) / 3.6f - M.v;   // the cruise module raises its target by the roll boost TrueShift asks for
     M.cc = e > 0.3f ? 1.0f : e < -0.3f ? 0.0f : 0.5f;
     if (g_cruise_smooth) M.cc = fminf(1, fmaxf(0, 0.45f + e * 0.3f));  // a smooth controller
     if (g_rolling) M.cc = 0;                                            // the cruise module gives no throttle in neutral
@@ -364,6 +377,7 @@ static void c_m_full(double t) { M.pedal = 1; }
 static float r_climb(double s) { return s < 1500 ? 0 : s < 2500 ? 4.0f : 0; }
 static float r_crest(double s) { return s < 700 ? 5.0f : s < 1700 ? -1.5f : 0; }
 static float r_down(double s) { return -0.8f; }
+static float r_climb10(double s) { return s < 300 ? 0 : s < 600 ? 10.5f : 0; }   // a steep 300 m climb after a flat (24-10, 545 s: 10-11 % at 43 km/h)
 static float r_hills(double s) { return 1.5f * sinf((float)(s / 1500 * 6.2832)); }
 static float r_flat(double s) { return 0; }
 static float r_hills25(double s) { return 2.5f * sinf((float)(s / 1000 * 6.2832)); }
@@ -390,6 +404,10 @@ static void c_lift_jn(double t) { if (t < 10) hold(70); else if (t < 14) M.pedal
 static void c_lift_jn_bug(double t) { M.thr_floor = 0.08f; c_lift_jn(t); }
 static void c_lift_jn_free(double t) { if (t < 10) hold(70); else M.pedal = 0; }
 static void c_release(double t) { if (t < 10 || t > 50) hold(80); else M.pedal = 0; }
+// the yard (24-10, 3853-3877 s): 13 km/h, a short brake, then gentle pedal through 5-25 km/h
+static void c_yard(double t) { if (t < 2) { M.pedal = 0.2f; M.brake = 0; } else if (t < 3.5) { M.pedal = 0; M.brake = 0.15f; } else { M.pedal = 0.3f; M.brake = 0; } }
+static void c_cc46(double) { cruise(46); }   // an ACC target behind a slow lead (24-10: lead 40-46 km/h)
+static void c_cc63(double) { cruise(63); }
 static void c_cc80(double) { cruise(80); }
 static void c_car_light(double) { M.pedal = 0.35f; }
 static void c_car_full(double) { M.pedal = 1; }
@@ -430,6 +448,7 @@ int main(int argc, char **argv)
     G.window_fn = (uintptr_t)f_window; G.chooser_fn = (uintptr_t)f_choose; G.start_fn = (uintptr_t)f_start;
     m_trueshift.start();
     if (getenv("BAND0")) set_param("crest_band_kmh", 0);
+    if (getenv("NOBOOST")) set_param("eco_roll_boost_kmh", 0);
 
     run("A1 40 t, flat, full throttle from 12 km/h (DCT 0.5 s)", {40000, 12, 3, 70}, c_full);
     run("A2 40 t, flat, full throttle, slow box 1.2 s", {40000, 12, 3, 70, 3, 1.2f}, c_full);
@@ -560,6 +579,10 @@ int main(int argc, char **argv)
     }
     set_param("m_style", 0);
 
+    use_renault();
+    run("C10 Renault 14 gears 32.5 t, Eco, cruise 46 (ACC behind a slow lead), flat then a 10.5 % climb of 300 m from 43 km/h in 12 (ride 24-10, 545 s)", {32500, 43, 12, 45, 10.0f, 1.0f, 0, -1, -1, r_climb10, 1}, c_cc46);
+    run("Y1 Renault 16.4 t yard: 13 km/h in 6, a short brake, then pedal 0.3 (ride 24-10, 3856 s: 6>4>5>3>4>5>6>7>8>9 in 21 s)", {16400, 13, 6, 25, 10.0f, 1.0f, 0, -1, -1, r_flat, 0}, c_yard);
+    run("C10b same from 55 km/h in 13", {32500, 55, 13, 45, 10.0f, 1.0f, 0, -1, -1, r_climb10, 1}, c_cc63);
     use_car();
     run("CAR1 2.5 t pickup, light 0.35 from 15 km/h", {2500, 15, 2, 40}, c_car_light);
     run("CAR2 2.5 t pickup, full throttle from 15", {2500, 15, 2, 25}, c_car_full);

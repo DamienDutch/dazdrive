@@ -622,6 +622,8 @@ static float cruise_body(void *ga, float dt, float pedal)
         if (after == after && after < -2) target = set - down;
         else if (g_up == g_up && g_now == g_now && g_up > 2 && g_up > g_now + 1) { target = set + up; s_mom_up = up; }
     }
+    // A little over the set speed just before an eco-roll (TrueShift asks for it): the roll then takes the speed down to a little under it
+    if (g_roll_boost_kmh > 0 && !s_lead_near && target <= set + 0.1f) target = set + g_roll_boost_kmh;
     // Speed limit following: the sign's limit (+offset), never above the set speed.
     // Bends ahead (route): the speed that takes every bend comfortably.
     float bend_kmh = NAN, jn_need = 0, jn_kmh = 0;

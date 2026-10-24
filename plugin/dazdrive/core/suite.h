@@ -144,6 +144,7 @@ extern float g_volume;
 extern volatile float g_creep_brake;  // Creep: brake request it wants (crawl held on a descent; Cruise applies it)
 extern volatile int g_crawl_on;       // Creep: the driver has crawl switched on
 extern volatile int g_rolling;        // TrueShift has the truck in neutral (eco-roll)
+extern volatile float g_roll_boost_kmh;   // TrueShift asks Cruise for this much over the set speed (km/h) just before an eco-roll starts (0 = none)
 extern volatile float g_creep_thr;     // Creep asks the merged throttle for this much (0..~0.15): Cruise's stub maxes it in
 extern volatile float g_clutch_ours;  // the clutch value Creep puts on the drivetrain (launch or crawl), NAN when the game's own applies
 static inline float clutch_seen() { float c = g_clutch_ours; return c == c ? c : T.eff_clutch; }  // what the drivetrain sees: use instead of T.eff_clutch for 'is the clutch closed'

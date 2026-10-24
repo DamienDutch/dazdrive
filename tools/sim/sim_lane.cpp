@@ -22,6 +22,7 @@ char g_dir[MAX_PATH];
 static layout g_layout = { "1.60", "eut2" };  // ln_start hooks only on the 1.60 layout
 const layout *L = &g_layout;
 volatile int g_rolling, g_cruise_smooth, g_crawl_on;
+volatile float g_roll_boost_kmh;
 volatile float g_pcc_need_kmh = NAN;
 int g_log_level = 2;
 incident_ctx g_inc = { 0, 0, 0, NAN, NAN };

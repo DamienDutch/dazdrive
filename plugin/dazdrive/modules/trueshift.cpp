@@ -26,7 +26,7 @@ static float p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, 
     p_max_skip, p_skip_acc, p_skip_wait, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
-    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_wet, p_stop, p_tones, p_crest_band;
+    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_wet, p_stop, p_tones, p_crest_band;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = TrueShift on, 0 = the game's own automatic" },
@@ -76,6 +76,8 @@ static param g_params[] = {
     { "eco_roll_under_kmh", &p_roll_under, 1.5f, "Normal mode, with cruise control: the roll ends when the speed is about to drop this far below the set speed (km/h; Volvo I-Roll: 1-3)" },
     { "eco_roll_under_eco_kmh", &p_roll_under_eco, 2.0f, "the same in Eco: a little more room, the most relaxed" },
     { "eco_roll_under_power_kmh", &p_roll_under_pw, 1.0f, "the same in Power: the strictest (keep it between 1 and 2 km/h; values around 0.5 give very short rolls that hunt)" },
+    { "eco_roll_boost_kmh", &p_roll_boost, 2.0f, "with cruise control, Eco and Normal: just before an eco-roll starts, the cruise control lets the speed come this far over the set speed (km/h), so the roll takes the speed down to a little under it and the average stays near the set speed (0 = roll from the set speed)" },
+    { "low_calm_kmh", &p_calm, 12, "below this speed (km/h) with a gentle pedal the gear is only changed down for a stall or lugging, and below this + 5 km/h an upshift never skips: no hunting through the gears while maneuvering (0 = off)" },
     { "eco_roll_max_decel", &p_roll_dec, 0.04f, "eco-roll only where the truck would lose at most this much speed in neutral (m/s2; 0.04 = ~3 km/h in 20 s: a slight descent, not the flat)" },
     { "eco_roll_max_decel_eco", &p_roll_dec_eco, 0.08f, "the same in Eco: a slightly steeper stretch may still be rolled (0.08 = ~6 km/h in 20 s)" },
     { "eco_roll_min_kmh_eco", &p_roll_min_eco, 40, "Eco: the lowest speed that starts an eco-roll (km/h; Normal and Power: 50)" },
@@ -161,6 +163,7 @@ static struct {
     float idle;             // learned idle rpm (0 = not yet)
     int rolling;            // eco-roll: in neutral by our choice
     double roll_at;
+    int boost_want;         // eco-roll would start but wants the cruise control to build the roll_boost speed first
     float roll_kmh;         // speed when the roll started
     int roll_exit;          // gear to engage after a roll (kept as target until it is in)
     double roll_exit_at;
@@ -684,9 +687,13 @@ static int roll_exit_gear(float v, int ebrake, float brake)
 // the engine in neutral); the cruise then gives no throttle while rolling.
 static int roll_wanted(float v, float f_res, int ebrake, float brake, double pedal_free_s)
 {
+    S.boost_want = 0;
     if (p_roll <= 0 || (S.mode != MODE_ECO && S.mode != MODE_NORMAL && S.mode != MODE_POWER) || !S.ours) return 0;
     float kmh = v * 3.6f, set = T.cruise * 3.6f;
     int cc = T.cruise > 0.5f;
+    // a little gas before the roll (Damien 24-10): with cruise the roll may start up to roll_boost over the set speed, and the
+    // cruise control builds that speed first; not in Power, not when the set speed is a speed limit being eased down
+    float boost = cc && g_cruise_smooth && S.mode != MODE_POWER && !S.rolling ? p_roll_boost : 0;
     if ((cc && !g_cruise_smooth) || brake > 0.02f || ebrake) return 0;
     if (S.rolling ? T.in_thr > 0.1f : (T.in_thr > 0.02f || (!cc && T.eff_thr > 0.02f) || pedal_free_s < 1.5)) return 0;
     // Damien: at most 1-2 km/h under the set speed, then back on the gas; leave a little early (re-engaging
@@ -694,12 +701,16 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
     float kmh_soon = kmh + fminf(0, T.accel) * 3.6f * 1.0f;
     // how far under the set speed it may roll: Eco most, Power least (Damien 11-10: between 1 and 2 km/h)
     float under = S.mode == MODE_ECO ? p_roll_under_eco : S.mode == MODE_POWER ? p_roll_under_pw : p_roll_under;
-    if (cc && (S.rolling ? (kmh > set + 3 || kmh_soon < set - under) : (kmh > set + 2 || kmh < set - 0.5f))) return 0;
+    if (cc && (S.rolling ? (kmh > set + 3 || kmh_soon < set - under) : (kmh > set + 2 + boost || kmh < set - 0.5f))) return 0;
     float a_n = -f_res / S.mass;  // acceleration in neutral
     int rk = p_lookahead > 0 && route_ok();
     if (rk) {
         float steep = route_min_grade(0, fmaxf(200, v * 15));
         if (steep == steep && steep < -3.5f) return 0;
+        // not into a junction, roundabout or bend we have to slow down for: the box would have to come back from neutral right
+        // there (the exit takes ~1.5 s; 24-10, 227 s: rolled up to a junction, braked, "stuck in neutral 1.5 s at 39 km/h")
+        float jn = route_junction_m(), vs = jn >= 0 ? route_curve_speed(2.5f, 0.3f) : NAN;
+        if (jn >= 0 && vs == vs && vs < v - 2.5f && jn < (S.rolling ? v * 6 + 20 : fmaxf(150.0f, v * 10))) return 0;
     }
     if (!S.rolling) {
         bool eco = S.mode == MODE_ECO;  // Eco rolls more often: from a lower speed, on a slightly steeper stretch, with a shorter pause between rolls
@@ -717,7 +728,7 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
         // band made 0.5 s rolls that hunted, sim R5b)
         // (the worse of now and the route's 20 s mean: sim R5b started at -0.03 predicted but -0.14 now and rolled 1.5 s)
         float a_chk = fminf(a_pred, a_n);
-        if (cc && a_chk < 0 && (kmh - (set - under)) / 3.6f / -a_chk < 10) return 0;
+        if (cc && a_chk < 0 && (fmaxf(kmh, set + boost) - (set - under)) / 3.6f / -a_chk < 10) return 0;
         if (a_pred > 0.075f || a_pred < -(eco ? p_roll_dec_eco : p_roll_dec)) {
             // over a top: a short climb left and a gentle way down after it
             float crest = rk ? route_crest_m(v * 5) : -1;
@@ -725,6 +736,8 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
             // with cruise it has to reach the top before it drops out of the band (a narrow band ended rolls after 1.5 s)
             if (cc && a_n < 0 && (kmh - (set - under)) / 3.6f / -a_n < crest / fmaxf(v, 1.0f) + 1) return 0;
         }
+        // everything fits but the speed: build the boost first, the roll starts when it is there
+        if (boost > 0 && kmh < set + boost - 0.5f) { S.boost_want = 1; return 0; }
         return 1;
     }
     return kmh <= S.roll_kmh + 6 && kmh >= S.roll_kmh - 12 && kmh >= (S.mode == MODE_ECO ? p_roll_min_eco - 5 : 45) && grade_pct() > -4;
@@ -983,10 +996,17 @@ static int decide_gear(void *self, const char **why)
     // Downshift: below the downshift point, or lugging (full pedal, losing
     // speed and no force left in this gear).
     float fmax = force_at(cur, v, 1.0f);
-    int lug = thr > 0.8f && T.accel < 0 && fmax - f_res < S.mass * 0.03f && rpm < S.eng.range[R_POWER][0] + 100;
+    // A gear that cannot even hold the speed at full throttle any more (a steep climb): no waiting for the throttle to come up (cruise and
+    // ACC raise it slowly) or for the rpm to sag (Damien 24-10, 545-553 s: 10-11 % at 43 km/h in 12, held to 759 rpm and 35 km/h, the lead
+    // pulled away 13 -> 58 m). It needs real throttle (> 0.25) and a speed that is falling, so a burst of gas on the flat does nothing.
+    int cannot_hold = thr > 0.25f && fmax < 1.05f * f_res && T.accel < -0.1f;
+    int lug = (thr > 0.8f || cannot_hold) && T.accel < 0 && fmax - f_res < S.mass * 0.03f && rpm < S.eng.range[R_POWER][0] + 100;
     // The demand-raised point only counts when this gear lacks pull.
     float dn_eff = (fmax - f_res) / S.mass < a_power() ? S.dn_pt : base_dn(cur);
     if (cur > 1 && (rpm < dn_eff || lug)) {
+        // maneuvering (Damien 24-10, 3856-3877 s: 6>4>5>3>4>5>6>7>8>9 in 21 s between 6 and 25 km/h): at a gentle pedal and a low speed only
+        // a near-stall or lugging takes a gear off, not the demand-based downshift point
+        if (p_calm > 0 && S.mass > 6000 && v * 3.6f < p_calm && !lug && !kick && thr < 0.6f && rpm > idle_rpm() + 230) { *why = "low-speed hold"; return cur; }
         int deep = rpm < dn_eff - 100 || rpm < idle_rpm() + 250;
         if (S.shift_dir > 0 && since < p_dwell_ud && !deep && !lug) { *why = "anti-hunt (down)"; return cur; }
         // Almost over the top: hold on, it gets easier in a moment.
@@ -1039,6 +1059,7 @@ static int decide_gear(void *self, const char **why)
     // (while pulling away only 1 s after the takeover, else 3: the game starts a light truck in 4 and the next two shifts come within
     // seconds; after a pause or a teleport the gear may be wrong; the rpm and pull checks below still stop a skip that lands too low)
     if (!(cur <= 2 && v * 3.6f >= p_on_kmh) && (now - S.ours_at < (S.ours_launch ? 1.0 : 3.0) || v * 3.6f < p_on_kmh + 5)) skips = 0;
+    if (p_calm > 0 && S.mass > 6000 && v * 3.6f < p_calm + 5 && thr < 0.6f) skips = 0;   // no skipping through the gears at walking pace (trucks)
     float v2 = fmaxf(0.5f, v - f_res / S.mass * S.eng.shift_time);
 
     // Early upshift: light load, the new gear lands on the torque plateau and
@@ -1510,6 +1531,7 @@ static void overspeed_tone()
 static void ts_frame()
 {
     g_rolling = S.rolling || S.roll_exit > 0;  // neutral by our choice, also until the exit gear is in
+    g_roll_boost_kmh = S.boost_want && !S.rolling ? p_roll_boost : 0;
     {
         static const int to_inc[] = { 2, 1, 3, 4 };  // Normal, Eco, Power, M -> incident file numbering
         int on = g_active && !S.unsupported && !manual_box();
