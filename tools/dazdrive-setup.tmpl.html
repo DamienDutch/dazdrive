@@ -62,7 +62,7 @@ button.link{border:0;background:none;color:var(--acc);padding:0;font:inherit;cur
 .stop:hover .dot{border-color:var(--acc)}
 .stop:has(input:checked) .dot{background:var(--acc);border-color:var(--acc);box-shadow:0 0 0 7px var(--glow)}
 .stop:has(input:focus-visible) .dot{outline:2px solid var(--acc);outline-offset:3px}
-.erablurb{margin:10px 0 0;padding:10px 12px;border-radius:8px;background:var(--bg);display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.erablurb{margin:10px 0 0;padding:10px 12px;border-radius:8px;background:var(--bg);display:flex;flex-direction:column;gap:2px;align-items:flex-start}
 .erablurb b{font-size:1.05rem}
 @media (max-width:560px){
   .tl{grid-template-columns:1fr;gap:4px;margin-top:8px}
@@ -514,7 +514,7 @@ if (typeof document !== "undefined") (function () {
       else { eon.push(f); if (pv && featureState(f, pv) === "false") enew.push(f); }
     });
     var ed = $("eradetail"); ed.textContent = "";
-    [["On in this year", eon], pv ? ["New since " + D.eras[D.eras.indexOf(e) - 1].year, enew] : null, ["Off", eoff]].forEach(function (r) {
+    [["On in this year", eon], pv ? ["New since " + D.eras[D.eras.indexOf(e) - 1].year, enew] : null].forEach(function (r) {
       if (!r) return;
       ed.appendChild(el("dt", null, r[0])); var dd = el("dd"); flist(dd, r[1]); ed.appendChild(dd);
     });
