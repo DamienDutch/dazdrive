@@ -378,6 +378,8 @@ static float r_climb(double s) { return s < 1500 ? 0 : s < 2500 ? 4.0f : 0; }
 static float r_crest(double s) { return s < 700 ? 5.0f : s < 1700 ? -1.5f : 0; }
 static float r_down(double s) { return -0.8f; }
 static float r_climb10(double s) { return s < 300 ? 0 : s < 600 ? 10.5f : 0; }   // a steep 300 m climb after a flat (24-10, 545 s: 10-11 % at 43 km/h)
+static float r_climb6(double s) { return s < 300 ? 0 : s < 700 ? 6.0f : 0; }
+static float r_climb3(double s) { return s < 300 ? 0 : s < 900 ? 3.0f : 0; }   // a long 3 % climb   // a moderate 400 m climb: the gear can just hold it
 static float r_hills(double s) { return 1.5f * sinf((float)(s / 1500 * 6.2832)); }
 static float r_flat(double s) { return 0; }
 static float r_hills25(double s) { return 2.5f * sinf((float)(s / 1000 * 6.2832)); }
@@ -407,6 +409,7 @@ static void c_release(double t) { if (t < 10 || t > 50) hold(80); else M.pedal =
 // the yard (24-10, 3853-3877 s): 13 km/h, a short brake, then gentle pedal through 5-25 km/h
 static void c_yard(double t) { if (t < 2) { M.pedal = 0.2f; M.brake = 0; } else if (t < 3.5) { M.pedal = 0; M.brake = 0.15f; } else { M.pedal = 0.3f; M.brake = 0; } }
 static void c_cc46(double) { cruise(46); }   // an ACC target behind a slow lead (24-10: lead 40-46 km/h)
+static void c_cc52(double) { cruise(52); }
 static void c_cc63(double) { cruise(63); }
 static void c_cc80(double) { cruise(80); }
 static void c_car_light(double) { M.pedal = 0.35f; }
@@ -449,6 +452,7 @@ int main(int argc, char **argv)
     m_trueshift.start();
     if (getenv("BAND0")) set_param("crest_band_kmh", 0);
     if (getenv("NOBOOST")) set_param("eco_roll_boost_kmh", 0);
+    if (getenv("NOLOAD")) set_param("load_down_from", 1);
 
     run("A1 40 t, flat, full throttle from 12 km/h (DCT 0.5 s)", {40000, 12, 3, 70}, c_full);
     run("A2 40 t, flat, full throttle, slow box 1.2 s", {40000, 12, 3, 70, 3, 1.2f}, c_full);
@@ -582,6 +586,8 @@ int main(int argc, char **argv)
     use_renault();
     run("C10 Renault 14 gears 32.5 t, Eco, cruise 46 (ACC behind a slow lead), flat then a 10.5 % climb of 300 m from 43 km/h in 12 (ride 24-10, 545 s)", {32500, 43, 12, 45, 10.0f, 1.0f, 0, -1, -1, r_climb10, 1}, c_cc46);
     run("Y1 Renault 16.4 t yard: 13 km/h in 6, a short brake, then pedal 0.3 (ride 24-10, 3856 s: 6>4>5>3>4>5>6>7>8>9 in 21 s)", {16400, 13, 6, 25, 10.0f, 1.0f, 0, -1, -1, r_flat, 0}, c_yard);
+    run("C11 Renault 32.5 t, Eco, cruise 52 (ACC), flat then a 6 % climb of 400 m from 50 km/h in 13: a gear that can just hold it", {32500, 50, 13, 50, 10.0f, 1.0f, 0, -1, -1, r_climb6, 1}, c_cc52);
+    run("C12 same on a long 3 % climb of 600 m from 52 km/h in 13", {32500, 52, 13, 60, 10.0f, 1.0f, 0, -1, -1, r_climb3, 1}, c_cc52);
     run("C10b same from 55 km/h in 13", {32500, 55, 13, 45, 10.0f, 1.0f, 0, -1, -1, r_climb10, 1}, c_cc63);
     use_car();
     run("CAR1 2.5 t pickup, light 0.35 from 15 km/h", {2500, 15, 2, 40}, c_car_light);
