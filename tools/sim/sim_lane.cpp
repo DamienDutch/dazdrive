@@ -99,7 +99,7 @@ static void apply(const cfg &c)
 {
     for (auto &p : g_params) *p.val = p.def;
     p_mode = c.mode;
-    p_learn = getenv("LEARN") ? atof(getenv("LEARN")) : 0; p_sway = getenv("SWAY") ? atof(getenv("SWAY")) : 0;  // the old scenarios test the fixed law
+    p_bias = getenv("BIAS") ? atof(getenv("BIAS")) : 0; p_learn = getenv("LEARN") ? atof(getenv("LEARN")) : 0; p_sway = getenv("SWAY") ? atof(getenv("SWAY")) : 0;  // the old scenarios test the fixed law
     L_cur = L_base = { 1, 1, p_l_max }; L_trial = 0; L_hold = 0; L_t = 0; L_Nw = L_Syy = L_Cxx = L_Cxy = L_Cyy = 0; for (int k = 0; k < LK_NK; k++) L_Sxx[k] = L_Sxy[k] = 0;
     L_scn = L_scs = L_sc_zc = L_since = 0; L_b_valid = 0; L_ring_cool = 0; L_nupd = 0; SW_fac = 1; SW_t = 0; SW_hold_until = 0; SW_events = 0; SW_lastact = -1e9; L_loaded = 0; L_dirty = 0; learn_block_reset(); L_dev_blocks = 0; L_blocks_ok = L_blocks_bad = 0; L_rolled = 0;
     if (c.mode == 2) for (int i = 0; i < novr; i++) for (auto &p : g_params) if (!strcmp(p.key, ovr[i].k)) *p.val = ovr[i].v;
@@ -110,6 +110,9 @@ static void apply(const cfg &c)
 static float g_sim_uraw;
 static void sim_game_law(void *ga, float, float, float, float) { *(float *)((char *)ga + GA_U) = g_sim_uraw; }
 // one physics + control step. drv: 0 hands off, 1 driver steers the bend (+ tremor), 2 evasive (w_cmd)
+static double g_refmax_off;   // largest |aim| of shared steering in a hands-off run: must stay ~0 (a hands-off truck must not take over its own offset)
+static void print_refmax() { printf("\nshared steering: largest |aim| with hands off: %.3f m (must be < 0.05)\n", g_refmax_off); }
+
 static void step(pl &p, const pp &m, float dt, float o3, int drv, float w_cmd, float wind, float *u_game_out = NULL)
 {
     float kmh = vkmh, v = kmh / 3.6f;
@@ -173,6 +176,7 @@ static res run(const cfg &c, const pp &m, int scen, int drv, float kmh, float T 
         if (scen == 0) o3 = ou_o3(os, dt, 0.0012f);
         else { float k = clampf((t_now - 10) / 3, 0, 1) - clampf((t_now - 45) / 3, 0, 1); o3 = 0.0035f * k * k * (3 - 2 * k); }
         step(p, m, dt, o3, drv, 0, 0.0006f * gauss());
+        if (drv == 0) { g_refmax_off = fmax(g_refmax_off, fabs(g_ref)); if (fabs(g_ref) > 0.05 && getenv("WHY_REF") && fmod(t_now, 1.0) < dt) printf("   aim %.3f at %.1f s (scen %d, %.0f km/h): o1 %.2f act %.2f act_t %.1f steady %.1f hold_t %.1f pm %.4f dev %.4f wrate %.3f\n", g_ref, t_now, scen, kmh, p.o1, g_act, g_act_t, g_steady_t, g_hold_t, g_pm, g_dev, g_w_rate); }
         if (t_now > 8) {
             sum += p.o1 * p.o1; n++; r.maxe = fmax(r.maxe, fabs(p.o1));
             if (fabs(p.o1) > 0.1) { int s = p.o1 > 0 ? 1 : -1; if (hold && s != hold) { r.zc++; if (firstzc < 0) firstzc = t_now; lastzc = t_now; } hold = s; }
@@ -208,6 +212,60 @@ static void run_driver(const cfg &c, const pp &m, float kmh, double *peakA, doub
 }
 
 
+// shared steering (24-10): the driver steers to +off m in 2 s (a cyclist), holds hold_s, lets go (hands off) and the truck is on its own for 30 s.
+// Returns: mean |A| against the hand while holding, the overshoot to the other side after letting go, |o1| 12 s after letting go,
+// the aim g_ref at the end and its peak, and the zero crossings of o1 after letting go.
+struct fres { double opp, os, late, ref_end, ref_pk; int zc; };
+static fres run_follow(const cfg &c, const pp &m, float kmh, float off, float hold_s, int follow)
+{
+    apply(c); vkmh = kmh; rng = 99; p_follow = follow;
+    pl p = {0, 0, 0, 0, 0}; float dt = DTS; fres r = {}; double sopp = 0; int nopp = 0, last = 0;
+    double t_rel = 3 + 2 + hold_s;
+    for (int i = 0; i < (int)((t_rel + 30) / dt); i++) {
+        t_now = i * dt; double ts = t_now - 3, des = 0;
+        if (ts > 0 && ts < 2) des = off * 0.5 * (1 - cos(M_PI * ts / 2)); else if (ts >= 2 && ts < 2 + hold_s) des = off;
+        int hand = ts > -0.3 && ts < 2 + hold_s;
+        float v = vkmh / 3.6f;
+        double o2des = clampf((float)(2.0 * (p.o1 - des) / (m.kk * v)), -0.06f, 0.06f);   // a hand that holds its position (stiffer than run_driver's)
+        double wc = 3.0 * (p.o2 - o2des) / (m.c * v);
+        step(p, m, dt, 0, hand ? 2 : 0, (float)wc, 0.0004f * gauss());
+        if (hand && ts > 5) { if (p.A * wc < 0) sopp += fabs(p.A); nopp++; }
+        r.ref_pk = fmax(r.ref_pk, fabs(g_ref));
+        if (getenv("TRACE_F") && fmod(t_now, 0.5) < dt && t_now < t_rel + 8) printf("    %5.1f o1 %6.3f o2 %7.4f A %8.5f w %8.5f act %.2f pm %8.5f dev %8.5f hold_t %.1f ref %.3f steady %.1f wpred %.5f wg %.2f\n", t_now, p.o1, p.o2, p.A, p.w, g_act, g_pm, g_dev, g_hold_t, g_ref, g_steady_t, g_wpred, g_wg);
+        double tr = t_now - t_rel;
+        if (tr > 0) {
+            if (p.o1 * off < -0.0) r.os = fmax(r.os, fabs(p.o1));
+            if (fabs(p.o1) > 0.1) { int sg = p.o1 > 0 ? 1 : -1; if (last && sg != last) r.zc++; last = sg; }
+            if (tr > 12 && tr < 14) r.late = fmax(r.late, fabs(p.o1));
+        }
+    }
+    r.opp = nopp ? sopp / nopp : 0; r.ref_end = g_ref;
+    return r;
+}
+
+static int follow_tests()
+{
+    printf("Shared steering: driver steers to the offset in 2 s, holds, lets go; 30 s hands off after\n");
+    printf("%-30s %5s %5s %6s | %-9s | mean |A| against the hand | overshoot | |o1| 12 s later | aim end / peak | zc\n", "plant", "km/h", "off", "hold", "follow");
+    struct pv { const char *n; float c, gA, tw, dl; };
+    const pv pls[] = { { "nominal sim plant", 0.19f, 1.0f, 0.3f, 0.0f }, { "ts4n large-signal fit", 0.155f, 1.34f, 0.05f, 0.2f }, { "slow wheel (delay .35)", 0.155f, 1.34f, 0.15f, 0.35f } };
+    const cfg c2 = { "mode 2", 2 };
+    int bad = 0;
+    for (auto &q : pls) for (float kmh : { 60.f, 80.f }) for (float off : { 0.5f, -0.5f }) for (float hold : { 6.f, 3.f }) {
+        if (getenv("ONLY_F") && !(kmh == 60 && off > 0 && hold > 4 && q.c > 0.18f && q.c < 0.2f)) continue;
+        pp m; m.c = q.c; m.gA = q.gA; m.tw = q.tw; m.delay = q.dl;
+        fres a = run_follow(c2, m, kmh, off, hold, 0), b = run_follow(c2, m, kmh, off, hold, 1);
+        printf("%-30s %5.0f %5.1f %5.0f | off       | %.4f | %.2f | %.2f | %.2f / %.2f | %d\n", q.n, kmh, off, hold, a.opp, a.os, a.late, a.ref_end, a.ref_pk, a.zc);
+        printf("%-30s %5s %5s %6s | on        | %.4f | %.2f | %.2f | %.2f / %.2f | %d\n", "", "", "", "", b.opp, b.os, b.late, b.ref_end, b.ref_pk, b.zc);
+        // criteria: less fighting, no worse after letting go, ends back at the center
+        if (hold >= 6 && !(b.opp < 0.6 * a.opp)) { printf("   FAIL: still fights (%.4f vs %.4f)\n", b.opp, a.opp); bad++; }
+        if (b.os > a.os + 0.15 || b.late > 0.25 || b.zc > a.zc + 1) { printf("   FAIL: worse after letting go\n"); bad++; }
+        if (fabs(b.ref_end) > 0.05) { printf("   FAIL: aim did not return\n"); bad++; }
+    }
+    printf("%s (%d failures)\n", bad ? "FOLLOW TESTS FAILED" : "follow tests ok", bad);
+    return bad != 0;
+}
+
 // ---- learner / anti-sway tests (docs/lka-learn.md)
 struct lres { double rms_all, rms_tail, zc_tail, maxe, usable; float s, df, cap, gA, dl, c; int upd, sw, rolled; double win[12]; double first_sw; };
 // hands off on a wandering road for T s; drvmode 3 = the driver weaves (hand on the wheel) from T*0.45 for 120 s
@@ -223,6 +281,8 @@ static lres runL(const pp &m, int learn, int sway, float kmh, float T, int drvmo
         int drv = 0; float wc = 0;
         if (drvmode == 3 && t_now > T * 0.45 && t_now < T * 0.45 + 120) { drv = 2; wc = 0.03f * sinf(6.2832f * (float)(t_now - T * 0.45) / 9.f) - 3.3f * o3; }
         step(p, m, dt, o3, drv, wc, 0.0006f * gauss());
+        if (drvmode == 0) g_refmax_off = fmax(g_refmax_off, fabs(g_ref));
+        if (drvmode == 0 && fabs(g_ref) > 0.05 && getenv("WHY_REF") && fmod(t_now, 2.0) < dt) printf("   aimL %.3f at %.1f s (%.0f km/h): o1 %.2f o2 %.4f act %.2f act_t %.1f hold_t %.1f pm %.4f dev %.4f wrate %.3f gA-plant %.2f\n", g_ref, t_now, kmh, p.o1, p.o2, g_act, g_act_t, g_hold_t, g_pm, g_dev, g_w_rate, m.gA);
         if (drvmode == 3 && getenv("TRACE_L") && fmod(t_now, 0.5) < dt && t_now > atof(getenv("TRACE_L")) && t_now < atof(getenv("TRACE_L")) + 30)
             printf("    %6.1f drv %d o1 %6.2f o2 %6.3f u %5.2f A %7.4f w %7.4f act %.2f wg %.2f wi %.2f s %.2f usable %d\n", t_now, drv, p.o1, p.o2, *(float *)(GA + GA_U), p.A, p.w, g_act, g_wg, g_wi, L_cur.s, L_usable);
         if (t_now > 8) { sa += p.o1 * p.o1; na++; r.maxe = fmax(r.maxe, fabs(p.o1)); }
@@ -408,12 +468,14 @@ static int test_ffb()
 
 int main(int argc, char **argv)
 {
+    atexit(print_refmax);
     if (argc > 1 && !strcmp(argv[1], "learn")) return learn_tests(argc, argv);
     if (argc > 1 && !strcmp(argv[1], "sway")) return sway_tests(argc, argv);
     if (getenv("DT")) DTS = atof(getenv("DT"));  // frame time of the law calls (default 1/60 s)
     const cfg all2[] = { { "mode 2", 2 } };  // mode 1 (0.4.14) removed 11-10
     // name=value arguments override mode-2 ini parameters (for tuning): run_lane.sh bend_assist=2.9 heading_gain=12
     { int k = 0; for (int i = 1; i < argc; i++) { char *e = strchr(argv[i], '='); if (e && novr < 32) { *e = 0; ovr[novr].k = argv[i]; ovr[novr++].v = atof(e + 1); } else argv[k++ + 1] = argv[i]; } argc = k + 1; }
+    if (argc > 1 && !strcmp(argv[1], "follow")) return follow_tests();
     if (argc > 2 && !strcmp(argv[1], "replay")) {  // open loop: recorded lane.csv inputs through the law. replay <lane.csv> [t0 t1] [mode]
         FILE *f = fopen(argv[2], "r"); if (!f) { printf("cannot open %s\n", argv[2]); return 1; }
         double t0 = argc > 3 ? atof(argv[3]) : -1e9, t1 = argc > 4 ? atof(argv[4]) : 1e9; int mode = argc > 5 ? atoi(argv[5]) : 2;

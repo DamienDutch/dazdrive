@@ -24,6 +24,7 @@
 #include <stdlib.h>
 
 static float *g_minp, p_on_kmh, p_a_max, p_a_leak, p_min_kmh, p_mode, p_gain, p_dead, p_tone;
+static float p_bias, p_blend, p_blend_max, p_f_pull, p_follow, p_f_act, p_f_hold, p_f_win, p_f_max, p_f_tau, p_f_ret, p_f_rate, p_f_back, p_f_bend;   // shared steering
 static float p_edge_look, p_edge_from, p_edge_full, p_backoff, p_drv_rate, p_drv_follow, p_drv_attack, p_drv_release, p_drv_leak;
 static float p_umax, p_ind_pause, p_ind_resume, p_ind_off, p_keep_on, p_nonffb, p_slow_resume;
 static float p_sway, p_sw_cut, p_sw_rec, p_sw_amp;
@@ -70,6 +71,20 @@ static param g_params[] = {
     { "driver_follow", &p_drv_follow, 3.0f, "wheel speed the assist itself may cause per unit of assist offset (same direction as the assist; not counted as you steering)" },
     { "driver_attack", &p_drv_attack, 0.15f, "seconds until the assist is backed off when you start steering" },
     { "driver_release", &p_drv_release, 1.0f, "seconds until the assist is back at full strength after you let go" },
+    { "follow", &p_follow, 0, "mode 2: 1 = shared steering: an offset you hold with the wheel (passing a cyclist, a parked car) becomes the aim for a while, the assist then keeps damping and steering the bends but stops pulling back to the lane center; 0 = off" },
+    { "lane_bias_m", &p_bias, 0.325f, "mode 2: the assist aims this far to the RIGHT of the lane center (m), like a driver who keeps right (0 = the center). It builds up slowly and fades out in bends (the truck cuts those inside by itself) and is gone in a sharp one" },
+    { "bend_blend", &p_blend, 0, "shared steering in a bend: 1 = while you steer into the bend yourself the assist leaves its own bend steering out for the part you already do, and builds it back within 0.3 s when you let go; 0 = the assist always adds its full bend steering (can cut the bend inside when you steer too)" },
+    { "bend_blend_max", &p_blend_max, 0.6f, "bend_blend: the most of the assist's own bend steering it leaves out (0-1)" },
+    { "follow_pull", &p_f_pull, 0.002f, "shared steering: the assist must pull the wheel at least this much (wheel range) for a still hand against it to show; a gentle offset hardly moves the wheel, so steering speed alone does not see it" },
+    { "follow_act", &p_f_act, 0.3f, "shared steering: how much steering (0-1) counts as you holding a position" },
+    { "follow_hold_s", &p_f_hold, 0.4f, "shared steering: the offset must stay steady (not drifting) this long before it is taken over" },
+    { "follow_window_s", &p_f_win, 3.0f, "shared steering: the aim follows your offset only within this many seconds after you last steered" },
+    { "follow_max_m", &p_f_max, 0.6f, "shared steering: the most of an offset it takes over (m)" },
+    { "follow_tau_s", &p_f_tau, 0.5f, "shared steering: seconds in which the aim moves to your offset" },
+    { "return_tau_s", &p_f_ret, 6.0f, "shared steering: seconds in which the aim goes back to the lane center after you let go" },
+    { "return_rate", &p_f_rate, 0.1f, "shared steering: the aim never goes back faster than this (m/s)" },
+    { "follow_backoff", &p_f_back, 0.3f, "shared steering: share of the offset pull left while you are steering (the heading damping and the bend steering stay at 100%)" },
+    { "follow_bend_o3", &p_f_bend, 0.004f, "shared steering: no taking over of an offset in a bend sharper than this (|o3|): steering there is the bend, not a position" },
     { "driver_leak", &p_drv_leak, 0.02f, "extra share of the assist offset that leaks away per physics step while you steer" },
     { "min_kmh", &p_min_kmh, 20, "the assist steers from this speed (game: 55 km/h); below it the wheel is free" },
     { "slow_resume", &p_slow_resume, 0, "0 = after lane keeping went off on a slow stretch it stays off until you press its key (a switch-on by itself when the speed comes back to about 55 km/h is undone); 1 = leave that to the game" },
@@ -89,6 +104,9 @@ static law_fn o_law;
 static FILE *g_csv;
 static float g_u;
 // driver-in-the-loop and centering state (reset when the assist is off)
+static float g_bias;   // lane_bias_m as it is now (m, negative = right of the lane center: o1 is + to the left), eased in and out
+static float g_share;   // bend_blend: the share of the bend steering that is yours (0-1), filtered
+static float g_ref, g_act_t = 1e3f, g_steady_t, g_dev, g_pm, g_hold_t, g_age;   // shared steering: the aim (m from the lane center, 0 = center), seconds since you last steered, seconds the offset has been steady
 static float g_do1, g_act, g_scale = 1, g_w_prev, g_w_rate, g_ci, g_o2_prev, g_o1_prev, g_d2, g_damp_u;
 static int g_have_w, g_have_o, g_engaged;
 static float g_ff;  // last bend feed-forward request (mode 2, log)
@@ -491,6 +509,7 @@ static void sway_step(float o1, float dt, int indicator)
     if (g_act > 0.15f) SW_lastact = SW_t;
     // recovery: nothing for 5 s after the last hit, then linear back to 1 over sway_recover_s
     if (SW_t > SW_hold_until && SW_fac < 1) SW_fac = fminf(1, SW_fac + dt * (1 - 0.4f) / fmaxf(p_sw_rec, 1.0f));
+    if (p_follow > 0 && fabsf(g_ref) > 0.03f) { SW_dir = 0; return; }   // while you hold an offset (shared steering) a swing is yours (13-10: two sway hits right after steering)
     if (SW_dir == 0) { SW_dir = o1 >= 0 ? 1 : -1; SW_cand = o1; SW_cand_t = SW_t; return; }
     float amp = fmaxf(p_sw_amp, 0.05f), rev = 0.5f * amp;   // a reversal of rev confirms an extremum; swings (peak to peak) must be >= 1.5 amp
     int confirm = 0;
@@ -528,6 +547,7 @@ static void lane_reset()
     W_n = 0; W_sxy = W_sxx = W_ixy = W_ixx = 0; W_ma = W_mw = 0; g_wg = g_wi = p_wref; g_wpred = NAN; g_have_acmd = 0; W_have_ad = 0; g_pipe = g_wexp_rate = 0;
     g_lf = g_li = 1; g_hold = 0;
     g_act = g_ci = g_d2 = g_damp_u = g_w_rate = g_ff = 0; g_have_o3 = 0; g_do3 = 0;
+    g_ref = 0; g_act_t = 1e3f; g_steady_t = 0; g_dev = g_pm = g_hold_t = g_age = 0; g_share = 0; g_bias = 0;
     g_scale = 1;
     g_have_w = g_have_o = 0;
     g_engaged = 0;
@@ -605,9 +625,49 @@ static float lane_step(float u, float o1, float o2, float o3, float dt, float wh
     g_o1_prev = o1;
     g_o2_prev = o2;
     g_have_o = 1;
+    // Shared steering (Damien 24-10: hands on the wheel now and then, not only hands-free). Holding an offset (passing a cyclist) makes
+    // it the aim for a while: only the offset terms (offset, integral) look at e = o1 - aim, the heading damping, the bend steering and
+    // the feedback on A stay whole (ts5b: they must never give way). The aim goes back to the lane center when you let go.
+    if (p_follow > 0) {
+        if (g_act > p_f_act) g_act_t = 0; else g_act_t += dt;
+        g_age += dt;
+        g_steady_t = fabsf(g_do1) < 0.15f ? g_steady_t + dt : 0;
+        // A hand held still against the assist: the wheel is not where the assist alone would put it (wheel - g_wpred, 0.5 s filter) and
+        // the assist pulls hard enough to show it. Steering speed (g_act) does not see a gentle offset: 0.5 m in 2 s hardly moves the wheel.
+        if (g_wpred == g_wpred && wheel == wheel) {
+            float k = clampf(dt / 0.5f, 0, 1);
+            g_dev += ((wheel - g_wpred) - g_dev) * k; g_pm += (g_wpred - g_pm) * k;
+        } else g_dev = g_pm = 0;
+        bool against = fabsf(g_pm) > p_f_pull && g_dev * g_pm < 0 && fabsf(g_dev) > 0.6f * fabsf(g_pm) && fabsf(g_w_rate) < 0.05f;   // and a still wheel: a hands-off sway moves it
+        // not in the first 3 s after the assist started (its own start-up lags the wheel), and the truck parallel to the lane
+        bool holding = against && fabsf(o1) > 0.2f && fabsf(o2) < 0.01f && g_steady_t > 0.3f && g_age > 3;
+        g_hold_t = holding ? g_hold_t + dt : fmaxf(0, g_hold_t - 2 * dt);   // leaky: hand tremor must not restart it every other frame
+        bool straight = fabsf(o3) < p_f_bend && !g_pause;
+        bool take = straight && fabsf(o1) > 0.05f &&
+                    ((g_act_t < p_f_win && g_steady_t > p_f_hold && fabsf(o1) > 0.2f && fabsf(o2) < 0.01f) || g_hold_t > p_f_hold);   // (steering speed alone also fires on a hands-off sway of a very strong wheel: sim gA 3.5 at 90 km/h)
+        if (g_ref != 0 && (g_ref * o1 < 0 || fabsf(o1) < fabsf(g_ref))) {
+            // the truck is between the lane center and the aim (you steered back, or it comes back by itself): the aim comes along at once,
+            // it never pulls the truck away from the center (sim: the evasive 1.2 m and back left the aim at 0.3 m and the truck overshot 0.36 m)
+            g_ref += (o1 - g_ref) * clampf(dt / 0.2f, 0, 1);
+        } else if (take) {
+            g_ref += (clampf(o1, -p_f_max, p_f_max) - g_ref) * clampf(dt / fmaxf(p_f_tau, 0.05f), 0, 1);
+        } else if (g_act < 0.15f) {
+            float back = g_ref * (1 - expf(-dt / fmaxf(p_f_ret, 0.5f)));
+            g_ref -= clampf(back, -p_f_rate * dt, p_f_rate * dt);
+        }
+    } else g_ref = 0;
+    // Keep right (Damien 24-10: "iets rechts van het midden", 0.325 m): the aim moves to the right on a straight, slowly (0.1 m/s), and
+    // back to the center in a bend (fully gone from |o3| 0.0045), under 40 km/h, with the indicator paused, or when the lane is not clean.
+    {
+        float straight = 1 - clampf((fabsf(o3) - 0.0015f) / 0.003f, 0, 1);
+        float want = p_bias > 0 && kmh > 40 && !g_pause && fabsf(o1) < 1.2f ? -clampf(p_bias, 0, 0.6f) * straight : 0;
+        float st = 0.1f * dt * (want == 0 ? 3.0f : 1.0f);   // out three times faster than in
+        g_bias += clampf(want - g_bias, -st, st);
+    }
+    float e1 = o1 - g_ref - g_bias;   // the offset the assist works on (aim: your held offset and the keep-right bias)
     // slow integral on the offset: only while the assist is in charge, frozen / bled off while you steer
     float ci_k = p_i2, ci_max = p_i2max;  // in units of A
-    if (g_act < 0.3f && fabsf(o1) < 1.2f) g_ci -= ci_k * o1 * dt;
+    if (g_act < 0.3f && fabsf(e1) < 1.2f) g_ci -= ci_k * e1 * dt;
     g_ci *= expf(-dt * (0.1f + 1.5f * g_act));
     g_ci = clampf(g_ci, -ci_max, ci_max);
     {
@@ -626,8 +686,8 @@ static float lane_step(float u, float o1, float o2, float o3, float dt, float wh
         // heading gain lower at speed: at 89 km/h after a bend it rang with a 1.35 s period (Damien: sways after a bend)
         float k_head = p_k_head * fminf(1.0f, fmaxf(0.5f, p_head_ref / fmaxf(kmh, 1.0f)));
         // learned profile (1 when learn = 0): offset/heading gains and bend/slow terms follow 1/(gA c); a slower wheel calms offset more than heading
-        learn_step(u, o1, o2, o3, dt, wheel, A, kmh);
-        sway_step(o1, dt, g_ind);
+        learn_step(u, e1, o2, o3, dt, wheel, A, kmh);   // (the error about the aim, not about the center: the bias is no sway and no plant)
+        sway_step(e1, dt, g_ind);
         float ls = scale_s(), ldf = scale_df();
         float swf = p_sway > 0 ? SW_fac : 1;
         // the wheel answers stronger than the gains are tuned for (sharp bend, large A): every A term scaled down (never up)
@@ -649,7 +709,24 @@ static float lane_step(float u, float o1, float o2, float o3, float dt, float wh
         so = (so + (fmaxf(so, 1.0f) - so) * ek) * li;
         // (a Smith predictor on the heading, the wheel motion still in the pipe, was tried 11-10: no gain in the ts5b bend and it rang
         // at 90 km/h on a slow wheel, delay 0.35 + lag 0.15)
-        float a_cmd = -p_k_off * so * stiff * o1 + (k_head * ls * sqrtf(ldf) * (0.5f + 0.5f * swf) * o2 + g_ci * ls) * li + ff;
+        // your hand is clearly on the wheel (activity over 0.3) on a straight: less pull on the offset only. Not in a bend (there the
+        // activity can be a misreading, ts5b) and not for the small activity of hand noise.
+        float fb = p_follow > 0 && fabsf(o3) < p_f_bend ? 1 - clampf((g_act - 0.3f) / 0.4f, 0, 1) * (1 - p_f_back) : 1;
+        float a_cmd = -p_k_off * so * stiff * fb * e1 + (k_head * ls * sqrtf(ldf) * (0.5f + 0.5f * swf) * o2 + g_ci * ls) * li + ff;
+        // Bend blend (Damien 24-10, his Polo's Travel Assist: what you already steer counts, the assist adds the rest). The wheel minus
+        // where the assist alone puts it (g_dev, 0.5 s filter) is your own steering; the part of it that goes into the bend, over a dead
+        // zone of a quarter of the need, takes that share off the assist's bend steering (never more than bend_blend_max). It builds
+        // back within 0.3 s when you let go. Not on a straight, not slower than 30 km/h, not when the wheel gain is unknown.
+        {
+            float need_b = 4.6f * fabsf(o3), sbw = o3 > 0 ? -1.0f : 1.0f;
+            float share = 0;
+            if (p_blend > 0 && g_wpred == g_wpred && need_b > 0.012f && kmh > 30) {
+                float dpart = g_dev * sbw;   // your steering into the bend, in wheel range
+                share = fminf(clampf((dpart - 0.25f * need_b) / (0.5f * need_b), 0, 1), clampf(p_blend_max, 0, 1));
+            }
+            g_share += (share - g_share) * clampf(dt / (share > g_share ? 0.5f : 0.3f), 0, 1);
+            ff *= 1 - g_share;
+        }
         g_ff = ff;
         // Bend hold (ts5b crash: the request reversed and the wheel unwound to 0 in a sharp bend, the truck ran out of the lane;
         // the assist can unwind fast but winds back slowly: A' = be u - al A is small near its ceiling). In a bend, while the wheel
@@ -699,7 +776,7 @@ static float soft_share(float o1, float o2, float kmh, double now)
 {
     if (g_soft_at < 0) return 1;
     if (g_soft_end < 0) {
-        if (fabsf(o1) < 0.25f && fabsf(o2) < 0.012f) { if (g_centre_since < 0) g_centre_since = now; }
+        if (fabsf(o1 - g_bias - g_ref) < 0.25f && fabsf(o2) < 0.012f) { if (g_centre_since < 0) g_centre_since = now; }
         else g_centre_since = -1;
         if ((g_centre_since >= 0 && now - g_centre_since > 0.5) || now - g_soft_at > 20) {
             g_soft_end = now;
@@ -746,7 +823,7 @@ static void stub_law(void *ga, float o1, float o2, float o3, float dt)
     if (p_mode >= 1 && (g_pause || slow)) {
         float d = before * 0.85f;
         *(float *)(g + GA_U) = fabsf(d) < 1e-3f ? 0 : d;
-        g_u = 0; g_ci = 0; g_have_o = 0;
+        g_u = 0; g_ci = 0; g_ref = 0; g_have_o = 0;
         return;
     }
     if (p_mode >= 1 && o1 == 0 && o2 == 0 && o3 == 0) {
@@ -794,9 +871,9 @@ static void stub_law(void *ga, float o1, float o2, float o3, float dt)
     double now = wall_s();
     if (now - at < 0.05) return;
     at = now;
-    fprintf(g_csv, "%.2f,%.1f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.3f,%.3f,%.4f,%.4f,%.4f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.2f,%.2f,%.2f,%.2f,%d\n", now, fabsf(T.speed) * 3.6f, o1,
+    fprintf(g_csv, "%.2f,%.1f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.3f,%.3f,%.4f,%.4f,%.4f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.2f,%.2f,%.2f,%.2f,%d,%.3f,%.3f,%.3f\n", now, fabsf(T.speed) * 3.6f, o1,
             o2, o3, u, out, A, steer, wheel, g_act, g_scale, g_ci, g_damp_u, g_ff, scale_s(), scale_df(), L_gA, L_dl, L_c, p_sway > 0 ? SW_fac : 1.0f, L_usable,
-            g_wg, g_wi, g_lf, g_li, g_hold);
+            g_wg, g_wi, g_lf, g_li, g_hold, g_ref, g_share, g_bias);
 }
 
 // The vehicle's assist state A (veh+0x1420): with an FFB wheel it is the
@@ -860,7 +937,7 @@ static void ln_start()
         else logline("Lane: assist store not found, only the request is calmed");
     }
     g_csv = open_out("lane.csv", "w");
-    if (g_csv) fputs("t,kmh,o1,o2,o3,u_game,u_out,A,steer,wheel,activity,scale,ci,damp,ff,l_s,l_dfac,l_gA,l_delay,l_c,sway_fac,l_usable,w_ratio,w_slope,lf,li,bend_hold\n", g_csv);
+    if (g_csv) fputs("t,kmh,o1,o2,o3,u_game,u_out,A,steer,wheel,activity,scale,ci,damp,ff,l_s,l_dfac,l_gA,l_delay,l_c,sway_fac,l_usable,w_ratio,w_slope,lf,li,bend_hold,ref,share,bias\n", g_csv);
     snprintf(g_status, sizeof g_status, "on, hook in place, mode %g (%s)", p_mode, p_mode >= 2 ? "model-based" : "the game's own law, measuring only");
     logline("Lane: hook in place, mode %g (%s)", p_mode, p_mode >= 2 ? "model-based" : "measure only");
 }
