@@ -307,12 +307,12 @@ BUTTONS = []
 # calls it "Standard (as shipped)" while nothing is changed.
 # The _OFF lists name the look-ahead keys too although STANDARD has them off already, so the old years do not depend on it.
 _OFF_1995 = {
-    "trueshift": {"eco_roll": 0, "lookahead": 0, "smooth_stop": 0},
+    "trueshift": {"eco_roll": 0, "lookahead": 0, "smooth_stop": 0, "eco_roll_cruise": 0},
     "cruise": {"curves": 0, "curve_brake": 0, "descent": 0, "emergency_hazards": 0, "acc_calm_cut_in": 0,
                "hill_start": 0, "predictive": 0, "aeb": 0},
 }
 _OFF_2000 = {
-    "trueshift": {"eco_roll": 0, "lookahead": 0},
+    "trueshift": {"eco_roll": 0, "lookahead": 0, "eco_roll_cruise": 0},
     "cruise": {"curves": 0, "curve_brake": 0, "emergency_hazards": 0, "predictive": 0, "aeb": 0},
 }
 # ~2010 is the shipped preset, so it overrides nothing
@@ -348,8 +348,11 @@ FEATURES = [
      "info": "Replaces the game's gear choice. Picks gears from engine torque, weight, slope and the route ahead. Keeps revs low, skips gears when it can, and learns from upshifts that did not pull. Change modes (Eco, Normal, Power, M) with the game's Adaptive Automatic Transmission Mode key.",
      "keys": [["trueshift", "enabled", 1, 0]]},
     {"id": "roll", "group": "Gearbox", "stage": "stable", "since": "2006", "label": "Eco-roll", "desc": "Coasts in neutral on gentle descents to save fuel", "needs": ["ts"],
-     "info": "On a gentle descent, with the pedal released or the cruise on, the gearbox goes to neutral and the truck coasts. With cruise it needs SteadyCruise. Not while the brake, engine brake or retarder is used. It shifts back in when the speed drifts from the set speed.",
+     "info": "On a gentle descent with the pedal released, the gearbox goes to neutral and the truck coasts. Never with the brake, engine brake or retarder. It shifts back in when you press the pedal or the speed drops too far.",
      "keys": [["trueshift", "eco_roll", 1, 0]]},
+    {"id": "rollc", "group": "Gearbox", "stage": "stable", "since": "2006", "label": "Eco-roll with cruise", "desc": "Also coasts while the cruise is on", "needs": ["roll", "cc"],
+     "info": "With cruise on, the truck coasts on gentle descents and stays close to the set speed: just before a roll the cruise lets the speed come about 2 km/h over, and the roll ends a little under it. Needs SteadyCruise.",
+     "keys": [["trueshift", "eco_roll_cruise", 1, 0]]},
     {"id": "look", "group": "Gearbox", "stage": "stable", "since": "2012", "label": "Gearbox looks ahead", "desc": "Plans gears for climbs and hilltops on your route", "needs": ["ts"],
      "info": "Reads climbs, hilltops and junctions on your navigation route. Holds a gear before a climb instead of shifting halfway up, and rolls over hilltops. Without a route it shifts as normal. Real trucks call this predictive shifting.",
      "keys": [["trueshift", "lookahead", 1, 0]]},
