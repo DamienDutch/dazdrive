@@ -667,7 +667,11 @@ static float cruise_body(void *ga, float dt, float pedal)
         if (vj == vj && ji.limit_ms > 0 && p_jn_cancel_s > 0 && !T.paused) {
             double now_c = wall_s();
             float t_to = fmaxf(ji.dist_m - (ji.roundabout ? 15 : 8), 0.0f) / fmaxf(kmh / 3.6f, 1.0f);
-            if (t_to <= p_jn_cancel_s && kmh > jn_orig_kmh + 3 && now_c - s_cb_on_since > 5 && now_c - s_jn_cancel_at > 20) {
+            // A roundabout is a hard rule (Damien 24-10: the cruise stayed on at one): no 5 s after switching on / 20 s between two cancels,
+            // only 1.5 s and 3 s (a second roundabout right after the first, or a Resume still on the approach).
+            bool free_to_cancel = ji.roundabout ? (now_c - s_cb_on_since > 1.5 && now_c - s_jn_cancel_at > 3)
+                                                : (now_c - s_cb_on_since > 5 && now_c - s_jn_cancel_at > 20);
+            if (t_to <= p_jn_cancel_s && kmh > jn_orig_kmh + 3 && free_to_cancel) {
                 s_jn_cancel_at = now_c;
                 *(unsigned char *)(g + GA_ON) = 0;
                 play_cue(CUE_CRUISE_DROP);
