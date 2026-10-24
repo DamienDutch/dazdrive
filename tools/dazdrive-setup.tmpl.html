@@ -13,6 +13,7 @@
 :root[data-theme="dark"]{--bg:#121615;--card:#1b201e;--fg:#e6ebe8;--mute:#9aa6a0;--line:#2f3633;--acc:#f08a3c;--accfg:#1a0d03;
   --on:#6cc28f;--onbg:#17291f;--sel:#2a211a;--warn:#e7a54f;--bad:#ff7b80;--code:#101413;--dash:#0c0f0e;--dashfg:#f1f3ef;--dashmute:#8e9994;--bar:rgba(27,32,30,.92);--glow:rgba(240,138,60,.3);color-scheme:dark}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 main{max-width:860px;margin:0 auto;padding:12px 16px 110px}
 h1{font-size:1.5rem;margin:0;letter-spacing:.01em;display:flex;align-items:center;gap:10px}
@@ -156,8 +157,10 @@ body.wiz #guide{display:none}
 body.wiz .bar{display:none}
 body.wiz main{padding-bottom:40px}
 body:not(.wiz) .go,body:not(.wiz) .go2{display:none}
-.go{margin-top:18px}
-.go2{margin-top:6px}
+.go{margin-top:26px;grid-template-columns:repeat(auto-fit,minmax(220px,380px));justify-content:center}
+.go .big{text-align:center;justify-items:center}
+.go2{margin-top:6px;grid-template-columns:repeat(auto-fit,minmax(220px,380px));justify-content:center}
+.go2 .big{text-align:center;justify-items:center}
 .wizhead{display:flex;justify-content:space-between;align-items:center;gap:6px;margin:14px 0 0;font-size:.85rem;color:var(--mute);flex-wrap:wrap}
 body:not(.wiz) .wizhead .wsteps{display:none}
 .wizhead .wsteps{display:flex;gap:4px;flex:1;flex-wrap:wrap}
@@ -231,6 +234,9 @@ details.more>summary{color:var(--acc);cursor:pointer}
 /* Extra info: extra text is hidden until the switch in the step bar is on (what must be seen, like stages and "needs", never is .x) */
 .x{display:none}
 body.explain .x{display:block}
+body.explain .nx{display:none}
+body.explain .tile .body{cursor:default}
+body.explain .tile .body:hover b{text-decoration:none}
 body.explain ul.facts.x{display:grid}
 body.explain .tiles{grid-template-columns:1fr}
 .xinfo{font-size:.85rem;color:var(--mute);margin-top:8px}
@@ -278,7 +284,7 @@ body.explain .tiles{grid-template-columns:1fr}
 
 <section class="card" data-step data-title="Features" id="s-feat">
 <h2><span class="n">2</span> Features <span class="opt">optional</span> <span class="count" id="count"></span></h2>
-<p class="mute">Click a name for details.</p>
+<p class="mute nx">Click a name for details.</p>
 <div id="tiles"></div>
 <div class="start go">
 <button class="big" type="button" data-go="s-tune"><b>Continue</b><small>Fine-tune the settings</small></button>
@@ -554,7 +560,7 @@ if (typeof document !== "undefined") (function () {
     });
     if (!selMod || selMod.off) { selMod = null; mods.forEach(function (m) { if (!selMod && !m.off) selMod = m; }); }
     mods.forEach(function (m) { m.side.setAttribute("aria-pressed", String(m === selMod)); m.panel.hidden = m !== selMod; });
-    $("offnote").textContent = off.length ? "Hidden because they are off: " + off.join(", ") + "." : "";
+    $("offnote").textContent = off.length ? "Not listed because they are off: " + off.join(", ") + ". Turn them on under Features." : "";
     $("preview").textContent = buildIni(D, era, vals);
     // Save and Copy stay clickable: with a bad field a click says why and jumps to it (a disabled button says nothing)
     ["save", "copy", "save2", "copy2"].forEach(function (id) { $(id).classList.toggle("blocked", bad > 0); });
@@ -671,7 +677,7 @@ if (typeof document !== "undefined") (function () {
       if (f.info) body.appendChild(el("span", "x xinfo", f.info + (f.since ? " Real trucks: since ~" + f.since + "." : "")));
       if (f.stage && f.stage !== "stable") body.appendChild(el("span", "stage " + f.stage, f.stage));
       var need = el("div", "need", ""); body.appendChild(need);
-      body.addEventListener("click", function () { openInfo(f); });
+      body.addEventListener("click", function () { if (!document.body.classList.contains("explain")) openInfo(f); });
       sw.addEventListener("click", function () { setFeature(f, featureState(f, vals) !== "true"); refresh(); });
       t.appendChild(body); t.appendChild(sw);
       tiles.push({ f: f, el: t, sw: sw, need: need });
