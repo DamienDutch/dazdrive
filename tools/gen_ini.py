@@ -27,7 +27,7 @@ VERSION = re.search(r'#define SUITE_VERSION "([^"]*)"', open(f"{ROOT}/core/suite
 STANDARD = {
     # Players: a quiet log plus incident files (what went wrong, with the 20 s before and 15 s after). At most ~6 MB in all:
     # the log 0.6 MB x (log, .1, previous session) and 4 MB of incidents. The developer's compiled defaults are 10x that.
-    "core": {"log_level": 0, "log_max_mb": 0.6, "incident_mb": 4},
+    "core": {"log_level": 2, "log_max_mb": 0.6, "incident_mb": 4},   # BETA: bug hunt on by default until the first full release (make_release refuses a full release with it)
     "trueshift": {
         "takeover_rpm": 0,       # players: by speed only (the developer's default takes over at 1250 rpm in any gear)
         "takeover_kmh": 10,      # players: the proven handover (the developer's compiled default takes over earlier, from 7 km/h, still being tested)
@@ -39,7 +39,7 @@ STANDARD = {
         "smooth_stop": 1,        # ON: clutch opens around idle when braking to a stop (no pushing down to 2 km/h); ridden
         "dash_letter": 1,        # ON: D/E/P/M on the dashboard instead of A
         "tones": 1,              # ON: short tone when the mode changes
-        "trace": 0,              # csv traces only for bug hunting (needs log_level 2 anyway)
+        "trace": 1,              # csv traces (need log_level 2): ON in the betas for bug reports, off in the first full release
     },
     "cruise": {
         "smart_overspeed_kmh": -1,  # players: the game's own overspeed setting
@@ -69,7 +69,7 @@ STANDARD = {
         "speed_limit_ahead": 0,  # OFF: only matters with ISA on
         "resume_to_limit": 0,    # OFF: only matters with ISA, changes what "resume" does
         "speed_limit_probe": 0,  # OFF: test-ride probe
-        "trace": 0,
+        "trace": 1,
     },
     "lane": {
         "mode": 0,               # OFF: the game's own lane keeping (mode 2 is tuned on one truck/wheel)
@@ -83,7 +83,7 @@ STANDARD = {
         "enabled": 0,            # OFF: crawl / maneuver mode is experimental
         "smooth_start": 0,       # OFF: the plugin's own clutch when pulling away is new (0.6.0-beta.2-dev), not ridden enough
         "start_on": 0,
-        "trace": 0,
+        "trace": 1,
     },
 }
 
@@ -256,9 +256,9 @@ SETUP_GROUPS = [
          "unit": "rpm", "min": 900, "max": 1600, "step": 50, "key": ["creep", "smooth_start_rpm_full"], "at": [1000, 1200, 1500],
          "follow": [[["creep", "smooth_start_rpm_light"], [150, 200, 300], 10]]}]},
     {"id": "log", "title": "Logging", "section": "core",
-     "tuning": [{"name": "Standard", "desc": "A quiet log, plus an incident file when something goes wrong", "over": {}},
-                {"name": "Bug hunt", "desc": "Also every shift in the log and large csv traces, only when asked", "over": {"core": {"log_level": 2}, "trueshift": {"trace": 1}, "cruise": {"trace": 1}, "creep": {"trace": 1}}}],
-     "about": ["🐞 When something goes wrong (the gearbox hunts, you fight a shift, the rpm hits the limiter, ...) the plugin saves the 20 s before and 15 s after in the incidents folder. Attach those files to a bug report.", "Bug hunt writes big csv files: only when asked."],
+     "tuning": [{"name": "Bug hunt", "desc": "Every shift in the log and csv traces: what the betas ship with, so a bug report has the data", "over": {}},
+                {"name": "Quiet", "desc": "A short log, plus an incident file when something goes wrong", "over": {"core": {"log_level": 0}, "trueshift": {"trace": 0}, "cruise": {"trace": 0}, "creep": {"trace": 0}}}],
+     "about": ["🐞 When something goes wrong (the gearbox hunts, you fight a shift, the rpm hits the limiter, ...) the plugin saves the 20 s before and 15 s after in the incidents folder. Attach those files to a bug report.", "Bug hunt writes csv files (a few MB each, the oldest part is dropped): it is on in the betas so a bug report has the data, and goes quiet in the first full release."],
      "knobs": [
         {"kind": "choice", "label": "How much goes into dazdrive.log", "help": "Incidents are saved separately at every level.",
          "key": ["core", "log_level"], "options": [["0", "Quiet"], ["1", "Also every shift"], ["2", "Also csv traces (large)"]]},

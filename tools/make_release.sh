@@ -54,6 +54,8 @@ mkdir -p "$pd"
 cp "$dll" "$out/plugins/dazdrive.dll"
 python3 "$here/gen_ini.py" standard -o "$pd/dazdrive.ini"
 python3 "$here/gen_ini.py" html -o "$pd/dazdrive-setup.html"
+# a full release (no -beta/-rc suffix) ships quiet: the betas ship with bug hunt on (log_level 2, csv traces) so reports have data
+case "$ver" in *-*) ;; *) grep -q '^log_level=0' "$pd/dazdrive.ini" || { echo "full release $ver but the standard ini has bug hunt on (log_level): switch it off in tools/gen_ini.py" >&2; exit 1; } ;; esac
 "$here/dazdrive-setup.sh" --base "$pd/dazdrive.ini" --check   # the terminal setup stays in the repo, not in the zip
 echo "== setup page self-test"
 if command -v chromium-browser >/dev/null 2>&1 || command -v chromium >/dev/null 2>&1 || command -v google-chrome >/dev/null 2>&1; then
