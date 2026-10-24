@@ -706,7 +706,9 @@ static float cruise_body(void *ga, float dt, float pedal)
         if (vj == vj && vj > 0) target = fminf(target, vj * 3.6f);
         // and no gas toward a junction or roundabout we have to slow down for anyway: the plan above allows speeds above ours far
         // from the entry, so the throttle came on and the brakes right after (Damien 12-10: "gas, then brake")
-        if (vj == vj && ji.limit_ms > 0 && kmh > ji.limit_ms * 3.6f + 1 && ji.dist_m < fmaxf(150.0f, 12 * kmh / 3.6f)) target = fminf(target, kmh);
+        // from 400 m (30 s) out, not 150 m: entering a town at 42 km/h the throttle came on towards a roundabout 400 m ahead (35 km/h plan) up to 51 km/h,
+        // the brakes and the cancel only 75 m before it (24-10, 1688-1713 s: "veel te hard")
+        if (vj == vj && ji.limit_ms > 0 && kmh > ji.limit_ms * 3.6f + 1 && ji.dist_m < fmaxf(400.0f, 30 * kmh / 3.6f)) target = fminf(target, kmh);
     }
     // The ACC's own target (vehicle ahead) always wins, also 0 = stop behind it. But someone cutting in or a
     // car that pulls away (the gap is opening) is no reason to slow down (Damien): then only hold the speed.
