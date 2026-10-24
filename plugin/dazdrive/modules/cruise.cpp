@@ -27,7 +27,7 @@
 #include <string.h>
 
 static float p_herm;
-static float p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_eco_k, p_power_k, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
+static float p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_eco_k, p_power_k, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
 static param g_params[] = {
@@ -35,6 +35,7 @@ static param g_params[] = {
     { "acc_short_s", &p_gap_s, 1.0f, "adaptive cruise gap in seconds when the game option is the short distance (20). Real trucks: 2.4-3.6 s (Detroit default 3.6), but the game is scaled: 1 s feels normal" },
     { "acc_middle_s", &p_gap_m, 1.25f, "... the middle distance (30)" },
     { "acc_long_s", &p_gap_l, 1.5f, "... the long distance (40)" },
+    { "crest_heavy_factor", &p_crest_heavy, 1.6f, "predictive cruise: the ease-off before a top with a descent after it is this many times larger at a gross weight of 40 t or more (linear from 20 t; Scania allows -8 %). 1 = same at every weight" },
     { "overspeed_cap_kmh", &p_os_cap, 5, "the extra speed we grant over the set speed (hills, descents, coasting boost, smart overspeed) stops this far over the speed limit (km/h; 0 = no cap). Only while the limit is known" },
     { "acc_fast_from_kmh", &p_acc_fast_from, 75, "ACC: from this speed (km/h) the time gap shrinks toward acc_fast_factor, so it follows closer on a motorway (country roads keep the full gap)" },
     { "acc_fast_full_kmh", &p_acc_fast_full, 95, "ACC: from this speed (km/h) the time gap is acc_fast_factor times the set gap; in between it changes smoothly" },
@@ -176,14 +177,26 @@ static float pitch_grade() { return tanf((float)T.place.orientation.pitch * 6.28
 // answer: scaled by mass as before (full at 40 t, 40 % at 12 t).
 static float s_mom_up;   // km/h over the set speed the PCC momentum aims for now (the game's overspeed braking must allow it)
 static int s_lead_near;  // a vehicle within ~4 s ahead (cruise_body): no PCC momentum, it would only be braked away
+// gross weight (kg), refreshed every 2 s; 30 t until the game tells
+static float load_mass()
+{
+    static float m = 30000; static double at = -10;
+    if (wall_s() - at > 2 || wall_s() < at) { at = wall_s(); float g = game_mass(); if (g == g && g > 500) m = g; }
+    return m;
+}
+// the ease-off before a top grows with the weight (Damien 25-10: a heavy load may drop a bit more)
+static float crest_mass_k()
+{
+    float f = fminf(1.0f, fmaxf(0.0f, (load_mass() - 20000) / 20000));
+    return 1 + (fmaxf(p_crest_heavy, 1.0f) - 1) * f;
+}
 static float band_up()
 {
     if (!(p_predict > 0 && p_band_up > 0) || s_lead_near) return 0;
     float need = g_pcc_need_kmh;
     float k = band_scale(T.cruise), room = overspeed_room(T.cruise);
     if (need == need) return fminf(fminf(p_band_up * k, need), room);
-    static float m = 30000; static double at = -10;
-    if (wall_s() - at > 2 || wall_s() < at) { at = wall_s(); float g = game_mass(); if (g == g && g > 500) m = g; }
+    float m = load_mass();
     return fminf(p_band_up * k * (0.4f + 0.6f * fminf(1.0f, fmaxf(0.0f, (m - 12000) / 28000))), room);
 }
 
@@ -606,7 +619,7 @@ static float cruise_body(void *ga, float dt, float pedal)
     int eco = a == a && a > 3.01f, power = a == a && a > 0 && a < 2.0f;
     s_mom_up = 0;
     if (p_predict > 0 && !power && route_ok()) {
-        float v = fmaxf(fabsf(T.speed), 5.0f), up = band_up(), down = (eco ? 5 : 3) * band_scale(T.cruise);
+        float v = fmaxf(fabsf(T.speed), 5.0f), up = band_up(), down = (eco ? 5 : 3) * band_scale(T.cruise) * crest_mass_k();
         float g_now = route_grade(0, 50), g_up = route_max_grade(v * 3, v * 15);
         float crest = route_crest_m(v * 12);
         float after = crest >= 0 ? route_min_grade(crest, crest + v * 15) : NAN;
