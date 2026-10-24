@@ -258,11 +258,11 @@ SETUP_GROUPS = [
         {"kind": "toggle", "label": "Pressing Set turns the retarder off", "help": "The game refuses cruise while the retarder lever is on.",
          "keys": [["cruise", "retarder_off_on_set", 1, 0]]}]},
     {"id": "lka", "off_when": ["lane", "mode", "0"], "title": "Lane centering", "section": "lane",
-     "tuning": [{"name": "Standard", "desc": "Tuned in test drives", "over": {}}],
+     "tuning": [{"name": "Standard", "desc": "Tones when it switches on, off or pauses", "over": {"lane": {"tone": 1}}},
+                {"name": "Quiet", "desc": "No tones", "over": {"lane": {"tone": 0}}}],
      "about": ["Off means the game's own lane assist."],
      "knobs": [
-        {"kind": "toggle", "label": "Tone when it switches on or off", "help": "Rising for on, falling for off.", "keys": [["lane", "tone", 1, 0]]},
-        {"kind": "toggle", "label": "Back on by itself after a lane change", "help": "When lane keeping went off while you used the turn signal.", "keys": [["lane", "indicator_resume", 1, 0]]}]},
+        {"kind": "toggle", "label": "Tones when it switches on, off or pauses", "help": "Rising for on, falling for off.", "keys": [["lane", "tone", 1, 0]]}]},
     {"id": "crawl", "off_when": ["creep", "enabled", "0"], "title": "Crawl mode", "section": "creep",
      "tuning": [{"name": "Standard", "desc": "5 km/h", "over": {}},
                 {"name": "Slow", "desc": "3 km/h, for tight docks", "over": {"creep": {"creep_kmh": 3}}}],
@@ -318,7 +318,7 @@ _ON_2015 = {"trueshift": {"lookahead": 1},
             "cruise": {"predictive": 1, "curves": 0, "curve_brake": 0, "own_acc": 1, "auto_hold": 1, "stop_go": 1, "min_kmh": 5}}
 _ON_2020 = {"trueshift": _ON_2015["trueshift"],
             "cruise": dict(_ON_2015["cruise"], curves=1, curve_brake=1, junctions=1), "creep": {"enabled": 1},
-            "lane": {"mode": 2, "min_kmh": 20, "keep_on": 1, "on_kmh": 39, "indicator_pause": 1}}
+            "lane": {"mode": 2, "tone": 1, "min_kmh": 20, "keep_on": 1, "on_kmh": 39, "indicator_pause": 1}}
 _ON_2024 = {"trueshift": _ON_2020["trueshift"], "cruise": dict(_ON_2020["cruise"], speed_limit=1, resume_to_limit=1),
             "creep": _ON_2020["creep"], "lane": _ON_2020["lane"]}
 ERAS = [

@@ -94,7 +94,7 @@ static param g_params[] = {
     { "on_kmh", &p_on_kmh, 39, "keep_on = 0: after dropping below min_kmh it only comes back from this speed" },
     { "indicator_pause", &p_ind_pause, 1, "1 = an indicator (one side, not the hazards) pauses the assist: the wheel is yours for the lane change; after the indicator goes off and a lane is found again (or 4 s) it comes back gently over 1 s. 0 = only no steering back against the indicator" },
     { "indicator_off", &p_ind_off, 1, "with indicator_pause: the indicator also switches the game's lane keeping itself off (silently), and it is switched on again after the lane change. Not when you switch it back on yourself meanwhile" },
-    { "indicator_resume", &p_ind_resume, 0, "with indicator_pause: lane keeping that went off during the lane change (above min_kmh) is switched on again afterwards (sets the game's lane-keeping flag). Off by default: the game does not switch it off for an indicator, and with keep_on not for speed, so it would mostly undo your own key press" },
+    { "indicator_resume", &p_ind_resume, 1, "with indicator_pause: lane keeping that went off during the lane change (above min_kmh) is switched on again afterwards (sets the game's lane-keeping flag). On by default; a key press of your own to switch lane keeping off still wins" },
     { "non_ffb_mode", &p_nonffb, 0, "without a force-feedback wheel (keyboard, gamepad, mouse steering: the game adds the assist to the steering angle instead of turning the wheel; recognized from the steering data in ~1 s): 0 = the game's own law (mode 2 is fitted on FFB wheels), 2 = mode 2 anyway (not tuned)" },
     { "tone", &p_tone, 1, "1 = a rising tone when lane keeping is switched on, a falling one when it goes off" },
 };
