@@ -75,7 +75,7 @@ static void use_car()  // a pickup-like car: 6 speeds, 450 Nm
 }
 static struct {
     int gear, target, state, parked, engaged; double shift_end; float v, mass, grade_pct, pedal, cc, brake; int force, ebrake, ret;
-    float cvar, shift_time, cruise_kmh; int eb_toggle; float eb_level, mass_seen;
+    float cvar, shift_time, cruise_kmh; int eb_toggle; float eb_level, mass_seen, thr_floor;
     double s;                 // distance driven (m)
     float (*road)(double s);  // grade (%) along the road, or NULL (scenario sets grade)
     int route_on, wet;
@@ -135,7 +135,7 @@ int gb_engage(void *, int g) { if (!M.parked) return 0; M.target = g; M.engaged 
 int game_engage_init() { return 1; }
 void gb_force(void *) { M.force = 1; }
 float gb_thr_in(void *) { return M.pedal; }
-float gb_thr_eff(void *) { return fmaxf(M.pedal, M.cc); }
+float gb_thr_eff(void *) { return fmaxf(fmaxf(M.pedal, M.cc), M.thr_floor); }  // thr_floor: the game's 0.08 at pedal 0 (24-10, 1831 s)
 float wheel_radius() { return RADIUS; }
 int gb_engine(void *, engine_info *e)
 {
@@ -385,6 +385,10 @@ static void set_param(const char *n, float v)
 static void c_hold80(double) { hold(80); }
 static void c_full_road(double) { M.pedal = 1; }
 static void c_half(double) { M.pedal = 0.5f; }
+// lift off at t=10 towards a junction 60 m ahead, full pedal again at t=14 (ride 24-10, 1830-1834 s: 14>16 while rolling out, then back)
+static void c_lift_jn(double t) { if (t < 10) hold(70); else if (t < 14) M.pedal = 0; else M.pedal = 1.0f; }
+static void c_lift_jn_bug(double t) { M.thr_floor = 0.08f; c_lift_jn(t); }
+static void c_lift_jn_free(double t) { if (t < 10) hold(70); else M.pedal = 0; }
 static void c_release(double t) { if (t < 10 || t > 50) hold(80); else M.pedal = 0; }
 static void c_cc80(double) { cruise(80); }
 static void c_car_light(double) { M.pedal = 0.35f; }
@@ -466,6 +470,9 @@ int main(int argc, char **argv)
     run("R1b same WITH route (climb ahead)", {40000, 80, 11, 150, 3, 0.5f, 0, -1, -1, r_climb, 1}, c_hold80);
     run("R2 40 t full pedal 3% to a top at 700 m, NO route", {40000, 55, 10, 70, 3, 0.5f, 0, -1, -1, r_crest, 0}, c_full_road);
     run("R2b same WITH route (top ahead)", {40000, 55, 10, 70, 3, 0.5f, 0, -1, -1, r_crest, 1}, c_full_road);
+    run("V1 12 t holds 70, lifts off at 10 s with a junction 60 m ahead, full pedal at 14 s", {12300, 70, 11, 25, 3, 0.5f, 0, -1, -1, r_flat, 1, 254}, c_lift_jn);
+    run("V3 same as V1 but the game reports throttle 0.08 at pedal 0, starting in 10", {12300, 70, 10, 25, 3, 0.5f, 0, -1, -1, r_flat, 1, 254}, c_lift_jn_bug);
+    run("V2 same, no junction, pedal stays off (rolls out)", {12300, 70, 11, 25, 3, 0.5f, 0, -1, -1, r_flat, 1, 0}, c_lift_jn_free);
     run("R3 26 t 0.5 pedal from 30, junction at 500 m, WITH route", {26000, 30, 6, 40, 3, 0.5f, 0, -1, -1, r_flat, 1, 500}, c_half);
     run("R4 40 t at 80, pedal released t=10-50 on -0.8% (eco-roll, Normal)", {40000, 80, 12, 70, 3, 0.5f, 0, -1, -1, r_down, 0}, c_release);
     run("R4b same in Power (no roll)", {40000, 80, 12, 70, 1.6667f, 0.5f, 0, -1, -1, r_down, 0}, c_release);

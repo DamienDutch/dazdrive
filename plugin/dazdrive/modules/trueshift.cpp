@@ -23,7 +23,7 @@
 // ---------------------------------------------------------------- settings
 
 static float p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, p_min_gap, p_dwell_ud, p_dwell_du,
-    p_max_skip, p_skip_acc, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
+    p_max_skip, p_skip_acc, p_skip_wait, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
     p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_wet, p_stop, p_tones, p_crest_band;
@@ -40,6 +40,7 @@ static param g_params[] = {
     { "dwell_down_up_s", &p_dwell_du, 2.0f, "after a downshift, no upshift for this long (unless clearly past the upshift point)" },
     { "max_skip", &p_max_skip, 2, "most gears an upshift may skip (0 = never skip)" },
     { "skip_accel", &p_skip_acc, 0.15f, "acceleration (m/s2) the skipped-to gear must still give" },
+    { "skip_wait_s", &p_skip_wait, 4, "pulling lightly: wait up to this long for the revs to build up so a skip can land (0 = shift one gear at once)" },
     { "hysteresis_rpm", &p_hyst, 50, "an upshift must land at least this far above the next downshift point" },
     { "kickdown_pedal", &p_kick_pedal, 0.92f, "pedal position for kickdown" },
     { "kickdown_rate", &p_kick_rate, 1.5f, "pedal speed (per second) that makes a full press a kickdown" },
@@ -137,6 +138,7 @@ static struct {
     const char *last_why;   // reason of the last shift we made
     double hold_until;
     int up_gear;            // last upshift we made, to judge whether it held
+    int up_tainted;         // that upshift landed in braking or a lift-off: whatever goes wrong with it is no lesson
     double up_at;
     float up_grade, up_kmh;
     float up_pred;          // throttle the new gear was expected to need
@@ -152,6 +154,7 @@ static struct {
     const char *why;        // reason of the last decision, for the trace
     int want, target;
     double blocked_log_at;
+    double skip_wait_at, skip_wait_last;    // when the early upshift started waiting for a skip (0 = not waiting), and the last frame it waited
     float up_pt, dn_pt, floor_rpm, eb_level;
     int eb_full;            // the game itself would shift into the engine-brake range now
     int letter_state;       // -1 unknown, 0 not found, 1 written
@@ -336,14 +339,15 @@ static int skip_target(int cur, float v, float f_res, float grade)
 
 // Gear below cur whose rpm at speed v lands nearest to target, without
 // landing above its own upshift point or near the limiter.
-static int pick_down(int cur, float v, float target)
+static int pick_down(int cur, float v, float target, bool free = false)
 {
     int best = cur;
     float best_err = 1e9f;
     for (int l = cur - 1; l >= 1; l--) {
         float rpm = rpm_at(l, v);
         if (rpm > S.eng.rpm_limit * 0.93f) break;
-        if (rpm > up_pt(l) - p_hyst && l < cur - 1) break;
+        // while braking nobody shifts up, so the upshift point means nothing there: only the limiter and the eco upshift point + 150 count
+        if (l < cur - 1 && rpm > (free ? fminf(S.eng.rpm_limit * 0.85f, eco_up(l) + 150) : up_pt(l) - p_hyst)) break;
         float err = fabsf(rpm - target);
         if (err < best_err) { best_err = err; best = l; }
     }
@@ -623,6 +627,9 @@ static void refresh(void *self)
         else S.strain = fmaxf(0, S.strain - 0.05f * (float)dt);
         if (now - S.up_at > 30 && S.strain < 0.2f) up_held();
     } else S.strain = 0;
+    // An upshift that landed in braking or a lift-off (Damien 24-10, 1831 s and 3543 s) fails for that, not for lack of pull:
+    // no lesson from it (one such lesson held back 5 -> 6 at full throttle on a 3 % climb two minutes later).
+    if (S.up_gear && now - S.up_at < 6 && (fmaxf(T.in_brake, T.eff_brake) > 0.05f || (T.accel < -1.0f && pedal < 0.1f))) S.up_tainted = 1;
 
     // Engine brake / retarder strength 0..1.
     float e = 0;
@@ -851,6 +858,8 @@ static int decide_gear(void *self, const char **why)
     float rpm = rpm_at(cur, v);
     float lim = S.eng.rpm_limit;
     float thr = S.thr;
+    // lift-off by the pedal itself: the game's throttle reads 0.08 at pedal 0 (24-10, 1831 s), which hid the coast and the junction check
+    int coast_p = (T.cruise > 0.5f ? thr : clampf(T.in_thr, 0, 1)) < 0.05f;
     double since = now - S.shift_at;
     int kick = S.kick_until > now;
     S.up_pt = up_pt(cur);
@@ -904,7 +913,7 @@ static int decide_gear(void *self, const char **why)
     // the pedal released towards it): ts3d held 8 at 1500 rpm for a minute on a
     // road with a prefab every ~130 m while Damien pulled away gently.
     float vb = rk ? route_curve_speed(2.5f, 0.8f) : NAN;
-    int junction_near = jn >= 0 && jn < fmaxf(150, v * 8) && v * 3.6f > 25 && ((vb == vb && vb < v - 2.5f) || thr < 0.05f);
+    int junction_near = jn >= 0 && jn < fmaxf(150, v * 8) && v * 3.6f > 25 && ((vb == vb && vb < v - 2.5f) || coast_p);
     // Slowing for a junction / roundabout / bend on the route: braking
     // downshifts come sooner, so the gear fits pulling out of it (Damien 11-10).
     float vs = rk && jn >= 0 && jn < fmaxf(150, v * 10) ? route_curve_speed(2.5f, 0.3f) : NAN;  // gentle 0.3 m/s2: will we have to slow down?
@@ -922,7 +931,7 @@ static int decide_gear(void *self, const char **why)
         int full = p_eb_down > 0 || (p_eb_down < 0 && S.eb_full);
         float keep = full ? lo : lerpf(fminf(p_eb_light, lo), lo, S.eb_level);
         if (rpm < keep - 50 && cur > 1 && since > p_min_gap) {
-            int l = pick_down(cur, v, full ? 0.5f * (lo + hi) : fminf(keep + 150, hi - 100));
+            int l = pick_down(cur, v, full ? 0.5f * (lo + hi) : fminf(keep + 150, hi - 100), true);
             // two at a time when the second still fits under the brake range: every downshift costs a throttle blip
             // from the game (Damien 11-10: "gas and engine brake at once", 9->8->...->2 one by one)
             if (p_eb_skip > 0 && l == cur - 1 && cur > 2) {
@@ -942,7 +951,7 @@ static int decide_gear(void *self, const char **why)
         if (slow_ahead) floor = fmaxf(floor, S.plateau + 200);
         if (rpm < floor && cur > 1 && since > 0.5) {
             // land high, so that fewer downshifts are needed on the way down
-            int l = pick_down(cur, v, eco_up(1) - 200);
+            int l = pick_down(cur, v, eco_up(1) - 200, true);
             if (l < cur) { *why = slow_ahead ? "braking (junction ahead)" : "braking"; return l; }
         }
         *why = "braking hold";
@@ -1020,7 +1029,7 @@ static int decide_gear(void *self, const char **why)
 
     if (junction_near) { *why = "junction ahead"; return cur; }
 
-    int coast = thr < 0.05f;
+    int coast = coast_p;
     int skips = skip_allowed();
     float grade = sinf(S.grade_deg * 0.0174533f);
     // No skipping right after taking over from the game (it may have started
@@ -1065,7 +1074,27 @@ static int decide_gear(void *self, const char **why)
             if (h > cur + 1 && (grade > 0.02f || (force_at(h, v2, 0.85f) - f_res) / S.mass < 0)) break;
             best = h;
         }
-        if (best > cur) { *why = best - cur > 1 ? "up early skip" : "up early"; return best; }
+        // Light pull and no skip fits yet: do not take the single early upshift but keep the gear and let the revs build up past the
+        // upshift point, until a skip lands above the downshift point (Damien 24-10: wait a bit longer when pulling away lightly,
+        // then skip). The rpm path below makes the shift. At most skip_wait_s, at most 250 rpm over the upshift point, never near the limiter.
+        bool wait = false;
+        float skip_rpm = 0;
+        if (best == cur + 1 && skips > 0 && p_skip_wait > 0 && cur + 2 <= n && grade <= 0.02f && T.accel > 0.05f && v > 1) {
+            int h = cur + 2;
+            float rc = rpm_at(cur, v2), rh = rpm_at(h, v2);
+            if (S.skip_wait_at != 0 && now - S.skip_wait_last > 1.0) S.skip_wait_at = 0;   // an old wait, not this one
+            float low = fmaxf(fmaxf(dn_pt(h), base_dn(h)) + p_hyst, idle_rpm() + 350);
+            skip_rpm = rh > 1 ? fmaxf(low * rc / rh, S.up_pt + 10) : 0;   // the rpm in this gear from which the skip lands on `low`
+            float t_to = (skip_rpm - rpm) / fmaxf(1.0f, rpm * T.accel / v);
+            if (skip_rpm > 0 && skip_rpm <= fminf(S.up_pt + 250, 0.85f * S.eng.rpm_limit) && t_to <= p_skip_wait &&
+                (S.skip_wait_at == 0 || now - S.skip_wait_at <= p_skip_wait)) {
+                if (S.skip_wait_at == 0) S.skip_wait_at = now;
+                S.skip_wait_last = now;
+                wait = true;
+            }
+        }
+        if (wait && rpm < skip_rpm) { *why = "skip wait"; return cur; }
+        if (best > cur && !wait) { S.skip_wait_at = 0; *why = best - cur > 1 ? "up early skip" : "up early"; return best; }
     }
 
     // Upshift on rpm: above the upshift point, the new gear must stay above its
@@ -1081,6 +1110,11 @@ static int decide_gear(void *self, const char **why)
     float f_up = fmaxf(f_res, resist_grade(v, g_up));
     float v2u = fmaxf(0.5f, v - f_up / S.mass * S.eng.shift_time);
     if (cur < n && rpm > S.up_pt + (coast ? 200 : 0)) {
+        // Rolling out or lifting towards a junction: no upshift, it only ends in a shift back (Damien 24-10, 1831 s and 3421 s). Not with
+        // the pedal at 0.5 or going up: whoever wants power at a junction gets it.
+        bool wants_power = clampf(T.in_thr, 0, 1) >= 0.5f || thr >= 0.5f || thr > S.demand + 0.05f;
+        bool jn_soon = jn >= 0 && jn < fmaxf(50.0f, v * 3);
+        if (!wants_power && (T.accel < -0.2f || jn_soon) && rpm < lim * 0.9f) { *why = "up veto (slowing)"; return cur; }
         if (S.shift_dir < 0 && since < p_dwell_du && rpm < S.up_pt + 100) { *why = "anti-hunt (up)"; return cur; }
         float a_req = lerpf(0.02f, 0.05f, S.demand);
         if (g_up > 2 && !coast) a_req = fmaxf(a_req, lerpf(0.05f, 0.12f, clampf((g_up - 2) / 3, 0, 1)));
@@ -1106,7 +1140,7 @@ static int decide_gear(void *self, const char **why)
             }
             best = h;
         }
-        if (best > cur) { *why = best - cur > 1 ? "up skip" : "up"; return best; }
+        if (best > cur) { S.skip_wait_at = 0; *why = best - cur > 1 ? "up skip" : "up"; return best; }
         if (now - S.blocked_log_at > 10) {
             S.blocked_log_at = now;
             logline("up blocked in %d: %s (%.0f km/h, %.0f rpm, demand %.2f, grade %.1f%%, %.1f t)", cur, block,
@@ -1164,7 +1198,7 @@ static void note_gear_change(void *self)
         // A climb that started after the upshift is terrain, not a bad upshift.
         // (within 5 s it counts anyway: a climb that went on steepening right after it is what the upshift should have seen)
         int asked = S.thr >= 0.5f, same_road = grade_pct() - S.up_grade < 1.0f || now - S.up_at < 5;
-        if (now - S.up_at < 25 && why && same_road &&
+        if (now - S.up_at < 25 && why && same_road && !S.up_tainted &&
             (hint || !strcmp(why, "no pull") || !strcmp(why, "lugging") ||
              (asked && (!strcmp(why, "down") || !strcmp(why, "down skip")))))
             up_failed(why);
@@ -1172,6 +1206,7 @@ static void note_gear_change(void *self)
     }
     if (!hint && why && g > prev && (!strncmp(why, "up", 2))) {
         S.up_gear = g;
+        S.up_tainted = 0;
         S.up_at = now;
         S.up_grade = grade_pct();
         S.up_kmh = v * 3.6f;
