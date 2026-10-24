@@ -109,7 +109,7 @@ struct telemetry {
     float rpm, in_thr, eff_thr, in_brake, eff_brake, in_clutch, eff_clutch, speed, cruise, speed_limit, air_psi;
     float in_steer;    // steering input -1..1, + = left (counterclockwise)
     float yaw;         // yaw rate, rotations per second, + = turning left
-    int gear, dgear, motor_brake, parking_brake, engine_on, trailer, paused, wipers, air_warning;
+    int gear, dgear, motor_brake, parking_brake, engine_on, trailer, paused, air_warning;
     unsigned retarder, retarder_steps;
     scs_value_dplacement_t place;
     scs_value_fvector_t acc;

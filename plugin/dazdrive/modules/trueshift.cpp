@@ -26,7 +26,7 @@ static float p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, 
     p_max_skip, p_skip_acc, p_skip_wait, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
-    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_wet, p_stop, p_tones, p_crest_band;
+    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_stop, p_tones, p_crest_band;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = TrueShift on, 0 = the game's own automatic" },
@@ -92,7 +92,6 @@ static param g_params[] = {
     { "air_charge_rpm", &p_air_rpm, 1200, "the rpm kept while charging (no upshift below it)" },
     { "no_creep", &p_no_creep, 1, "1 = with crawl switched off the truck never creeps on the clutch at idle: pedals free below 8 km/h opens the clutch" },
     { "smooth_stop", &p_stop, 1, "1 = when braking to a stop the clutch opens around idle +150 rpm (more when braking harder) instead of pushing to ~2 km/h" },
-    { "wet_wipers", &p_wet, 0, "1 = wipers on means a slippery road: start a gear higher, shift up earlier in low gears, softer kickdown. Off by default: with automatic wipers the lever is always on, and the game's traction control handles grip" },
     { "trace", &p_trace, 1, "1 = write trueshift.csv (10 per second) for analysis" },
 };
 
@@ -175,7 +174,6 @@ static struct {
     float roll_kmh;         // speed when the roll started
     int roll_exit;          // gear to engage after a roll (kept as target until it is in)
     double roll_exit_at;
-    int wet;                // wipers on
     double pedal_on_at;     // last time the pedal was pressed
     const char *unsupported; // why this truck is left to the game's own automatic (NULL = fine)
     float rpm_odd_s;        // seconds the rpm did not follow the speed model at all (torque converter?)
@@ -293,8 +291,7 @@ static float pw_k() { return smooth(p_power_from, p_power_full, S.demand); }
 static float pw_mid() { return 0.5f * (S.eng.range[R_POWER][0] + S.eng.range[R_POWER][1]); }
 static float up_pt(int g)
 {
-    // wet: -100 rpm in gears 1-3, fading out by gear 7 (ts3b: a step at gear 5 felt like on/off)
-    float mo = mode_rpm() - (S.wet ? 100 * clampf((7 - g) / 4.0f, 0, 1) : 0);
+    float mo = mode_rpm();
     return fminf(lerpf(eco_up(g) + mo, S.eng.range[R_POWER][1] + 0.5f * mo, pw_k()), S.eng.rpm_limit * 0.94f);
 }
 // Light-load downshift point: below the plateau, so that an early upshift to
@@ -909,7 +906,7 @@ static int decide_gear(void *self, const char **why)
 
     // not right after a launch shift (ts4o: 1->3 by the game at 10 km/h with the pedal floored, then 3->2->3)
     if (kick && rpm < S.eng.range[R_POWER][0] + 100 && cur > 1 && since > 2.0 && clutch_seen() < 0.1f && v * 3.6f > 15) {
-        int l = pick_down(cur, v, pw_mid() + (S.wet ? lerpf(-150, 100, clampf((cur - 4) / 4.0f, 0, 1)) : 100));
+        int l = pick_down(cur, v, pw_mid() + 100);
         // never into a gear that is at its upshift point a moment later (ts3a: 3->2->3 at 13 km/h)
         while (l < cur && rpm_at(l, v) > S.eng.range[R_POWER][1] - 100) l++;
         if (l < cur) { *why = "kickdown"; return l; }
@@ -1461,20 +1458,11 @@ static int stub_start(void *self)
     }
     float thr = clampf(T.in_thr, 0, 1);
     int pick = launch_pick(stock, thr);
-    // Wet road (wipers on): one gear higher, less torque at the wheels, as long
-    // as the clutch would not slip much longer than allowed.
-    if (S.wet && pick < stock + 1 && pick < n_gears() && wheel_radius() > 0.1f && S.eng_ok) {
-        int g = pick + 1;
-        float r = wheel_radius(), ratio = T.ratio[g - 1] * T.diff;
-        float v_lock = p_launch_rpm / (ratio * 9.5493f) * r;
-        float a = (S.eng.torque * p_launch_torque * ratio * p_eta / r - resist(0)) / S.mass;
-        if (a > 0 && v_lock / a <= p_slip_s * 1.6f) pick = g;
-    }
     static double logged_at;
     if (sim_s() - logged_at > 2) {
         logged_at = sim_s();
-        logv(1, "start gear %d (game %d), %.1f t, grade %.1f%%, pedal %.2f%s", pick, stock, S.mass / 1000, grade_pct(),
-                thr, S.wet ? ", wet" : "");
+        logv(1, "start gear %d (game %d), %.1f t, grade %.1f%%, pedal %.2f", pick, stock, S.mass / 1000, grade_pct(),
+                thr);
     }
     S.commanded = pick;
     S.cmd_why = pick == stock ? "start" : "start, lowered";
@@ -1519,7 +1507,7 @@ static void ts_start()
         g_trace = open_out("trueshift.csv", "w");
         if (g_trace)
             fputs("t,kmh,rpm,gear,target,want,why,pedal,thr_eff,brake,mbrake,retarder,cruise_kmh,grade_pct,mass_t,"
-                  "demand,up_pt,dn_pt,hold,kick,accel,rpm_k,clutch,mode,thr,f_need_kn,floor,ours,eb_level,f_bias_kn,strain,learn_rpm,roll,route,crest_m,junction_m,idle,wet\n", g_trace);
+                  "demand,up_pt,dn_pt,hold,kick,accel,rpm_k,clutch,mode,thr,f_need_kn,floor,ours,eb_level,f_bias_kn,strain,learn_rpm,roll,route,crest_m,junction_m,idle\n", g_trace);
     }
 }
 
@@ -1618,8 +1606,6 @@ static void ts_frame()
         if (wall_s() - at > 0.5 || wall_s() < at) { at = wall_s(); g_pcc_need_kmh = g_active && !S.unsupported ? climb_need_kmh() : NAN; }
     }
     dash_letter();
-    int wet = p_wet > 0 && T.wipers;
-    if (wet != S.wet) { S.wet = wet; logv(1, "wipers %s: %s road behavior", wet ? "on" : "off", wet ? "wet" : "dry"); }
     // Idle rpm: standing, engine on for 5 s, pedal and throttle released, rpm
     // steady for 1 s. Starts from idle_rpm in the ini, never from one sample:
     // ride ts3b took the start-up flare (1294 rpm) as idle, and every low-speed
@@ -1652,12 +1638,12 @@ static void ts_frame()
     g_trace_at = now;
     double sim = sim_s();
     fprintf(g_trace, "%.2f,%.1f,%.0f,%d,%d,%d,%s,%.2f,%.2f,%.2f,%d,%u,%.0f,%.2f,%.2f,%.2f,%.0f,%.0f,%d,%d,%.2f,%.3f,%.2f,"
-            "%c,%.2f,%.1f,%.0f,%d,%.2f,%.2f,%.2f,%.0f,%d,%d,%.0f,%.0f,%.0f,%d\n",
+            "%c,%.2f,%.1f,%.0f,%d,%.2f,%.2f,%.2f,%.0f,%d,%d,%.0f,%.0f,%.0f\n",
             now, fabsf(T.speed) * 3.6f, T.rpm, T.gear, S.target, S.want, S.why ? S.why : "", T.in_thr,
             T.eff_thr, T.in_brake, T.motor_brake, T.retarder, T.cruise * 3.6f, grade_pct(), S.mass / 1000, S.demand,
             S.up_pt, S.dn_pt, S.hold_until > sim, S.kick_until > sim, T.accel, S.rpm_k, T.eff_clutch,
             mode_letter[S.mode], S.thr, S.f_need / 1000, S.floor_rpm, S.ours, S.eb_level, S.f_bias / 1000, S.strain, learned().rpm, S.rolling, route_ok(),
-            route_crest_m(2000), route_junction_m(), idle_rpm(), S.wet);
+            route_crest_m(2000), route_junction_m(), idle_rpm());
     static double flushed;
     if (now - flushed > 2) { flushed = now; fflush(g_trace); csv_cap(&g_trace, "trueshift.csv"); }
 }

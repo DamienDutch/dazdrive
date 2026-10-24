@@ -196,7 +196,6 @@ void telemetry_register(const scs_telemetry_init_params_v101_t *p)
     REG(SCS_TELEMETRY_TRUCK_CHANNEL_parking_brake, SCS_VALUE_TYPE_bool, ch_bool, &T.parking_brake);
     REG(SCS_TELEMETRY_TRUCK_CHANNEL_engine_enabled, SCS_VALUE_TYPE_bool, ch_bool, &T.engine_on);
     REG(SCS_TELEMETRY_TRUCK_CHANNEL_retarder_level, SCS_VALUE_TYPE_u32, ch_u32, &T.retarder);
-    REG(SCS_TELEMETRY_TRUCK_CHANNEL_wipers, SCS_VALUE_TYPE_bool, ch_bool, &T.wipers);
     REG(SCS_TELEMETRY_TRUCK_CHANNEL_brake_air_pressure, SCS_VALUE_TYPE_float, ch_float, &T.air_psi);
     REG(SCS_TELEMETRY_TRUCK_CHANNEL_brake_air_pressure_warning, SCS_VALUE_TYPE_bool, ch_bool, &T.air_warning);
     REG(SCS_TELEMETRY_TRUCK_CHANNEL_navigation_speed_limit, SCS_VALUE_TYPE_float, ch_float, &T.speed_limit);

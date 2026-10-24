@@ -91,7 +91,7 @@ static struct {
     float cvar, shift_time, cruise_kmh; int eb_toggle; float eb_level, mass_seen, thr_floor; int hint;   // hint: a shift-hint press the game's handler turns into target +-1 before its update
     double s;                 // distance driven (m)
     float (*road)(double s);  // grade (%) along the road, or NULL (scenario sets grade)
-    int route_on, wet;
+    int route_on;
     double junction_s;        // a junction at this distance (0 = none)
 } M;
 
@@ -240,7 +240,7 @@ static void tick(double dt, int stats)
     if (rpm < idle) rpm = idle;   // clutch slips below idle
     T.rpm = rpm; T.speed = M.v; T.in_thr = M.pedal; T.eff_thr = fmaxf(M.pedal, M.cc);
     T.in_brake = M.brake; T.eff_brake = M.brake; T.cruise = M.cruise_kmh / 3.6f;
-    T.motor_brake = M.ebrake; T.retarder = M.ret; T.eff_clutch = M.state ? 1 : 0; T.wipers = M.wet;
+    T.motor_brake = M.ebrake; T.retarder = M.ret; T.eff_clutch = M.state ? 1 : 0;
     T.engine_on = 1; T.gear = M.gear; T.dgear = M.gear;
     if (M.road) M.grade_pct = M.road(M.s);
     telemetry_frame();
@@ -295,7 +295,7 @@ static void tick(double dt, int stats)
 }
 
 struct setup { float mass, v0; int g0; double secs; float cvar = 3, shift_time = 0.5f, mass_seen = 0; int eb_toggle = -1; float eb_level = -1;
-               float (*road)(double) = NULL; int route = 0; double junction = 0; int wet = 0; };
+               float (*road)(double) = NULL; int route = 0; double junction = 0; };
 static int rolls; static double roll_time, min_kmh;
 
 static void run(const char *name, setup su, void (*ctl)(double))
@@ -304,7 +304,7 @@ static void run(const char *name, setup su, void (*ctl)(double))
     memset(&M, 0, sizeof M);
     M.mass = su.mass; M.gear = M.target = su.g0; M.cvar = su.cvar; M.shift_time = su.shift_time;
     M.eb_level = su.eb_level; M.eb_toggle = su.eb_toggle; M.mass_seen = su.mass_seen;
-    M.road = su.road; M.route_on = su.route; M.junction_s = su.junction; M.wet = su.wet;
+    M.road = su.road; M.route_on = su.route; M.junction_s = su.junction;
     M.v = 0; tick(1 / 60.0, 0);  // register the gear at standstill (no hint)
     M.state = 0; M.gear = M.target = su.g0; M.force = 0;
     M.v = su.v0 / 3.6f; tick(1 / 60.0, 0);
@@ -578,8 +578,7 @@ int main(int argc, char **argv)
     // The start-gear checks are from a standstill (else the engage-at-speed path answers): L1/L2 end at ~70 km/h.
     // s_start reads the pedal from T (set by the physics step only), so set it here too.
     M.v = 0; T.speed = 0; T.in_thr = 0.5f;
-    M.wet = 1; T.wipers = 1; m_trueshift.frame(); M.mass = 26000; M.grade_pct = 0; M.pedal = 0.5f; st = (float)s_start(SELF); printf("\nstart gear 26 t flat WET: %g (game 1)\n", st);
-    M.wet = 0; T.wipers = 0; m_trueshift.frame(); st = (float)s_start(SELF); printf("start gear 26 t flat dry: %g (game 1)\n", st);
+    m_trueshift.frame(); M.mass = 26000; M.grade_pct = 0; M.pedal = 0.5f; st = (float)s_start(SELF); printf("\nstart gear 26 t flat: %g (game 1)\n", st);
     M.mass = 40000; M.grade_pct = 8; M.pedal = 0.5f; st = (float)s_start(SELF); printf("\nstart gear 40 t on 8%%: %g (game 1)\n", st);
     M.mass = 10000; M.grade_pct = 0; st = (float)s_start(SELF); printf("start gear 10 t flat: %g (game 4)\n", st);
     M.mass = 10000; M.grade_pct = 10; st = (float)s_start(SELF); printf("start gear 10 t on 10%%: %g (game 4)\n", st);
@@ -605,7 +604,7 @@ int main(int argc, char **argv)
     run("C10b same from 55 km/h in 13", {32500, 55, 13, 45, 10.0f, 1.0f, 0, -1, -1, r_climb10, 1}, c_cc63);
     // start gear of the Renault box by load (24-10: 36.7 t started in 2 and climbed 2>3>4>5 in 7 s)
     {
-        M.v = 0; T.speed = 0; M.grade_pct = 0; M.wet = 0; T.wipers = 0;
+        M.v = 0; T.speed = 0; M.grade_pct = 0;
         for (float tons : { 16.4f, 25.0f, 34.6f, 36.7f, 42.0f })
             for (float ped : { 0.06f, 0.25f, 0.6f }) {
                 M.mass = tons * 1000; M.pedal = ped; T.in_thr = ped; m_trueshift.frame();

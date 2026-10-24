@@ -34,7 +34,6 @@ STANDARD = {
         "handback_kmh": 6,
         "eco_roll": 1,           # ON: neutral roll on gentle descents, with its strict limits (eco_roll_max_decel, never with brake/retarder/engine brake); ridden
         "lookahead": 0,          # off in the shipped preset: the ~2010 year of the setup page; the page turns it on from ~2015
-        "wet_wipers": 0,         # OFF: automatic wipers keep the lever on, so it was always "wet"; traction control does grip
         "no_creep": 1,           # ON: with crawl off the truck never creeps on the clutch at idle (the stock automatic did)
         "smooth_stop": 1,        # ON: clutch opens around idle when braking to a stop (no pushing down to 2 km/h); ridden
         "dash_letter": 1,        # ON: D/E/P/M on the dashboard instead of A
@@ -225,8 +224,6 @@ SETUP_GROUPS = [
                                                       ["2", "Assisted: also kickdown, and downshifts when you stop"]]},
         {"kind": "range", "label": "Gear held after + / −", "help": "Seconds a gear you picked stays in. 0 = off.",
          "unit": "s", "min": 0, "max": 30, "step": 1, "key": ["trueshift", "hint_hold_s"]},
-        {"kind": "toggle", "label": "Wipers on means a wet road", "help": "Softer start, earlier upshifts in low gears, softer kickdown.",
-         "keys": [["trueshift", "wet_wipers", 1, 0]]},
         {"kind": "toggle", "label": "Show the mode on the dashboard", "help": "D, E, P or M instead of the game's A.",
          "keys": [["trueshift", "dash_letter", 1, 0]]},
         {"kind": "toggle", "label": "Tone when the mode changes", "help": "Eco low, Normal middle, Power rising, M two short.",
@@ -308,12 +305,12 @@ BUTTONS = []
 # calls it "Standard (as shipped)" while nothing is changed.
 # The _OFF lists name the look-ahead keys too although STANDARD has them off already, so the old years do not depend on it.
 _OFF_1995 = {
-    "trueshift": {"eco_roll": 0, "lookahead": 0, "smooth_stop": 0, "wet_wipers": 0},
+    "trueshift": {"eco_roll": 0, "lookahead": 0, "smooth_stop": 0},
     "cruise": {"curves": 0, "curve_brake": 0, "descent": 0, "emergency_hazards": 0, "acc_calm_cut_in": 0,
                "hill_start": 0, "predictive": 0, "aeb": 0},
 }
 _OFF_2000 = {
-    "trueshift": {"eco_roll": 0, "lookahead": 0, "wet_wipers": 0},
+    "trueshift": {"eco_roll": 0, "lookahead": 0},
     "cruise": {"curves": 0, "curve_brake": 0, "emergency_hazards": 0, "predictive": 0, "aeb": 0},
 }
 # ~2010 is the shipped preset, so it overrides nothing
