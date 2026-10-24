@@ -267,6 +267,38 @@ static int follow_tests()
     return bad != 0;
 }
 
+// An S-bend at speed (24-10, 919 s: the curvature +0.0065 -> -0.005 within 1.2 s at 85 km/h, hands off, learned scale 1.27): peak offset and
+// heading error, ceiling frames of the request, and whether the swings die out.
+struct sres { double max_o1, max_o2; int sat, zc_late; };
+static sres run_sbend(const cfg &c, const pp &m, float kmh, float lscale, int guard)
+{
+    apply(c); vkmh = kmh; rng = 7; p_learn = 1; L_cur.s = lscale; L_base = L_cur; p_runaway = guard;
+    pl p = {0, 0, 0, 0, 0}; float dt = DTS; sres r = {}; int hold = 0;
+    for (int i = 0; i < (int)(30 / dt); i++) {
+        t_now = i * dt; float o3 = 0;
+        if (t_now >= 8 && t_now < 9.2) o3 = 0.0065f * sinf((float)(M_PI * (t_now - 8) / 1.2));
+        else if (t_now >= 9.2 && t_now < 10.4) o3 = -0.005f * sinf((float)(M_PI * (t_now - 9.2) / 1.2));
+        step(p, m, dt, o3, 0, 0, 0.0006f * gauss());
+        if (t_now > 7) { r.max_o1 = fmax(r.max_o1, fabs(p.o1)); r.max_o2 = fmax(r.max_o2, fabs(p.o2)); if (fabs(g_u) > 0.95f) r.sat++; }
+        if (t_now > 16 && fabs(p.o1) > 0.1) { int sg = p.o1 > 0 ? 1 : -1; if (hold && sg != hold) r.zc_late++; hold = sg; }
+    }
+    return r;
+}
+static int sbend_tests()
+{
+    printf("S-bend at speed (curvature +0.0065 -> -0.005 in 1.2 s), hands off: peak |o1| m / peak |o2| rad / frames at the ceiling / swings after 16 s\n");
+    struct pv { const char *n; float c, gA, tw, dl, db; };
+    const pv pls[] = { { "nominal", 0.19f, 1.0f, 0.3f, 0.0f, 0 }, { "ts4w-like gA 1.5", 0.17f, 1.5f, 0.05f, 0.33f, 0.0015f }, { "strong wheel gA 2.5", 0.19f, 2.5f, 0.05f, 0.3f, 0.007f }, { "crash fit gA 2.95", 0.17f, 2.95f, 0.05f, 0.33f, 0.010f } };
+    const cfg c2 = { "mode 2", 2 };
+    for (auto &q : pls) for (float kmh : { 70.f, 85.f }) {
+        pp m; m.c = q.c; m.gA = q.gA; m.tw = q.tw; m.delay = q.dl; m.db = q.db;
+        printf("%-22s %3.0f km/h |", q.n, kmh);
+        for (float sc : { 0.87f, 1.0f, 1.27f }) { sres a = run_sbend(c2, m, kmh, sc, 0); printf(" s%.2f: %.2f/%.3f/%3d/%d |", sc, a.max_o1, a.max_o2, a.sat, a.zc_late); }
+        sres g = run_sbend(c2, m, kmh, 1.27f, 1); printf(" s1.27+guard (game law): %.2f/%.3f/%3d/%d\n", g.max_o1, g.max_o2, g.sat, g.zc_late);
+    }
+    return 0;
+}
+
 // ---- learner / anti-sway tests (docs/lka-learn.md)
 struct lres { double rms_all, rms_tail, zc_tail, maxe, usable; float s, df, cap, gA, dl, c; int upd, sw, rolled; double win[12]; double first_sw; };
 // hands off on a wandering road for T s; drvmode 3 = the driver weaves (hand on the wheel) from T*0.45 for 120 s
@@ -477,6 +509,7 @@ int main(int argc, char **argv)
     // name=value arguments override mode-2 ini parameters (for tuning): run_lane.sh bend_assist=2.9 heading_gain=12
     { int k = 0; for (int i = 1; i < argc; i++) { char *e = strchr(argv[i], '='); if (e && novr < 32) { *e = 0; ovr[novr].k = argv[i]; ovr[novr++].v = atof(e + 1); } else argv[k++ + 1] = argv[i]; } argc = k + 1; }
     if (argc > 1 && !strcmp(argv[1], "follow")) return follow_tests();
+    if (argc > 1 && !strcmp(argv[1], "sbend")) return sbend_tests();
     if (argc > 2 && !strcmp(argv[1], "replay")) {  // open loop: recorded lane.csv inputs through the law. replay <lane.csv> [t0 t1] [mode]
         FILE *f = fopen(argv[2], "r"); if (!f) { printf("cannot open %s\n", argv[2]); return 1; }
         double t0 = argc > 3 ? atof(argv[3]) : -1e9, t1 = argc > 4 ? atof(argv[4]) : 1e9; int mode = argc > 5 ? atoi(argv[5]) : 2;

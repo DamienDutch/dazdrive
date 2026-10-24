@@ -55,7 +55,7 @@ static param g_params[] = {
     { "learn", &p_learn, 1, "mode 2: 1 = the law learns how your wheel responds (strength, damping, delay) and scales its gains to keep the loop calm; stored per wheel in steer_profile.txt. 0 = the fixed gains" },
     { "learn_rate", &p_l_rate, 0.4f, "learning: share of the way to the estimated best gain scale taken per update (0.1 = slow, 1 = at once)" },
     { "learn_min", &p_l_min, 0.7f, "learning: the gains are never scaled below this (x the ini gains)" },
-    { "learn_max", &p_l_max, 1.3f, "learning: and never above this (a scale of 1.27 on top of a strong real wheel ran the assist away at 80 km/h)" },
+    { "learn_max", &p_l_max, 1.0f, "learning: and never above this: 1 = the learner may only soften the gains (a scale of 1.27 on a strong real wheel rang in an S-bend at 85 km/h)" },
     { "learn_update_s", &p_l_update, 30.0f, "learning: seconds of usable driving (hands off, straight-ish, fast enough) between two profile updates" },
     { "learn_save_s", &p_l_save, 240.0f, "learning: the profile file is written at most this often (and when the game closes)" },
     { "assist_max", &p_a_max, 0.12f, "the assist's wheel offset never grows past this (the game lets it build up to 1)" },
@@ -73,7 +73,7 @@ static param g_params[] = {
     { "driver_release", &p_drv_release, 1.0f, "seconds until the assist is back at full strength after you let go" },
     { "follow", &p_follow, 0, "mode 2: 1 = shared steering: an offset you hold with the wheel (passing a cyclist, a parked car) becomes the aim for a while, the assist then keeps damping and steering the bends but stops pulling back to the lane center; 0 = off" },
     { "lane_bias_m", &p_bias, 0.325f, "mode 2: the assist aims this far to the RIGHT of the lane center (m), like a driver who keeps right (0 = the center). It builds up slowly and fades out in bends (the truck cuts those inside by itself) and is gone in a sharp one" },
-    { "runaway_guard", &p_runaway, 1, "mode 2: 1 = a safety net: when the assist runs away (the request hits its ceiling twice in opposite directions within 2.5 s, or the heading error goes over 0.12 rad above 40 km/h) it lets go of the wheel for 4 s, with a tone, then comes back softly; 0 = off" },
+    { "runaway_guard", &p_runaway, 1, "mode 2: 1 = a safety net: when the assist runs away (the request hits its ceiling three times in alternating directions within 3.5 s, or the heading error goes over 0.18 rad above 40 km/h) the game's own assist takes over for 4 s, with a tone, then ours comes back softly; 0 = off" },
     { "lane_bend_out_m", &p_bend_out, 0.3f, "mode 2: in a bend the assist aims this far to the OUTSIDE of the bend (m): the tractor swings wide so the trailer has room (a right bend: to the left of the lane center, a left bend: to the right). It comes with the bend (o3), instead of the keep-right bias" },
     { "bend_blend", &p_blend, 0, "shared steering in a bend: 1 = while you steer into the bend yourself the assist leaves its own bend steering out for the part you already do, and builds it back within 0.3 s when you let go; 0 = the assist always adds its full bend steering (can cut the bend inside when you steer too)" },
     { "bend_blend_max", &p_blend_max, 0.6f, "bend_blend: the most of the assist's own bend steering it leaves out (0-1)" },
@@ -107,7 +107,7 @@ static FILE *g_csv;
 static float g_u;
 // driver-in-the-loop and centering state (reset when the assist is off)
 static double g_soft_at = -1, g_soft_end = -1, g_centre_since = -1;   // soft start state (below), declared here for the runaway guard
-static double g_panic_until, g_sat_t[2]; static int g_sat_dir[2];   // runaway guard: the last two ceiling hits (time, direction), and when the 4 s release ends
+static double g_panic_until, g_sat_t[3]; static int g_sat_dir[3];   // runaway guard: the last two ceiling hits (time, direction), and when the 4 s release ends
 static float g_bias;   // lane_bias_m as it is now (m, negative = right of the lane center: o1 is + to the left), eased in and out
 static float g_share;   // bend_blend: the share of the bend steering that is yours (0-1), filtered
 static float g_ref, g_act_t = 1e3f, g_steady_t, g_dev, g_pm, g_hold_t, g_age;   // shared steering: the aim (m from the lane center, 0 = center), seconds since you last steered, seconds the offset has been steady
@@ -781,19 +781,23 @@ static float lane_step(float u, float o1, float o2, float o3, float dt, float wh
             double nowp = wall_s();
             if (fabsf(want2) > 0.95f) {
                 int d = want2 > 0 ? 1 : -1;
-                if (g_sat_dir[0] != d || nowp - g_sat_t[0] > 0.3) { g_sat_dir[1] = g_sat_dir[0]; g_sat_t[1] = g_sat_t[0]; g_sat_dir[0] = d; g_sat_t[0] = nowp; }
-                else g_sat_t[0] = nowp;
+                if (g_sat_dir[0] != d || nowp - g_sat_t[0] > 0.3) {
+                    g_sat_dir[2] = g_sat_dir[1]; g_sat_t[2] = g_sat_t[1]; g_sat_dir[1] = g_sat_dir[0]; g_sat_t[1] = g_sat_t[0];
+                    g_sat_dir[0] = d; g_sat_t[0] = nowp;
+                } else g_sat_t[0] = nowp;
             }
-            bool flip = g_sat_dir[1] != 0 && g_sat_dir[0] != g_sat_dir[1] && nowp - g_sat_t[1] < 2.5;
-            if ((flip || fabsf(o2) > 0.12f) && nowp >= g_panic_until) {
+            // three ceiling hits that alternate (+ - +) within 3.5 s: a swing, not one hard correction (two alternating hits fired on recoverable bends)
+            bool flip = g_sat_dir[2] != 0 && g_sat_dir[0] != g_sat_dir[1] && g_sat_dir[1] != g_sat_dir[2] && nowp - g_sat_t[2] < 3.5;
+            if ((flip || fabsf(o2) > 0.18f) && nowp >= g_panic_until) {
                 g_panic_until = nowp + 4;
-                g_sat_dir[0] = g_sat_dir[1] = 0;
+                g_sat_dir[0] = g_sat_dir[1] = g_sat_dir[2] = 0;
                 g_soft_at = nowp + 4;   // the soft start after it
                 play_cue(CUE_LANE_PAUSE);
-                logline("Lane: runaway at %.0f km/h (request %.2f, heading error %.3f rad, o1 %.2f m): assist let go for 4 s", kmh, want2, o2, o1);
-                incident("lane", "the lane assist ran away at %.0f km/h (request %.2f, heading %.3f rad, offset %.2f m): let go for 4 s", kmh, want2, o2, o1);
+                logline("Lane: runaway at %.0f km/h (request %.2f, heading error %.3f rad, o1 %.2f m): the game's own assist for 4 s", kmh, want2, o2, o1);
+                incident("lane", "the lane assist ran away at %.0f km/h (request %.2f, heading %.3f rad, offset %.2f m): the game's own assist for 4 s", kmh, want2, o2, o1);
             }
-            if (nowp < g_panic_until) { g_u = 0; g_ci = 0; return 0; }
+            // The game's own law takes over (it is stable, just weak), not nothing: a truck with no steering at all leaves a bend (sim S-bend: 12-38 m)
+            if (nowp < g_panic_until) { g_u = u; g_ci = 0; return u; }
         }
         float st = p_rate2 * dt;
         return want2 > g_u + st ? g_u + st : (want2 < g_u - st ? g_u - st : want2);
