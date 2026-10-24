@@ -261,18 +261,32 @@ var DATA = /*DATA*/null;
 function eraOf(D, id) { for (var i = 0; i < D.eras.length; i++) if (D.eras[i].id === id) return D.eras[i]; return D.eras[0]; }
 function num(v) { return String(+v); }                 // "1.50" -> "1.5", so imported values compare with preset values
 function same(a, b) { return +a === +b; }
+function wrapc(text) {   // a comment at 96 columns, every line starting with "# " (same as gen_ini.py)
+  var lines = [], cur = "";
+  text.split(/\s+/).forEach(function (w) {
+    if (cur && (cur + " " + w).length > 94) { lines.push("# " + cur); cur = w; } else cur = cur ? cur + " " + w : w;
+  });
+  if (cur) lines.push("# " + cur);
+  return lines.length ? lines : ["#"];
+}
 function buildIni(D, era, vals) {
   var e = eraOf(D, era), out = [];
-  out.push("# dazdrive " + D.version + " settings: " + e.name + " (" + e.year + "), made with dazdrive-setup.html.");
-  out.push("# Open this file in dazdrive-setup.html again to change the choices.");
-  out.push("# Changes take effect after restarting the game. Each setting has a line above it saying what it does.");
+  out = out.concat(wrapc("dazdrive " + D.version + " settings: " + e.name + " (" + e.year + "), made with dazdrive-setup.html. Open this file in dazdrive-setup.html again to change the choices."));
+  out.push("#");
+  out = out.concat(wrapc(D.howto));
   D.order.forEach(function (sec) {
     out.push("");
-    if (D.intro[sec]) out.push("# --- " + D.intro[sec]);
+    if (D.intro[sec]) { out.push("# " + new Array(95).join("=")); out = out.concat(wrapc(D.intro[sec])); out.push("# " + new Array(95).join("=")); }
     out.push("[" + sec + "]");
-    D.tables[sec].forEach(function (row) {
-      out.push("# " + row[2]);
-      out.push(row[0] + "=" + vals[sec][row[0]]);
+    var sw = (D.switches && D.switches[sec]) || [], rows = D.tables[sec];
+    var first = rows.filter(function (r) { return sw.indexOf(r[0]) >= 0; }), rest = rows.filter(function (r) { return sw.indexOf(r[0]) < 0; });
+    [["Switches", first], ["Settings", rest]].forEach(function (g) {
+      if (!g[1].length) return;
+      if (first.length) { out.push(""); out.push("# --- " + g[0] + " ---"); }
+      g[1].forEach(function (row) {
+        out.push(""); out = out.concat(wrapc(row[2]));
+        out.push(row[0] + "=" + vals[sec][row[0]]);
+      });
     });
   });
   return out.join("\n") + "\n";

@@ -144,6 +144,25 @@ def load():
     return [m for m in modvars], tables
 
 
+INI_HOWTO_TEXT = ("One setting per line as name=value, with what it does in the lines above it. Lines that start with # are "
+                  "ignored. Restart the game after a change. A setting you delete gets its standard value. The defaults were "
+                  "tuned on real rides: change one thing at a time. Switches are 1 (on) or 0 (off).")
+
+def wrap(text, width=96):
+    """A comment, wrapped at `width` columns, every line starting with '# '."""
+    import textwrap
+    return ["# " + l for l in textwrap.wrap(text, width - 2, break_long_words=False, break_on_hyphens=False)] or ["#"]
+
+def switch_keys():
+    """The feature switches of the setup page (first key of each tile) per section: they come first in the ini."""
+    out = {}
+    for f in FEATURES:
+        sec, key = f["keys"][0][0], f["keys"][0][1]
+        if key not in out.setdefault(sec, []):
+            out[sec].append(key)
+    return out
+
+
 def build(preset):
     order, tables = load()
     over = STANDARD if preset == "standard" else {}  # preset "dev": nothing overridden
@@ -157,18 +176,31 @@ def build(preset):
         out.append(f"# dazdrive {VERSION} settings: the developer's own (every default as compiled in, traces on).")
         out.append("# Without this file the game writes the standard preset instead.")
     else:
-        out.append(f"# dazdrive {VERSION} settings: {STANDARD_HEADER}")
-        out.append("# dazdrive-setup.html (in this folder) makes a new one for you. Without this file the game writes this preset again.")
-    out.append("# Changes take effect after restarting the game. Each setting has a line above it saying what it does.")
+        out += wrap(f"dazdrive {VERSION} settings: {STANDARD_HEADER}")
+        out += wrap("dazdrive-setup.html (in this folder) makes a new one for you. Without this file the game writes this preset again.")
+    out.append("#")
+    out += wrap(INI_HOWTO_TEXT)
+    sw = switch_keys()
     for sec in order:
         out.append("")
         if preset == "standard" and sec in SECTION_INTRO:
-            out.append(f"# --- {SECTION_INTRO[sec]}")
+            out.append("# " + "=" * 94)
+            out += wrap(SECTION_INTRO[sec])
+            out.append("# " + "=" * 94)
         out.append(f"[{sec}]")
-        for k, d, h in tables[sec]:
-            v = over.get(sec, {}).get(k, d)
-            out.append(f"# {h}")
-            out.append(f"{k}={fmt(v)}")
+        rows = tables[sec]
+        first = [r for r in rows if r[0] in sw.get(sec, [])]
+        rest = [r for r in rows if r not in first]
+        for title, group in (("Switches", first), ("Settings", rest)):
+            if not group:
+                continue
+            if first:
+                out += ["", f"# --- {title} ---"]
+            for k, d, h in group:
+                v = over.get(sec, {}).get(k, d)
+                out.append("")
+                out += wrap(h)
+                out.append(f"{k}={fmt(v)}")
     return "\n".join(out) + "\n"
 
 
@@ -522,6 +554,8 @@ def build_html():
         "standard": {s: {k: fmt(v) for k, v in kv.items()} for s, kv in STANDARD.items()},
         "intro": SECTION_INTRO,
         "standard_header": STANDARD_HEADER,
+        "switches": switch_keys(),
+        "howto": INI_HOWTO_TEXT,
         "buttons": BUTTONS,
         "groups": [{"id": g["id"], "off_when": g.get("off_when"), "title": g["title"], "about": g["about"],
                     "tuning": [dict(t, over={sec: {k: fmt(v) for k, v in kv.items()} for sec, kv in t["over"].items()}) for t in g["tuning"]],

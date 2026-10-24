@@ -5,7 +5,7 @@
 #pragma once
 
 #define SUITE_NAME "dazdrive"  // DazDrive: DLL, ini and output folder
-#define SUITE_VERSION "0.6.0-beta.3"
+#define SUITE_VERSION "0.6.0-beta.3.dev.1"
 
 #include <windows.h>
 #include <stdint.h>
