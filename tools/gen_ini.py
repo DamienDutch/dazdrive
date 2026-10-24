@@ -188,7 +188,7 @@ def build(preset):
 SETUP_GROUPS = [
     {"id": "ts", "off_when": ["trueshift", "enabled", "0"], "title": "Gearbox (TrueShift)", "section": "trueshift",
      "tuning": [{"name": "Standard", "desc": "As tuned on real rides", "over": {}}],
-     "about": ["Shifts like a real truck automatic.", "⚙️ Low rpm, skips gears at full throttle", "🗺️ Reads your navigation route: climbs, tops, junctions", "🧠 Learns when an upshift did not hold"],
+     "about": ["Shifts like a real truck automatic.", "Low rpm, skips gears at full throttle", "Reads your navigation route: climbs, tops, junctions", "Learns when an upshift did not hold"],
      "knobs": [
         {"kind": "choice", "label": "M (manual) mode", "help": "What the gearbox still does by itself in M, picked with the gearbox-mode key.",
          "key": ["trueshift", "m_style"], "options": [["0", "European: every shift is yours, a tone when the engine over-revs (like Volvo, Mercedes)"],
@@ -208,7 +208,7 @@ SETUP_GROUPS = [
                  "over": {"cruise": {"acc_short_s": 1.5, "acc_middle_s": 2, "acc_long_s": 2.5, "curve_lat": 2.75}}},
                 {"name": "Real truck", "desc": "ACC gaps 2.4 / 3.0 / 3.6 s like Detroit and Bendix; Stop & Go drives off by itself only after < 2 s; bends 2.4 m/s²",
                  "over": {"cruise": {"acc_short_s": 2.4, "acc_middle_s": 3, "acc_long_s": 3.6, "curve_lat": 2.4, "stop_go_auto_s": 2}}}],
-     "about": ["SteadyCruise, ACC and AEB on top of the game's own cruise control.", "🚫 No throttle bursts after shifts", "🗺️ Bends and descents need a navigation route"],
+     "about": ["SteadyCruise, ACC and AEB on top of the game's own cruise control.", "No throttle bursts after shifts", "Bends and descents need a navigation route"],
      "knobs": [
         {"kind": "range", "presets": True, "label": "Following distance", "help": "The ACC gap at the middle distance setting; short and long move along. Real trucks keep about 3 s, at the game's scale 1.25-2 s feels normal.",
          "unit": "s", "min": 1, "max": 3.5, "step": 0.05, "key": ["cruise", "acc_middle_s"], "at": [1.25, 2, 3],
@@ -233,14 +233,14 @@ SETUP_GROUPS = [
          "keys": [["cruise", "retarder_off_on_set", 1, 0]]}]},
     {"id": "lka", "off_when": ["lane", "mode", "0"], "title": "Lane centering", "section": "lane",
      "tuning": [{"name": "Standard", "desc": "The law and the self-learning as tuned on real rides", "over": {}}],
-     "about": ["🧪 Experimental. Off = the game's own lane assist.", "🛣️ Calm, from 20 km/h, off while you indicate, learns how your wheel responds", "✋ Keep your hands near the wheel"],
+     "about": ["Experimental. Off = the game's own lane assist.", "Calm, from 20 km/h, off while you indicate, learns how your wheel responds", "Keep your hands near the wheel"],
      "knobs": [
         {"kind": "toggle", "label": "Tone when it switches on or off", "help": "Rising for on, falling for off.", "keys": [["lane", "tone", 1, 0]]},
         {"kind": "toggle", "label": "Back on by itself after a lane change", "help": "When lane keeping went off while you indicated.", "keys": [["lane", "indicator_resume", 1, 0]]}]},
     {"id": "crawl", "off_when": ["creep", "enabled", "0"], "title": "Crawl / maneuver mode", "section": "creep",
      "tuning": [{"name": "Standard", "desc": "Crawls at 5 km/h", "over": {}},
                 {"name": "Slow", "desc": "Crawls at 3 km/h, for tight docks", "over": {"creep": {"creep_kmh": 3}}}],
-     "about": ["🧪 Experimental. Walking pace in gears 1, 2 and R.", "🎮 Hold Adaptive Automatic Transmission Mode at a standstill: on/off", "🦶 Brake = slower, throttle = a bit more"],
+     "about": ["Experimental. Walking pace in gears 1, 2 and R.", "Hold Adaptive Automatic Transmission Mode at a standstill: on/off", "Brake = slower, throttle = a bit more"],
      "knobs": [
         {"kind": "range", "presets": True, "label": "Crawl speed", "help": "With both pedals released; the brake makes it slower.",
          "unit": "km/h", "min": 2, "max": 7, "step": 0.5, "key": ["creep", "creep_kmh"], "at": [5, 3], "follow": []},
@@ -250,7 +250,7 @@ SETUP_GROUPS = [
         {"kind": "toggle", "label": "Gearbox-mode key switches crawl", "help": "Hold it at a standstill to switch crawl on or off.", "keys": [["creep", "toggle_mode_key", 1, 0]]}]},
     {"id": "smoothstart", "off_when": ["creep", "smooth_start", "0"], "title": "Smooth start", "section": "creep", "prefix": "smooth_start",
      "tuning": [{"name": "Standard", "desc": "The engine rises with the pedal, the clutch slips, then closes gently", "over": {}}],
-     "about": ["🧪 Experimental. Pulling away in a forward gear from a standstill.", "🦶 The pedal sets how high the engine revs while the clutch slips", "✋ A shift, lifting off, the brake or about 14 km/h ends it"],
+     "about": ["Experimental. Pulling away in a forward gear from a standstill.", "The pedal sets how high the engine revs while the clutch slips", "A shift, lifting off, the brake or about 14 km/h ends it"],
      "knobs": [
         {"kind": "range", "label": "Pulling away: gentle or firm", "help": "Engine rpm with the pedal flat while the clutch slips; the light-pedal rpm moves along. Lower = gentler, higher = firmer.",
          "unit": "rpm", "min": 900, "max": 1600, "step": 50, "key": ["creep", "smooth_start_rpm_full"], "at": [1000, 1200, 1500],
@@ -258,7 +258,7 @@ SETUP_GROUPS = [
     {"id": "log", "title": "Logging", "section": "core",
      "tuning": [{"name": "Bug hunt", "desc": "Every shift in the log and csv traces: what the betas ship with, so a bug report has the data", "over": {}},
                 {"name": "Quiet", "desc": "A short log, plus an incident file when something goes wrong", "over": {"core": {"log_level": 0}, "trueshift": {"trace": 0}, "cruise": {"trace": 0}, "creep": {"trace": 0}}}],
-     "about": ["🐞 When something goes wrong (the gearbox hunts, you fight a shift, the rpm hits the limiter, ...) the plugin saves the 20 s before and 15 s after in the incidents folder. Attach those files to a bug report.", "Bug hunt writes csv files (a few MB each, the oldest part is dropped): it is on in the betas so a bug report has the data, and goes quiet in the first full release."],
+     "about": ["When something goes wrong (the gearbox hunts, you fight a shift, the rpm hits the limiter, ...) the plugin saves the 20 s before and 15 s after in the incidents folder. Attach those files to a bug report.", "Bug hunt writes csv files (a few MB each, the oldest part is dropped): it is on in the betas so a bug report has the data, and goes quiet in the first full release."],
      "knobs": [
         {"kind": "choice", "label": "How much goes into dazdrive.log", "help": "Incidents are saved separately at every level.",
          "key": ["core", "log_level"], "options": [["0", "Quiet"], ["1", "Also every shift"], ["2", "Also csv traces (large)"]]},

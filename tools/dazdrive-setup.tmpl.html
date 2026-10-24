@@ -5,147 +5,134 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DazDrive setup</title>
 <style>
-/* A wizard by default: Start (open your ini, continue, or start fresh) -> 1 truck era (timeline) ->
-   2 feature switches -> 3 fine-tuning (per module: Presets / Advanced / Custom) -> 4 save, one step at a time with
-   Back / Next in the bar. "Show everything on one page" (or ?all) shows the same sections as one page. */
-:root{--bg:#f3f4f1;--card:#fff;--fg:#1c2421;--mute:#5d6863;--line:#d8ddd8;--acc:#d2611a;--accfg:#fff;--on:#2f7d4f;--onbg:#e7f3ec;
-  --warn:#9a5b06;--bad:#c0262d;--code:#eef0ec;--dash:#1b1f1e;--dashfg:#f1f3ef;--dashmute:#9aa6a0;--bar:rgba(255,255,255,.92);--glow:rgba(210,97,26,.25)}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121615;--card:#1b201e;--fg:#e6ebe8;--mute:#9aa6a0;--line:#2f3633;--acc:#f08a3c;--accfg:#1a0d03;
-  --on:#6cc28f;--onbg:#17291f;--warn:#e7a54f;--bad:#ff7b80;--code:#101413;--dash:#0c0f0e;--dashfg:#f1f3ef;--dashmute:#8e9994;--bar:rgba(27,32,30,.92);--glow:rgba(240,138,60,.3);color-scheme:dark}}
-:root[data-theme="dark"]{--bg:#121615;--card:#1b201e;--fg:#e6ebe8;--mute:#9aa6a0;--line:#2f3633;--acc:#f08a3c;--accfg:#1a0d03;
-  --on:#6cc28f;--onbg:#17291f;--warn:#e7a54f;--bad:#ff7b80;--code:#101413;--dash:#0c0f0e;--dashfg:#f1f3ef;--dashmute:#8e9994;--bar:rgba(27,32,30,.92);--glow:rgba(240,138,60,.3);color-scheme:dark}
+/* Plain on purpose: a settings page for an ini file, not a product page. One step at a time (wizard), or everything on one page (?all). */
+:root{--bg:#fff;--card:#fff;--fg:#111;--mute:#595959;--line:#c9c9c9;--acc:#1a4fa0;--accfg:#fff;--on:#111;--onbg:transparent;
+  --warn:#8a5a00;--bad:#a30000;--code:#f0f0f0;--dash:#222;--dashfg:#f2f2f2;--bar:#fff}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141414;--card:#141414;--fg:#e8e8e8;--mute:#a0a0a0;--line:#3a3a3a;--acc:#8ab4f8;--accfg:#111;
+  --on:#e8e8e8;--warn:#e0a850;--bad:#ff8a8a;--code:#222;--dash:#2a2a2a;--dashfg:#f2f2f2;--bar:#141414;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#141414;--card:#141414;--fg:#e8e8e8;--mute:#a0a0a0;--line:#3a3a3a;--acc:#8ab4f8;--accfg:#111;
+  --on:#e8e8e8;--warn:#e0a850;--bad:#ff8a8a;--code:#222;--dash:#2a2a2a;--dashfg:#f2f2f2;--bar:#141414;color-scheme:dark}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-main{max-width:860px;margin:0 auto;padding:12px 16px 110px}
-h1{font-size:1.5rem;margin:0;letter-spacing:.01em;display:flex;align-items:center;gap:10px}
-h1 svg{width:30px;height:30px;flex:none}
-h1 .ver{font:600 .8rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--acc);border:1px solid var(--acc);border-radius:99px;padding:1px 8px;align-self:center}
-h2{font-size:1.15rem;margin:0 0 .3em;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
-h2 .n{font:700 .8rem ui-monospace,monospace;color:var(--accfg);background:var(--acc);border-radius:99px;padding:1px 8px}
-h2 .opt{font-size:.8rem;font-weight:400;color:var(--mute)}
-h3{font-size:.85rem;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:14px 0 6px}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:760px;margin:0 auto;padding:4px 16px 110px}
+h1{font-size:1.25rem;margin:0;font-weight:700}
+h1 .ver{font:400 .9rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--mute);margin:0 .5em}
+h2{font-size:1.05rem;margin:0 0 .3em;display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
+h2 .n{font:inherit;color:var(--mute)}
+h2 .n::after{content:"."}
+h2 .opt{font-size:.85rem;font-weight:400;color:var(--mute)}
+h3{font-size:.85rem;color:var(--mute);margin:16px 0 4px;font-weight:700}
 p{margin:.4em 0}
 .mute,small{color:var(--mute)}
-small{display:block;font-size:.82rem;line-height:1.35;margin-top:2px}
-code{background:var(--code);padding:0 4px;border-radius:4px;overflow-wrap:anywhere}
-/* dashboard strip */
-.dash{background:var(--dash);color:var(--dashfg);border-bottom:3px solid var(--acc)}
-.dash .in{max-width:860px;margin:0 auto;padding:14px 16px;display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;justify-content:space-between}
-.dash .facts{display:flex;gap:14px;flex-wrap:wrap;margin:0;padding:0;list-style:none;font-size:.85rem;color:var(--dashmute)}
-.dash .facts b{color:var(--dashfg);font-weight:600}
-/* cards */
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:14px 0}
+small{display:block;font-size:.85rem;line-height:1.4;margin-top:1px}
+code{background:var(--code);padding:0 3px;border-radius:2px;overflow-wrap:anywhere;font-size:.9em}
+/* header */
+.dash{max-width:760px;margin:0 auto;padding:16px 16px 8px;border-bottom:1px solid var(--line)}
+.dash .in{display:block}
+.dash p{margin:4px 0 0;color:var(--mute);font-size:.9rem}
+/* sections */
+.card{background:none;border:0;border-top:1px solid var(--line);border-radius:0;padding:12px 0;margin:0}
+section.card:first-of-type{border-top:0}
 section.card{scroll-margin-top:12px}
-/* start */
-.start{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
-.big{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px 14px;cursor:pointer;text-align:left;display:grid;gap:2px;min-width:0}
-.big b{font-size:1rem}
-.big:hover{border-color:var(--acc)}
+.start{display:grid;grid-template-columns:1fr;gap:6px;margin-top:8px;max-width:30em}
+.big{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:2px;padding:7px 10px;cursor:pointer;text-align:left;display:grid;gap:1px;min-width:0}
+.big b{font-size:.95rem}
+.big:hover{border-color:var(--fg)}
 .big input{display:none}
-.note{border-left:3px solid var(--acc);padding:4px 10px;margin:10px 0 0;background:var(--bg);border-radius:0 8px 8px 0}
+.note{border-left:2px solid var(--fg);padding:2px 10px;margin:10px 0 0}
 #restore2{display:none;margin:0 0 10px}
 body.wiz #restore2:not([hidden]){display:block}
 button.link{border:0;background:none;color:var(--acc);padding:0;font:inherit;cursor:pointer;text-decoration:underline}
-/* era timeline */
-.tl{position:relative;display:grid;grid-template-columns:repeat(var(--n,5),1fr);margin:16px 0 4px;--p:50%;--n:5}
-.tl::before,.tl::after{content:"";position:absolute;left:calc(50% / var(--n));right:calc(50% / var(--n));top:17px;height:5px;background:var(--line);border-radius:3px}
-.tl::after{right:auto;width:calc((100% - 100% / var(--n)) * var(--p) / 100%);background:var(--acc);transition:width .2s}
-.stop{position:relative;display:grid;justify-items:center;text-align:center;cursor:pointer;padding:0 4px;gap:3px;z-index:1}
+/* eras: a plain list of radio buttons */
+.tl{display:block;margin:6px 0 4px}
+.stop{position:relative;display:grid;grid-template-columns:1.1em 4.2em 1fr auto;align-items:baseline;gap:0 8px;cursor:pointer;padding:3px 0;text-align:left;justify-items:start}
 .stop input{position:absolute;opacity:0;pointer-events:none}
-.stop .dot{width:38px;height:38px;border-radius:50%;background:var(--card);border:4px solid var(--line);transition:all .15s;display:grid;place-items:center;font-size:1rem}
-.stop .yr{font:700 .95rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--acc);margin-top:2px}
-.stop b{font-size:.85rem;line-height:1.2}
-.stage{font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;border-radius:99px;padding:0 7px;border:1px solid}
-.stage.stable{color:var(--on);border-color:var(--on)}
-.stage.beta{color:var(--warn);border-color:var(--warn)}
-.stage.experimental{color:var(--bad);border-color:var(--bad)}
-.tile .stage{justify-self:start;margin-top:3px}
-.legend{font-size:.82rem;color:var(--mute);margin:8px 0 0;display:flex;gap:6px 14px;flex-wrap:wrap}
-.stop:hover .dot{border-color:var(--acc)}
-.stop:has(input:checked) .dot{background:var(--acc);border-color:var(--acc);box-shadow:0 0 0 7px var(--glow)}
-.stop:has(input:focus-visible) .dot{outline:2px solid var(--acc);outline-offset:3px}
-.erablurb{margin:10px 0 0;padding:10px 12px;border-radius:8px;background:var(--bg);display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
-.erablurb b{font-size:1.05rem}
-@media (max-width:560px){
-  .tl{grid-template-columns:1fr;gap:4px;margin-top:8px}
-  .tl::before,.tl::after{display:none}
-  .stop{grid-template-columns:auto 1fr;justify-items:start;text-align:left;gap:2px 12px;padding:4px 0}
-  .stop .dot{grid-row:1/5;width:30px;height:30px;border-width:3px}
-  .stop .yr{margin:0}
-  .start{grid-template-columns:1fr}
-}
-/* feature switches */
-.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
-.tile{color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:grid;grid-template-columns:1fr auto;gap:0 10px;min-width:0;align-content:start}
-.tile .body{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;text-align:left;cursor:pointer;display:grid;gap:2px;min-width:0;align-content:start;border-radius:6px}
-.tile .body:hover b{text-decoration:underline dotted}
+.stop .dot{width:11px;height:11px;border-radius:50%;border:1px solid var(--fg);align-self:center;font-size:0}
+.stop .yr{font:400 .9rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--mute)}
+.stop b{font-weight:400}
+.stop:has(input:checked) .dot{background:var(--fg);box-shadow:inset 0 0 0 2px var(--bg)}
+.stop:has(input:checked) b{font-weight:700}
+.stop:has(input:focus-visible) .dot{outline:2px solid var(--acc);outline-offset:2px}
+.stage{font-size:.8rem;color:var(--mute)}
+.stage.beta{color:var(--warn)}
+.stage.experimental{color:var(--bad)}
+.tile .stage{display:inline-block;margin-top:1px}
+.legend{font-size:.85rem;color:var(--mute);margin:8px 0 0;display:flex;gap:2px 14px;flex-wrap:wrap}
+.legend .stage{margin-right:3px;font-weight:700}
+.erablurb{margin:8px 0 0;padding:0 0 0 1.1em;display:block}
+.erablurb b{font-weight:700;margin-right:.4em}
+@media (max-width:560px){.stop{grid-template-columns:1.1em 3.6em 1fr}.stop .stage{grid-column:3}}
+/* feature switches: one row each */
+.tiles{display:block}
+.tile{color:var(--fg);background:none;border:0;border-top:1px solid var(--line);border-radius:0;padding:6px 0;display:grid;grid-template-columns:20px 1fr;gap:0 10px;min-width:0;align-content:start}
+.tile .sw{grid-column:1;grid-row:1}
+.tile .body{grid-column:2;grid-row:1;font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;text-align:left;cursor:pointer;display:grid;gap:1px;min-width:0;align-content:start}
+.tile .body:hover b{text-decoration:underline}
 .tile b{font-size:.95rem}
 .tile small{margin:0}
-.tile .need{font-size:.78rem;color:var(--warn);margin:2px 0 0}
+.tile .need{font-size:.8rem;color:var(--warn);margin:1px 0 0}
 .tile .need:empty{display:none}
-.sw{border:0;padding:0;margin:0;align-self:start;width:40px;height:22px;border-radius:11px;background:var(--line);position:relative;flex:none;cursor:pointer;transition:background .15s}
-.sw::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .15s}
-.tile[aria-pressed=true]{background:var(--onbg);border-color:var(--on)}
-.tile[aria-pressed=true] .sw{background:var(--on)}
-.tile[aria-pressed=true] .sw::after{left:21px}
-.tile[aria-pressed=mixed] .sw{background:linear-gradient(90deg,var(--on) 50%,var(--line) 50%)}
-.tile[aria-pressed=mixed] .sw::after{left:12px}
+.sw{border:1px solid var(--fg);border-radius:2px;padding:0;margin:2px 0 0;align-self:start;width:16px;height:16px;background:var(--bg);position:relative;flex:none;cursor:pointer}
+.sw::after{content:"";position:absolute;inset:2px;background:var(--fg);opacity:0}
+.tile[aria-pressed=true] .sw::after{opacity:1}
+.tile[aria-pressed=mixed] .sw::after{opacity:1;inset:6px 2px}
 .chip:focus-visible,button:focus-visible,.big:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
-dialog{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:12px;padding:18px 20px;max-width:min(520px,calc(100vw - 32px));box-shadow:0 10px 40px rgba(0,0,0,.35)}
-dialog::backdrop{background:rgba(0,0,0,.45)}
-dialog h3{font:700 1.1rem/1.3 system-ui,sans-serif;text-transform:none;letter-spacing:0;color:var(--fg);margin:0 0 4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+dialog{background:var(--card);color:var(--fg);border:1px solid var(--fg);border-radius:2px;padding:14px 16px;max-width:min(520px,calc(100vw - 32px))}
+dialog::backdrop{background:rgba(0,0,0,.4)}
+dialog h3{font:700 1rem/1.3 system-ui,sans-serif;color:var(--fg);margin:0 0 4px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
 dialog .since{color:var(--mute);font-size:.85rem;margin:0 0 8px}
-dialog .needs{font-size:.88rem;margin:8px 0 0}
+dialog .needs{font-size:.9rem;margin:8px 0 0}
 dialog .needs .off{color:var(--warn)}
-dialog .also{font-size:.88rem;color:var(--on);margin:6px 0 0}
+dialog .also{font-size:.9rem;color:var(--mute);margin:6px 0 0}
 dialog .also:empty{display:none}
-dialog .btns{margin:14px 0 0;justify-content:flex-end}
-.tag{display:inline-block;font-size:.68rem;border:1px solid var(--warn);color:var(--warn);border-radius:99px;padding:0 7px;vertical-align:middle;font-weight:400}
-.count{font:600 .85rem ui-monospace,monospace;color:var(--mute)}
+dialog .btns{margin:12px 0 0;justify-content:flex-end}
+.tag{display:inline-block;font-size:.75rem;color:var(--warn);vertical-align:middle}
+.count{font:400 .85rem ui-monospace,monospace;color:var(--mute)}
 /* fine-tuning */
-details.tune{margin:10px 0;padding:0 16px}
-details.tune summary{list-style:none;cursor:pointer;display:flex;gap:10px;align-items:center;padding:12px 0;font-weight:600}
+details.tune{margin:0;padding:0}
+details.tune summary{list-style:none;cursor:pointer;display:flex;gap:8px;align-items:baseline;padding:8px 0;font-weight:700}
 details.tune summary::-webkit-details-marker{display:none}
-details.tune summary::before{content:"▸";color:var(--mute);transition:transform .15s}
-details.tune[open] summary::before{transform:rotate(90deg)}
-details.tune summary .cur{margin-left:auto;font-weight:500;font-size:.85rem;color:var(--acc);border:1px solid var(--acc);border-radius:99px;padding:0 9px;white-space:nowrap}
-details.tune .body{padding:0 0 14px}
+details.tune summary::before{content:"+";font:400 1rem ui-monospace,monospace;color:var(--mute);width:1ch}
+details.tune[open] summary::before{content:"-"}
+details.tune summary .cur{margin-left:auto;font-weight:400;font-size:.85rem;color:var(--mute);white-space:nowrap}
+details.tune .body{padding:0 0 12px 2ch}
 .chips{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 2px}
-.chip{font:inherit;font-size:.92rem;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 14px;cursor:pointer}
-.chip[aria-pressed=true]{background:var(--acc);border-color:var(--acc);color:var(--accfg);font-weight:600}
-.chipdesc{font-size:.88rem;color:var(--mute);margin:4px 0 0}
+.chip{font:inherit;font-size:.9rem;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:2px;padding:3px 10px;cursor:pointer}
+.chip[aria-pressed=true]{background:var(--fg);border-color:var(--fg);color:var(--bg)}
+.chipdesc{font-size:.9rem;color:var(--mute);margin:4px 0 0}
 .custom{margin-top:8px}
-.row{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--line)}
+.row{display:flex;gap:10px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--line)}
 .row>label.name{flex:1;min-width:0;cursor:pointer}
-.row input[type=checkbox]{width:22px;height:22px;margin-top:2px;flex:none;accent-color:var(--on)}
-input[type=text],select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 8px}
-input[type=text]{width:6em;flex:none}
+.row input[type=checkbox]{width:16px;height:16px;margin-top:3px;flex:none;accent-color:var(--fg)}
+input[type=text],select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:2px;padding:3px 6px}
+input[type=text]{width:6em;flex:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9rem}
 input.bad{border-color:var(--bad);outline:1px solid var(--bad)}
-.err{color:var(--bad);font-weight:600}
+.err{color:var(--bad);font-weight:700}
 .err:empty{display:none}
 details{margin-top:10px}
 summary{cursor:pointer;color:var(--mute)}
 /* buttons, lists */
-button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:7px 12px;cursor:pointer}
-button.primary{background:var(--acc);color:var(--accfg);border-color:var(--acc);font-weight:600;padding:9px 16px}
+button{font:inherit;border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:2px;padding:5px 12px;cursor:pointer}
+button:hover{border-color:var(--fg)}
+button.primary{background:var(--fg);color:var(--bg);border-color:var(--fg);font-weight:700}
 button:disabled,button.blocked{opacity:.5}
 button:disabled{cursor:default}
 .btns{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
-pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;max-height:420px;font-size:.78rem;margin:8px 0;white-space:pre}
+pre{background:var(--code);border:1px solid var(--line);border-radius:2px;padding:10px;overflow:auto;max-height:420px;font-size:.8rem;margin:8px 0;white-space:pre}
 ol{padding-left:1.3em}
 .facts{list-style:none;padding:0;margin:6px 0;display:grid;gap:3px;color:var(--mute)}
-ol.facts{list-style:decimal inside}
+ol.facts{list-style:decimal;padding-left:1.4em}
 .facts b{color:var(--fg)}
 #msg{min-height:1.4em}
 /* sticky bar */
-.bar{position:fixed;left:0;right:0;bottom:0;background:var(--bar);backdrop-filter:blur(8px);border-top:1px solid var(--line);z-index:5}
-.bar .in{max-width:860px;margin:0 auto;padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.bar .status{flex:1;min-width:0;font:600 .9rem ui-monospace,SFMono-Regular,Menlo,monospace}
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--bar);border-top:1px solid var(--fg);z-index:5}
+.bar .in{max-width:760px;margin:0 auto;padding:8px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.bar .status{flex:1;min-width:0;font:400 .85rem ui-monospace,SFMono-Regular,Menlo,monospace}
 .bar .status .chg{color:var(--acc)}
-.bar .status .ok{color:var(--on)}
+.bar .status .ok{color:var(--mute)}
 .bar .status .badn{color:var(--bad)}
-.toast{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(100% + 10px);width:min(828px,calc(100vw - 32px));padding:10px 14px;border-radius:10px;
-  background:var(--dash);color:var(--dashfg);border:1px solid var(--acc);box-shadow:0 6px 24px rgba(0,0,0,.35);font-size:.9rem;cursor:pointer}
+.toast{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(100% + 8px);width:min(728px,calc(100vw - 32px));padding:8px 12px;border-radius:2px;
+  background:var(--dash);color:var(--dashfg);border:1px solid var(--line);font-size:.9rem;cursor:pointer}
 .toast.bad{border-color:var(--bad)}
 .bar .steps{color:var(--mute);font-size:.85rem}
 .bar .wiznav{display:none;gap:8px;align-items:center;flex:1;justify-content:space-between}
@@ -159,44 +146,39 @@ body.wiz .bar .normal{display:none}
 body.wiz .bar .status{display:none}
 .wizhead{display:none;align-items:center;gap:6px;margin:8px 0 0;font-size:.85rem;color:var(--mute);flex-wrap:wrap}
 body.wiz .wizhead{display:flex}
-.wizhead .wsteps{display:flex;gap:4px;flex:1;flex-wrap:wrap}
-.wizhead .wst{font-size:.82rem;padding:3px 10px;border-radius:99px;color:var(--mute)}
-.wizhead .wst.done{color:var(--fg);border-color:var(--on)}
-.wizhead .wst[aria-current=step]{background:var(--acc);border-color:var(--acc);color:var(--accfg);font-weight:600}
-#s-start .start{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+.wizhead .wsteps{display:flex;gap:12px;flex:1;flex-wrap:wrap}
+.wizhead .wst{font-size:.85rem;color:var(--mute)}
+.wizhead .wst.done{color:var(--fg)}
+.wizhead .wst[aria-current=step]{color:var(--fg);font-weight:700;text-decoration:underline}
+#s-start .start{grid-template-columns:1fr}
 /* fine-tuning layers: Presets / Advanced / Custom */
-.tabs{display:flex;gap:0;margin:10px 0 4px;border:1px solid var(--line);border-radius:9px;overflow:hidden;width:max-content;max-width:100%}
-.tabs .tab{border:0;border-radius:0;padding:6px 14px;background:var(--card);font-size:.92rem}
-@media (max-width:560px){.tabs .tab{padding:6px 9px;font-size:.85rem;white-space:nowrap}}
+.tabs{display:flex;gap:16px;margin:8px 0 4px;border-bottom:1px solid var(--line);max-width:100%}
+.tabs .tab{border:0;border-bottom:2px solid transparent;border-radius:0;padding:3px 0;background:none;font-size:.9rem;color:var(--mute)}
+@media (max-width:560px){.tabs .tab{white-space:nowrap}}
 .big[hidden]{display:none}
-.tabs .tab+.tab{border-left:1px solid var(--line)}
-.tabs .tab[aria-selected=true]{background:var(--fg);color:var(--bg);font-weight:600}
+.tabs .tab[aria-selected=true]{color:var(--fg);border-bottom-color:var(--fg);font-weight:700}
 .panel[hidden]{display:none}
-.knob{padding:10px 0;border-top:1px solid var(--line)}
+.knob{padding:8px 0;border-top:1px solid var(--line)}
 .knob label.name{display:grid;grid-template-columns:1fr auto;gap:0 10px;cursor:pointer}
 .knob label.name small{grid-column:1/-1}
-.knob output{font:600 .9rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--acc);white-space:nowrap}
-.knob input[type=range]{width:100%;margin:8px 0 0;accent-color:var(--acc)}
+.knob output{font:400 .9rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--fg);white-space:nowrap}
+.knob input[type=range]{width:100%;margin:6px 0 0;accent-color:var(--fg)}
 .knob select{width:100%;margin-top:6px}
 .knob.tg{display:flex;gap:10px;align-items:flex-start}
-.knob.tg input{width:22px;height:22px;margin-top:2px;flex:none;accent-color:var(--on)}
+.knob.tg input{width:16px;height:16px;margin-top:3px;flex:none;accent-color:var(--fg)}
 .knob.tg label.name{display:block;flex:1}
 .knob .odd{color:var(--warn);font-size:.8rem}
 .marks{position:relative;height:1.6em;margin:0 9px}
-.marks button{position:absolute;transform:translateX(-50%);font-size:.75rem;padding:0 6px;border-radius:99px;color:var(--mute);white-space:nowrap}
-.marks button.on{color:var(--acc);border-color:var(--acc)}
-.rawnote{font-size:.88rem;color:var(--warn);margin:6px 0}
-.row .key{font:600 .88rem ui-monospace,SFMono-Regular,Menlo,monospace}
+.marks button{position:absolute;transform:translateX(-50%);font-size:.75rem;padding:0 6px;color:var(--mute);white-space:nowrap}
+.marks button.on{color:var(--fg);border-color:var(--fg)}
+.rawnote{font-size:.9rem;color:var(--mute);margin:6px 0}
+.row .key{font:400 .88rem ui-monospace,SFMono-Regular,Menlo,monospace}
 </style>
 </head>
 <body>
 <header class="dash"><div class="in">
-<h1><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="12" r="3"/><path d="M12 15v6.5M3.2 10.5l5.9 1.2M20.8 10.5l-5.9 1.2"/></svg>DazDrive <span class="ver" id="ver"></span> setup</h1>
-<ul class="facts">
-<li>⚙️ Gearbox on <b>Automatic</b></li>
-<li>🚛 <b>Singleplayer</b> and SCS Convoy, not TruckersMP</li>
-<li>🔒 Works offline, sends nothing</li>
-</ul>
+<h1>DazDrive<span class="ver" id="ver"></span>setup</h1>
+<p>For ETS2 1.60 (Steam beta temporary_1_60) with the gearbox on Automatic. Singleplayer and SCS Convoy, not TruckersMP. This page runs in your browser and sends nothing.</p>
 </div></header>
 <main>
 <nav class="wizhead" aria-label="Steps"><div class="wsteps" id="wsteplist"></div><button class="link" id="wizexit" type="button">Show everything on one page</button></nav>
@@ -205,18 +187,18 @@ body.wiz .wizhead{display:flex}
 <h2>Do you already have a dazdrive.ini?</h2>
 <p class="mute">Open it and this page starts from your own settings: you change only what you want, instead of setting everything up again. Settings that are new in this version get their standard value.</p>
 <div class="start">
-<label class="big"><b>📂 Yes, open my dazdrive.ini</b><small>It is in <code>plugins\dazdrive\</code>, next to this page.</small><input type="file" id="open" accept=".ini,text/plain"></label>
-<button class="big" id="resume" type="button" hidden><b>↩️ Continue where I left off</b><small id="resumewhen"></small></button>
-<button class="big" id="fresh" type="button"><b>✨ No, start fresh</b><small>Pick how smart your truck is and go from there.</small></button>
+<label class="big"><b>Open my dazdrive.ini</b><small>It is in <code>plugins\dazdrive\</code>, next to this page.</small><input type="file" id="open" accept=".ini,text/plain"></label>
+<button class="big" id="resume" type="button" hidden><b>Continue where I left off</b><small id="resumewhen"></small></button>
+<button class="big" id="fresh" type="button"><b>Start fresh</b><small>Pick how smart your truck is and go from there.</small></button>
 </div>
 <p class="note" id="restore" hidden></p>
-<p><button class="link" id="guide" type="button">🧭 Guide me step by step</button></p>
+<p><button class="link" id="guide" type="button">Step-by-step mode</button></p>
 </section>
 
 <section class="card" data-step data-title="Truck year" id="s-era">
 <p class="note" id="restore2" hidden></p>
-<h2><span class="n">1</span> How smart is your truck?</h2>
-<p class="mute">Pick a year: what real trucks had by then. The newest years include parts that are new in DazDrive too.</p>
+<h2><span class="n">1</span> Truck era</h2>
+<p class="mute">Pick a year: what real trucks had by then. The newest years include parts that are new in DazDrive too, and less tested.</p>
 <div class="tl" id="eras"></div>
 <p class="erablurb" id="erablurb"></p>
 <p class="legend"><span><span class="stage stable">Stable</span> ridden a lot</span><span><span class="stage beta">Beta</span> ridden a little, not confirmed yet</span><span><span class="stage experimental">Experimental</span> not proven yet</span></p>
@@ -224,7 +206,7 @@ body.wiz .wizhead{display:flex}
 
 <section class="card" data-step data-title="Features" id="s-feat">
 <h2><span class="n">2</span> Features <span class="count" id="count"></span></h2>
-<p class="mute">Tap a name for what it does. The switch turns it on or off; a half switch means partly on (see Fine-tuning).</p>
+<p class="mute">Click a name for what it does. The box turns it on or off; a dash means partly on (see Fine-tuning).</p>
 <div id="tiles"></div>
 </section>
 
@@ -232,9 +214,9 @@ body.wiz .wizhead{display:flex}
 <div class="card" style="margin-bottom:0">
 <h2><span class="n">3</span> Fine-tuning <span class="opt">optional</span></h2>
 <ul class="facts" style="margin:0">
-<li>👍 <b>Presets</b>: a few good choices per module, enough for most players</li>
-<li>🎚️ <b>Advanced</b>: a handful of easy controls, one control can set several settings at once</li>
-<li>🔧 <b>Custom</b>: every raw setting with a one-line help, for those who know exactly what they want</li>
+<li><b>Presets</b>: a few good choices per module, enough for most players</li>
+<li><b>Advanced</b>: a handful of easy controls, one control can set several settings at once</li>
+<li><b>Custom</b>: every raw setting with a one-line help, for those who know exactly what they want</li>
 </ul>
 </div>
 <div id="modules"></div>
@@ -544,7 +526,7 @@ if (typeof document !== "undefined") (function () {
     var lab = el("label", "stop"), r = el("input");
     r.type = "radio"; r.name = "era"; r.value = e.id; r.checked = e.id === era;
     lab.appendChild(r);
-    lab.appendChild(el("span", "dot", ["🔧", "📡", "🍃", "🛰️", "🤖", "🚦"][i] || ""));
+    lab.appendChild(el("span", "dot", ""));
     lab.appendChild(el("span", "yr", e.year));
     lab.appendChild(el("b", null, e.name));
     var stg = eraStage(D, e.id); lab.appendChild(el("span", "stage " + stg, stg));
@@ -661,7 +643,7 @@ if (typeof document !== "undefined") (function () {
     body.appendChild(el("p", "mute", g.about[0]));
     if (g.about.length > 1) { var ul = el("ul", "facts"); g.about.slice(1).forEach(function (t) { ul.appendChild(el("li", null, t)); }); body.appendChild(ul); }
     var tabs = el("div", "tabs"); tabs.setAttribute("role", "tablist");
-    [["preset", "👍 Presets"], ["advanced", "🎚️ Advanced"], ["custom", "🔧 Custom"]].forEach(function (x) {
+    [["preset", "Presets"], ["advanced", "Advanced"], ["custom", "Custom"]].forEach(function (x) {
       if (x[0] === "advanced" && !g.knobs.length) return;
       var b = el("button", "tab", x[1]); b.type = "button"; b.setAttribute("role", "tab");
       b.addEventListener("click", function () { m.tab = x[0]; refresh(); });
@@ -684,7 +666,7 @@ if (typeof document !== "undefined") (function () {
       body.appendChild(ap); m.panels.advanced = ap;
     }
     var cp = el("div", "panel");
-    cp.appendChild(el("p", "rawnote", "🔧 The raw settings of dazdrive.ini, each with the plugin's own one-line help. No safety net: the page only checks that a value is a number. Switches (1 / 0) also come on and off in step 2."));
+    cp.appendChild(el("p", "rawnote", "The raw settings of dazdrive.ini, each with the plugin's own one-line help. No safety net: the page only checks that a value is a number. Switches (1 / 0) also come on and off in step 2."));
     g.scope.forEach(function (sk) { cp.appendChild(item(sk[0], sk[1], sk[2], sk[1], false)); });
     body.appendChild(cp); m.panels.custom = cp;
     card.appendChild(body);
@@ -698,13 +680,13 @@ if (typeof document !== "undefined") (function () {
   function li(html) { var l = el("li"); l.innerHTML = html; steps.appendChild(l); }
   var folder = "<code>&lt;ETS2&gt;\\bin\\win_x64\\plugins\\dazdrive\\</code><br><small>Windows: <code>C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2\\bin\\win_x64\\plugins\\dazdrive\\</code><br>Linux / Proton: <code>~/.local/share/Steam/steamapps/common/Euro Truck Simulator 2/bin/win_x64/plugins/dazdrive/</code></small>";
   if (canPick) {
-    li("💾 Press <b>Save dazdrive.ini</b>: a file dialog opens");
-    li("📁 Go to the folder of this page and <b>overwrite</b> dazdrive.ini there: " + folder);
+    li("Press <b>Save dazdrive.ini</b>: a file dialog opens");
+    li("Go to the folder of this page and <b>overwrite</b> dazdrive.ini there: " + folder);
   } else {
-    li("💾 Press <b>Save dazdrive.ini</b> (it lands in Downloads)");
-    li("📁 Move it next to this page and <b>overwrite</b> the old one: " + folder);
+    li("Press <b>Save dazdrive.ini</b> (it lands in Downloads)");
+    li("Move it next to this page and <b>overwrite</b> the old one: " + folder);
   }
-  li("🔄 Restart the game");
+  li("Restart the game");
   function text() { return buildIni(D, era, vals); }
   // the answer to Save / Copy: in the Save card, and as a toast in the fixed bar (the card is below the fold)
   var toastT = 0;
@@ -714,7 +696,7 @@ if (typeof document !== "undefined") (function () {
   }
   $("toast").addEventListener("click", function () { this.hidden = true; });
   function say(msg, isBad) { $("msg").textContent = msg; flash(msg, isBad); }
-  function done(how) { $("msg").textContent = "✅ " + how + " This page remembers these settings until you save new ones."; flash("✅ " + how); remember(text()); }
+  function done(how) { $("msg").textContent = how + " This page remembers these settings until you save new ones."; flash(how); remember(text()); }
   // a field that is not a number blocks Save and Copy: say which one, open it and put the cursor in it
   function blocked() {
     if (!badList.length) return false;
@@ -770,7 +752,7 @@ if (typeof document !== "undefined") (function () {
     rd.onload = function () {
       var n = loadIni(rd.result);
       if (!n) { setNotice("That file has no DazDrive settings in it. Pick another one, or start fresh.", false); return; }
-      setNotice("📂 Opened " + f.name + ": " + took(n), true);
+      setNotice("Opened " + f.name + ": " + took(n), true);
       afterStart();
     };
     rd.readAsText(f);
@@ -794,7 +776,7 @@ if (typeof document !== "undefined") (function () {
   }
   $("resume").addEventListener("click", function () {
     var n = loadIni(saved.ini); if (!n) return;
-    setNotice("↩️ Continued with what you saved here on " + new Date(saved.when).toLocaleDateString() + ": " + took(n), true);
+    setNotice("Continued with what you saved here on " + new Date(saved.when).toLocaleDateString() + ": " + took(n), true);
     afterStart();
   });
   $("fresh").addEventListener("click", function () { startFresh(); afterStart(); });
