@@ -606,7 +606,7 @@ static float stub_cruise(void *ga, float dt, float pedal)
         int md = mode_of(game_adaptive());
         float y = r;
         if (md == MODE_ECO && p_pc_eco > 1) y = powf(r, p_pc_eco);
-        else if (md == MODE_POWER && p_pc_pw > 1) y = 1 - powf(1 - r, p_pc_pw);
+        else if ((md == MODE_POWER || md == MODE_M) && p_pc_pw > 1) y = 1 - powf(1 - r, p_pc_pw);  // M: the sober, direct pedal
         if (y != r) { r = y; g_pedal_mapped = 1; }
     }
     float c = g_creep_thr;  // Creep (heavy loads): a little throttle on top, also with cruise off (stored in inner+0x1424)

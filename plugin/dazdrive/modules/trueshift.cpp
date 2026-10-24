@@ -753,6 +753,12 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
         // 10 s; 15 s (eco_roll_cruise_min_s) when the cruise first has to spend gas on the boost speed
         float need_s = boost > 0 && kmh < set + boost - 0.5f ? p_roll_cruise_min : 10;
         if (cc && a_chk < 0 && (fmaxf(kmh, set + boost) - (set - under)) / 3.6f / -a_chk < need_s) return 0;
+        // Power: only a long roll that the route confirms (>= 15 s), never the short ones (Damien 25-10: Power is for pulling, not for rolling)
+        if (S.mode == MODE_POWER && p_mode_char > 0) {
+            if (!rk) return 0;
+            float span = cc ? kmh - (set - under) : 12.0f;
+            if (a_chk < 0 && span / 3.6f / -a_chk < 15) return 0;
+        }
         if (a_pred > 0.075f || a_pred < -(eco ? p_roll_dec_eco * (rk && p_mode_char > 0 ? 1.4f : 1.0f) : p_roll_dec)) {
             // over a top: a short climb left and a gentle way down after it
             float crest = rk ? route_crest_m(v * 5) : -1;

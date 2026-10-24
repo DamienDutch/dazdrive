@@ -37,16 +37,12 @@ STANDARD = {
         "no_creep": 1,           # ON: with crawl off the truck never creeps on the clutch at idle (the stock automatic did)
         "smooth_stop": 1,        # ON: clutch opens around idle when braking to a stop (no pushing down to 2 km/h); ridden
         "dash_letter": 1,        # ON: D/E/P/M on the dashboard instead of A
-        "mode_character": 0,     # off in the shipped preset: Eco and Power differ from Normal in small drivetrain details; not ridden enough yet
-        "eco_rev_ceiling_rpm": 0, # off in the shipped preset: Eco soft rev ceiling; not ridden yet
         "tones": 1,              # ON: short tone when the mode changes
         "trace": 1,              # csv traces (need log_level 2): ON in the betas for bug reports, off in the first full release
     },
     "cruise": {
         "smart_overspeed_kmh": -1,  # players: the game's own overspeed setting
         "descent_overspeed_kmh": 0, # players: descents held at the set speed, as before
-        "pedal_curve_eco": 1,    # off in the shipped preset: the Eco / Power pedal curves are not ridden yet (1 = linear)
-        "pedal_curve_power": 1,
         "smooth": 1,             # ON: own cruise throttle, no bursts after shifts: part of what TrueShift is for
         "curves": 0,             # off in the shipped preset: the ~2010 year of the setup page; the page turns it on from ~2020
         "curve_brake": 0,        # off in the shipped preset: the ~2010 year of the setup page; the page turns it on from ~2020
@@ -317,13 +313,13 @@ BUTTONS = []
 # calls it "Standard (as shipped)" while nothing is changed.
 # The _OFF lists name the look-ahead keys too although STANDARD has them off already, so the old years do not depend on it.
 _OFF_1995 = {
-    "trueshift": {"eco_roll": 0, "lookahead": 0, "smooth_stop": 0},
+    "trueshift": {"eco_roll": 0, "lookahead": 0, "smooth_stop": 0, "mode_character": 0, "eco_rev_ceiling_rpm": 0},
     "cruise": {"curves": 0, "curve_brake": 0, "descent": 0, "emergency_hazards": 0, "acc_calm_cut_in": 0,
-               "hill_start": 0, "predictive": 0, "aeb": 0},
+               "hill_start": 0, "predictive": 0, "aeb": 0, "pedal_curve_eco": 1, "pedal_curve_power": 1},
 }
 _OFF_2000 = {
-    "trueshift": {"eco_roll": 0, "lookahead": 0},
-    "cruise": {"curves": 0, "curve_brake": 0, "emergency_hazards": 0, "predictive": 0, "aeb": 0},
+    "trueshift": {"eco_roll": 0, "lookahead": 0, "mode_character": 0, "eco_rev_ceiling_rpm": 0},
+    "cruise": {"curves": 0, "curve_brake": 0, "emergency_hazards": 0, "predictive": 0, "aeb": 0, "pedal_curve_eco": 1, "pedal_curve_power": 1},
 }
 # ~2010 is the shipped preset, so it overrides nothing
 _ON_2015 = {"trueshift": {"lookahead": 1},
