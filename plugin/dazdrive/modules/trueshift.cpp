@@ -22,7 +22,7 @@
 
 // ---------------------------------------------------------------- settings
 
-static float p_mode_char, p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, p_min_gap, p_dwell_ud, p_dwell_du,
+static float p_eco_ceil, p_mode_char, p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, p_min_gap, p_dwell_ud, p_dwell_du,
     p_max_skip, p_skip_acc, p_skip_wait, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
@@ -34,6 +34,7 @@ static param g_params[] = {
     { "takeover_kmh", &p_on_kmh, 7, "TrueShift takes over from the game's automatic above this speed" },
     { "takeover_rpm", &p_on_rpm, 1000, "TrueShift takes over as soon as the engine has reached this rpm with the clutch closed in any gear (the clutch is locked then, so the rpm is real); 0 = by speed only (takeover_kmh)" },
     { "handback_kmh", &p_off_kmh, 4, "and hands back below this speed (starting, stopping, maneuvering)" },
+    { "eco_rev_ceiling_rpm", &p_eco_ceil, 200, "Eco: an upshift never waits for revs above the top of the efficient range plus this (rpm), also with the pedal down; a kickdown lifts it. 0 = off. Saves fuel on long pulls" },
     { "mode_character", &p_mode_char, 1, "1 = Eco and Power differ from Normal in the small drivetrain details too (kickdown, how long a gear is held, hint hold, engine brake, pedal filter); 0 = only the main differences" },
     { "hint_hold_s", &p_hint_hold, 10, "seconds a gear chosen with the shift-hint buttons is held (0 = off)" },
     { "min_gap_s", &p_min_gap, 0.5f, "minimum time between two shifts" },
@@ -300,7 +301,11 @@ static float pw_mid() { return 0.5f * (S.eng.range[R_POWER][0] + S.eng.range[R_P
 static float up_pt(int g)
 {
     float mo = mode_rpm();
-    return fminf(lerpf(eco_up(g) + mo, S.eng.range[R_POWER][1] + 0.5f * mo, pw_k()), S.eng.rpm_limit * 0.94f);
+    float u = fminf(lerpf(eco_up(g) + mo, S.eng.range[R_POWER][1] + 0.5f * mo, pw_k()), S.eng.rpm_limit * 0.94f);
+    // Eco: a soft ceiling (fuel); not during a kickdown
+    if (p_mode_char > 0 && p_eco_ceil > 0 && S.mode == MODE_ECO && S.kick_until <= sim_s())
+        u = fminf(u, fmaxf(eco_up(g) + mo, S.eng.range[R_HIGH][1] + p_eco_ceil));
+    return u;
 }
 // Light-load downshift point: below the plateau, so that an early upshift to
 // the plateau has room before it has to come back down.
@@ -582,7 +587,8 @@ static void refresh(void *self)
     float cc_tau = now - cc_zero_since > 1.5 ? 1.0f : p_cc_damp;
     S.cc_thr += (float)(dt / (cc_tau + dt)) * (eff - S.cc_thr);
     if (!cc) S.cc_thr = eff;
-    S.thr = cc ? fmaxf(pedal, S.cc_thr) : fmaxf(pedal, eff);
+    // with the Eco / Power pedal curve the engine's own throttle (eff) is what counts, not the raw pedal
+    S.thr = cc ? fmaxf(pedal, S.cc_thr) : g_pedal_mapped ? eff : fmaxf(pedal, eff);
 
     // Demand rises fast (0.3 s) and falls slowly (2 s). Load itself does not
     // move the shift points: the force checks handle it.
@@ -747,7 +753,7 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
         // 10 s; 15 s (eco_roll_cruise_min_s) when the cruise first has to spend gas on the boost speed
         float need_s = boost > 0 && kmh < set + boost - 0.5f ? p_roll_cruise_min : 10;
         if (cc && a_chk < 0 && (fmaxf(kmh, set + boost) - (set - under)) / 3.6f / -a_chk < need_s) return 0;
-        if (a_pred > 0.075f || a_pred < -(eco ? p_roll_dec_eco : p_roll_dec)) {
+        if (a_pred > 0.075f || a_pred < -(eco ? p_roll_dec_eco * (rk && p_mode_char > 0 ? 1.4f : 1.0f) : p_roll_dec)) {
             // over a top: a short climb left and a gentle way down after it
             float crest = rk ? route_crest_m(v * 5) : -1;
             if (!(crest >= 0 && a_n > -0.5f && route_min_grade(crest, crest + v * 10) >= -3.5f)) return 0;
@@ -1154,7 +1160,9 @@ static int decide_gear(void *self, const char **why)
     if (g_ahead == g_ahead) g_up = fmaxf(g_up, g_ahead);
     float f_up = fmaxf(f_res, resist_grade(v, g_up));
     float v2u = fmaxf(0.5f, v - f_up / S.mass * S.eng.shift_time);
-    if (cur < n && rpm > S.up_pt + (coast ? 200 : 0)) {
+    if (cur < n && rpm > S.up_pt + (coast ? by_mode(50.0f, 200.0f, 200.0f) : 0)) {
+        // Power: just off the pedal the gear stays (3 s), unless the revs are nearly at the limit
+        if (coast && S.mode == MODE_POWER && p_mode_char > 0 && now - S.pedal_on_at < 3 && rpm < lim * 0.9f) { *why = "power holds"; return cur; }
         // Rolling out or lifting towards a junction: no upshift, it only ends in a shift back (Damien 24-10, 1831 s and 3421 s). Not with
         // the pedal at 0.5 or going up: whoever wants power at a junction gets it.
         bool wants_power = clampf(T.in_thr, 0, 1) >= 0.5f || thr >= 0.5f || thr > S.demand + 0.05f;

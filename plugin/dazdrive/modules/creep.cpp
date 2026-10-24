@@ -26,6 +26,13 @@
 static float p_enabled, p_creep, p_man, p_on, p_off, p_maxped, p_brake, p_rest, p_delay, p_rev, p_close, p_open, p_release, p_trace, p_letter, p_heavy_t, p_max_gear, p_heavy_gear, p_heavy_thr, p_arm, p_start_on, p_tog_hold, p_descent_brake, p_descent_kmh, p_tog_mode;
 static float p_crawl_rpm, p_launch, p_l_light, p_l_full, p_l_heavy, p_l_bite, p_l_gain, p_l_creep, p_l_final, p_l_rate, p_l_sync, p_l_max_s, p_l_end;
 
+// Eco / Power change the smooth start a little (Normal and M the middle value)
+static float lmode(float eco, float normal, float power)
+{
+    int m = mode_of(game_adaptive());
+    return m == MODE_ECO ? eco : m == MODE_POWER ? power : normal;
+}
+
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = crawl / maneuver mode on (automatic only; the clutch slips at idle in gears 1, 2 and R)" },
     { "creep_kmh", &p_creep, 5.0f, "crawl speed with both pedals released (km/h); the brake pedal lowers it" },
@@ -243,7 +250,7 @@ static float launch_aim(float thr, float idle, int heavy)
 {
     float s = clampv((thr - 0.05f) / 0.85f, 0, 1);
     s = s * s * (3 - 2 * s);
-    float lo = idle + p_l_light + (heavy ? p_l_heavy : 0), hi = fmaxf(p_l_full + (heavy ? p_l_heavy : 0), lo + 100);
+    float lo = idle + p_l_light + lmode(-50, 0, 150) + (heavy ? p_l_heavy : 0), hi = fmaxf(p_l_full + lmode(-150, 0, 150) + (heavy ? p_l_heavy : 0), lo + 100);
     return lo + (hi - lo) * s;
 }
 
@@ -293,7 +300,7 @@ static void launch_tick(const launch_in &in)
     // under its aim the engine is being dragged (24.9 t ride 12-10: 637 rpm against an aim of 932, 803 against 1299): open twice as hard
     // as it closes, and never keep closing while it sags
     float err = rpm_p - g_ln_ra;
-    d = -(p_l_creep * (1 + fmaxf(0, g_ln_t - 1.0f) * 3) + p_l_gain * (err < 0 ? 2.0f : 1.0f) * err / 100);
+    d = -(p_l_creep * (1 + fmaxf(0, g_ln_t - 1.0f) * 3) + p_l_gain * lmode(0.8f, 1.0f, 1.3f) * (err < 0 ? 2.0f : 1.0f) * err / 100);
     if (err < -150 && d < 0.3f) d = 0.3f;
     d = fmaxf(d, -p_l_rate);
     if (slip < p_l_sync || vk > p_l_end || g_ln_t > p_l_max_s) d = -p_l_final;

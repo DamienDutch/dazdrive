@@ -18,6 +18,7 @@ volatile int g_rolling, g_cruise_smooth, g_crawl_on;
 volatile float g_roll_boost_kmh;
 volatile double g_rb_cancel_at = -1e9;
 volatile int g_pcc_on;
+volatile int g_pedal_mapped;
 volatile float g_overspeed_cap = 5;
 volatile float g_pcc_need_kmh = NAN;
 int g_log_level = 2;

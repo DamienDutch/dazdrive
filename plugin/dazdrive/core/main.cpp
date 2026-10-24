@@ -23,7 +23,7 @@ int g_n_modules = sizeof g_modules / sizeof g_modules[0];
 static const char k_flavor[] = "dazdrive-flavor=" DZ_STR(DAZDRIVE_FLAVOR);
 
 static int g_started, g_inactive;  // g_inactive: nothing hooked, so nothing is registered either (the plugin sits idle)
-volatile int g_rolling, g_cruise_smooth, g_crawl_on, g_pcc_on;
+volatile int g_rolling, g_cruise_smooth, g_crawl_on, g_pcc_on, g_pedal_mapped;
 volatile float g_roll_boost_kmh;
 volatile double g_rb_cancel_at = -1e9;
 volatile float g_overspeed_cap = 5;
