@@ -156,11 +156,7 @@ does not know, it should find nothing, log that and do nothing, but that is no g
   `car_automatic_transmission` for reference.
 - `tools/` – build, release, ini/setup-page generator (`gen_ini.py` + `dazdrive-setup.tmpl.html`),
   ride-log analysis, simulators (`tools/sim/`).
-- `docs/` – how the features behave and how to read their output
-  ([`trueshift.md`](docs/trueshift.md), [`aeb.md`](docs/aeb.md), [`autohold-acc.md`](docs/autohold-acc.md),
-  [`predictive-cruise.md`](docs/predictive-cruise.md), [`lane.md`](docs/lane.md),
-  [`incidents.md`](docs/incidents.md)), [`eras.md`](docs/eras.md) for when real trucks got what,
-  [`multiplayer.md`](docs/multiplayer.md) for Convoy and TruckersMP.
+- `docs/ASSISTANT.md` – a short map for an AI assistant that is helping someone with DazDrive (files, ini, incidents, what to ask for).
 - `release/` – the player README template (`README-player.txt`).
 
 ## Credits and license

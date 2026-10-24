@@ -301,7 +301,7 @@ SETUP_GROUPS = [
 BUTTONS = []
 
 # --- truck eras: how smart the truck is, as presets on the setup page. Each is "base" (standard) plus overrides,
-# after when the real thing appeared in European series trucks (docs/eras.md): AMT 1995, ACC ~2000,
+# after when the real thing appeared in European series trucks: AMT 1995, ACC ~2000,
 # eco-roll and emergency stop signal ~2010, predictive cruise and Stop & Go ~2012-2015, bends/roundabouts and lane
 # centering 2019, ISA mandatory 2024. "recommended" = preselected on the page (no label): the newest era DazDrive has
 # ridden through and through; it moves up after test rides. Realistic years, experimental parts included where they belong.
@@ -345,7 +345,7 @@ ERAS = [
 # on the page shows the weakest stage of the features it switches on. A tile's first key is the feature itself, the others
 # refine it (the tile is "mixed" while only some of its keys have the "on" value).
 FEATURES = [
-    # group, stage, since (first in a real European truck, docs/eras.md), info (the popup), needs (feature ids that must be on)
+    # group, stage, since (first in a real European truck), info (the popup), needs (feature ids that must be on)
     {"id": "ts", "group": "Gearbox", "stage": "stable", "since": "1995", "label": "TrueShift gearbox", "desc": "Shifts like a real truck automatic",
      "info": "Replaces the game's gear choice. Picks gears from engine torque, weight, slope and the route ahead. Keeps revs low, skips gears when it can, and learns from upshifts that did not pull. Change modes (Eco, Normal, Power, M) with the game's Adaptive Automatic Transmission Mode key.",
      "keys": [["trueshift", "enabled", 1, 0]]},
