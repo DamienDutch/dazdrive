@@ -452,6 +452,11 @@ function eraStage(D, era) {
 }
 function isNum(s) { return /^\s*-?(\d+\.?\d*|\.\d+)\s*$/.test(s); }
 // an ini file -> {section: {key: value}}; comments and unknown lines are skipped
+function whenText(iso) {   // "today at 22:43" when it is from today, else the date
+  var d = new Date(iso), n = new Date();
+  if (d.toDateString() === n.toDateString()) return "today at " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleDateString();
+}
 function parseIni(text) {
   var sec = null, out = {};
   String(text).split(/\r?\n/).forEach(function (l) {
@@ -893,11 +898,11 @@ if (typeof document !== "undefined") (function () {
   try { saved = JSON.parse(localStorage.getItem(STORE) || "null"); } catch (e) {}
   if (saved && saved.ini && parseIni(saved.ini)) {
     $("resume").hidden = false;
-    $("resumewhen").textContent = "What you saved with this page on " + new Date(saved.when).toLocaleDateString() + (saved.version !== D.version ? " (version " + saved.version + ")" : "") + ".";
+    $("resumewhen").textContent = "Saved with this page " + (whenText(saved.when).indexOf("today") === 0 ? "" : "on ") + whenText(saved.when) + (saved.version !== D.version ? " (version " + saved.version + ")" : "") + ".";
   }
   $("resume").addEventListener("click", function () {
     var n = loadIni(saved.ini); if (!n) return;
-    setNotice("Continued with what you saved here on " + new Date(saved.when).toLocaleDateString() + ": " + took(n), true);
+    setNotice("Continued with what you saved here " + (whenText(saved.when).indexOf("today") === 0 ? "" : "on ") + whenText(saved.when) + ": " + took(n), true);
     afterStart();
   });
   $("fresh").addEventListener("click", function () { startFresh(); afterStart(); });
