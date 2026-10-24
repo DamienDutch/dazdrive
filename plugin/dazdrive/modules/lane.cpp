@@ -24,7 +24,7 @@
 #include <stdlib.h>
 
 static float *g_minp, p_on_kmh, p_a_max, p_a_leak, p_min_kmh, p_mode, p_gain, p_dead, p_tone;
-static float p_bias, p_blend, p_blend_max, p_f_pull, p_follow, p_f_act, p_f_hold, p_f_win, p_f_max, p_f_tau, p_f_ret, p_f_rate, p_f_back, p_f_bend;   // shared steering
+static float p_bend_out, p_bias, p_blend, p_blend_max, p_f_pull, p_follow, p_f_act, p_f_hold, p_f_win, p_f_max, p_f_tau, p_f_ret, p_f_rate, p_f_back, p_f_bend;   // shared steering
 static float p_edge_look, p_edge_from, p_edge_full, p_backoff, p_drv_rate, p_drv_follow, p_drv_attack, p_drv_release, p_drv_leak;
 static float p_umax, p_ind_pause, p_ind_resume, p_ind_off, p_keep_on, p_nonffb, p_slow_resume;
 static float p_sway, p_sw_cut, p_sw_rec, p_sw_amp;
@@ -73,6 +73,7 @@ static param g_params[] = {
     { "driver_release", &p_drv_release, 1.0f, "seconds until the assist is back at full strength after you let go" },
     { "follow", &p_follow, 0, "mode 2: 1 = shared steering: an offset you hold with the wheel (passing a cyclist, a parked car) becomes the aim for a while, the assist then keeps damping and steering the bends but stops pulling back to the lane center; 0 = off" },
     { "lane_bias_m", &p_bias, 0.325f, "mode 2: the assist aims this far to the RIGHT of the lane center (m), like a driver who keeps right (0 = the center). It builds up slowly and fades out in bends (the truck cuts those inside by itself) and is gone in a sharp one" },
+    { "lane_bend_out_m", &p_bend_out, 0.3f, "mode 2: in a bend the assist aims this far to the OUTSIDE of the bend (m): the tractor swings wide so the trailer has room (a right bend: to the left of the lane center, a left bend: to the right). It comes with the bend (o3), instead of the keep-right bias" },
     { "bend_blend", &p_blend, 0, "shared steering in a bend: 1 = while you steer into the bend yourself the assist leaves its own bend steering out for the part you already do, and builds it back within 0.3 s when you let go; 0 = the assist always adds its full bend steering (can cut the bend inside when you steer too)" },
     { "bend_blend_max", &p_blend_max, 0.6f, "bend_blend: the most of the assist's own bend steering it leaves out (0-1)" },
     { "follow_pull", &p_f_pull, 0.002f, "shared steering: the assist must pull the wheel at least this much (wheel range) for a still hand against it to show; a gentle offset hardly moves the wheel, so steering speed alone does not see it" },
@@ -659,9 +660,12 @@ static float lane_step(float u, float o1, float o2, float o3, float dt, float wh
     // Keep right (Damien 24-10: "iets rechts van het midden", 0.325 m): the aim moves to the right on a straight, slowly (0.1 m/s), and
     // back to the center in a bend (fully gone from |o3| 0.0045), under 40 km/h, with the indicator paused, or when the lane is not clean.
     {
-        float straight = 1 - clampf((fabsf(o3) - 0.0015f) / 0.003f, 0, 1);
-        float want = p_bias > 0 && kmh > 40 && !g_pause && fabsf(o1) < 1.2f ? -clampf(p_bias, 0, 0.6f) * straight : 0;
-        float st = 0.1f * dt * (want == 0 ? 3.0f : 1.0f);   // out three times faster than in
+        float bend = clampf((fabsf(o3) - 0.0015f) / 0.003f, 0, 1), straight = 1 - bend;
+        // keep right on a straight; in a bend the outside (trailer room): + is left, a right bend has o3 > 0 and its outside is the left
+        float sharp = 1 - clampf((fabsf(o3) - 0.006f) / 0.003f, 0, 1);   // the outside shrinks again in a very sharp bend (from R 170 m): the lane edge is near
+        float want = -clampf(p_bias, 0, 0.6f) * straight + clampf(p_bend_out, 0, 0.6f) * bend * sharp * (o3 > 0 ? 1.0f : -1.0f);
+        if (!(kmh > 40 && !g_pause && fabsf(o1) < 1.2f && (p_bias > 0 || p_bend_out > 0))) want = 0;
+        float st = 0.15f * dt * (want == 0 ? 2.0f : 1.0f);   // out twice as fast as in
         g_bias += clampf(want - g_bias, -st, st);
     }
     float e1 = o1 - g_ref - g_bias;   // the offset the assist works on (aim: your held offset and the keep-right bias)

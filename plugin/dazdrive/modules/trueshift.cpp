@@ -26,7 +26,7 @@ static float p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, 
     p_max_skip, p_skip_acc, p_skip_wait, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
-    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_wet, p_stop, p_tones, p_crest_band;
+    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_wet, p_stop, p_tones, p_crest_band;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = TrueShift on, 0 = the game's own automatic" },
@@ -40,7 +40,9 @@ static param g_params[] = {
     { "dwell_down_up_s", &p_dwell_du, 2.0f, "after a downshift, no upshift for this long (unless clearly past the upshift point)" },
     { "max_skip", &p_max_skip, 2, "most gears an upshift may skip (0 = never skip)" },
     { "skip_accel", &p_skip_acc, 0.15f, "acceleration (m/s2) the skipped-to gear must still give" },
-    { "skip_wait_s", &p_skip_wait, 4, "pulling lightly: wait up to this long for the revs to build up so a skip can land (0 = shift one gear at once)" },
+    { "skip_wait_over_rpm", &p_skip_over, 400, "skip_wait_s: how far over the upshift point the revs may build up while waiting for a skip (rpm; never above 85 % of the limit)" },
+    { "kick_dwell_s", &p_kick_dwell, 5, "after a kickdown or lugging downshift no upshift for this long, unless clearly past the upshift point (the rpm path, not the rev limit)" },
+    { "skip_wait_s", &p_skip_wait, 6, "pulling lightly: wait up to this long for the revs to build up so a skip can land (0 = shift one gear at once)" },
     { "hysteresis_rpm", &p_hyst, 50, "an upshift must land at least this far above the next downshift point" },
     { "kickdown_pedal", &p_kick_pedal, 0.92f, "pedal position for kickdown" },
     { "kickdown_rate", &p_kick_rate, 1.5f, "pedal speed (per second) that makes a full press a kickdown" },
@@ -77,7 +79,7 @@ static param g_params[] = {
     { "eco_roll_under_eco_kmh", &p_roll_under_eco, 2.0f, "the same in Eco: a little more room, the most relaxed" },
     { "eco_roll_under_power_kmh", &p_roll_under_pw, 1.0f, "the same in Power: the strictest (keep it between 1 and 2 km/h; values around 0.5 give very short rolls that hunt)" },
     { "eco_roll_boost_kmh", &p_roll_boost, 2.0f, "with cruise control, Eco and Normal: just before an eco-roll starts, the cruise control lets the speed come this far over the set speed (km/h), so the roll takes the speed down to a little under it and the average stays near the set speed (0 = roll from the set speed)" },
-    { "low_calm_kmh", &p_calm, 12, "below this speed (km/h) with a gentle pedal the gear is only changed down for a stall or lugging, and below this + 5 km/h an upshift never skips: no hunting through the gears while maneuvering (0 = off)" },
+    { "low_calm_kmh", &p_calm, 12, "below this speed (km/h) with a gentle pedal the gear is only changed down for a stall or lugging: no hunting through the gears while maneuvering (0 = off)" },
     { "eco_roll_max_decel", &p_roll_dec, 0.04f, "eco-roll only where the truck would lose at most this much speed in neutral (m/s2; 0.04 = ~3 km/h in 20 s: a slight descent, not the flat)" },
     { "eco_roll_max_decel_eco", &p_roll_dec_eco, 0.08f, "the same in Eco: a slightly steeper stretch may still be rolled (0.08 = ~6 km/h in 20 s)" },
     { "eco_roll_min_kmh_eco", &p_roll_min_eco, 40, "Eco: the lowest speed that starts an eco-roll (km/h; Normal and Power: 50)" },
@@ -156,6 +158,8 @@ static struct {
     const char *why;        // reason of the last decision, for the trace
     int want, target;
     double blocked_log_at;
+    double brake_at;        // the last time the brake was on (service brake over 0.05)
+    double kd_at;           // the last kickdown or lugging downshift of ours
     double skip_wait_at, skip_wait_last;    // when the early upshift started waiting for a skip (0 = not waiting), and the last frame it waited
     float up_pt, dn_pt, floor_rpm, eb_level;
     int eb_full;            // the game itself would shift into the engine-brake range now
@@ -852,6 +856,7 @@ static int decide_gear(void *self, const char **why)
 
     float f_res = resist(v);
     float brake = fmaxf(T.in_brake, T.eff_brake);
+    if (brake > 0.05f) S.brake_at = sim_s();
     int ebrake = T.motor_brake || T.retarder > 0 || S.eb_level > 0.01f;
     int roll = roll_wanted(v, f_res, ebrake, brake, now - S.pedal_on_at);
     if (S.rolling) {
@@ -1059,7 +1064,6 @@ static int decide_gear(void *self, const char **why)
     // (while pulling away only 1 s after the takeover, else 3: the game starts a light truck in 4 and the next two shifts come within
     // seconds; after a pause or a teleport the gear may be wrong; the rpm and pull checks below still stop a skip that lands too low)
     if (!(cur <= 2 && v * 3.6f >= p_on_kmh) && (now - S.ours_at < (S.ours_launch ? 1.0 : 3.0) || v * 3.6f < p_on_kmh + 5)) skips = 0;
-    if (p_calm > 0 && S.mass > 6000 && v * 3.6f < p_calm + 5 && thr < 0.6f) skips = 0;   // no skipping through the gears at walking pace (trucks)
     float v2 = fmaxf(0.5f, v - f_res / S.mass * S.eng.shift_time);
 
     // Early upshift: light load, the new gear lands on the torque plateau and
@@ -1070,7 +1074,8 @@ static int decide_gear(void *self, const char **why)
     int climbing = grade_pct() - S.grade_hist[3] > 0.5f;
     // Only while pulling steadily: not lifting off (throttle well below the
     // recent demand), not slowing down, not right after taking over.
-    int steady = thr >= 0.15f && thr >= 0.6f * S.demand && T.accel > -0.15f && now - S.ours_at > 3 &&
+    // not within 6 s after braking below 60 km/h (stop and go: a brake, a shift up, the next brake; 24-10, 231-241 s: 12>10>11>9)
+    int steady = thr >= 0.15f && thr >= 0.6f * S.demand && T.accel > -0.15f && now - S.ours_at > 3 && (now - S.brake_at > 6 || v * 3.6f >= 60) &&
                  v * 3.6f >= p_on_kmh + 5;
     // With the route: the grade of the next seconds counts, no extra caution,
     // and a little less reserve when nothing climbs ahead.
@@ -1107,7 +1112,7 @@ static int decide_gear(void *self, const char **why)
             float low = fmaxf(fmaxf(dn_pt(h), base_dn(h)) + p_hyst, idle_rpm() + 350);
             skip_rpm = rh > 1 ? fmaxf(low * rc / rh, S.up_pt + 10) : 0;   // the rpm in this gear from which the skip lands on `low`
             float t_to = (skip_rpm - rpm) / fmaxf(1.0f, rpm * T.accel / v);
-            if (skip_rpm > 0 && skip_rpm <= fminf(S.up_pt + 250, 0.85f * S.eng.rpm_limit) && t_to <= p_skip_wait &&
+            if (skip_rpm > 0 && skip_rpm <= fminf(S.up_pt + p_skip_over, 0.85f * S.eng.rpm_limit) && t_to <= p_skip_wait &&
                 (S.skip_wait_at == 0 || now - S.skip_wait_at <= p_skip_wait)) {
                 if (S.skip_wait_at == 0) S.skip_wait_at = now;
                 S.skip_wait_last = now;
@@ -1136,10 +1141,10 @@ static int decide_gear(void *self, const char **why)
         bool wants_power = clampf(T.in_thr, 0, 1) >= 0.5f || thr >= 0.5f || thr > S.demand + 0.05f;
         bool jn_soon = jn >= 0 && jn < fmaxf(50.0f, v * 3);
         if (!wants_power && (T.accel < -0.2f || jn_soon) && rpm < lim * 0.9f) { *why = "up veto (slowing)"; return cur; }
-        if (S.shift_dir < 0 && since < p_dwell_du && rpm < S.up_pt + 100) { *why = "anti-hunt (up)"; return cur; }
+        if (S.shift_dir < 0 && since < (now - S.kd_at < p_kick_dwell + 1 ? p_kick_dwell : p_dwell_du) && rpm < S.up_pt + 100) { *why = "anti-hunt (up)"; return cur; }
         float a_req = lerpf(0.02f, 0.05f, S.demand);
         if (g_up > 2 && !coast) a_req = fmaxf(a_req, lerpf(0.05f, 0.12f, clampf((g_up - 2) / 3, 0, 1)));
-        int best = cur, maxg = cur + 1 + skips;
+        int best = cur, maxg = cur + 1 + (coast_p ? 0 : skips);   // no skipping with the pedal off: it only ends in the next brake (sim Y1: 6>8 at the lift-off, 8>6 a second later)
         const char *block = "";
         for (int h = cur + 1; h <= n && h <= maxg; h++) {
             float rh = rpm_at(h, v2u);
@@ -1206,6 +1211,7 @@ static void note_gear_change(void *self)
     S.shift_at = now;
     S.last_gear = g;
     if (S.cmd_why && !strcmp(S.cmd_why, "kickdown")) S.kick_until = 0;
+    if (g < prev && g > 0 && S.cmd_why && (!strcmp(S.cmd_why, "kickdown") || !strcmp(S.cmd_why, "lugging"))) S.kd_at = now;
     int hint = prev > 0 && g > 0 && g != S.commanded && S.ours;
     const char *why = hint ? "hint" : g == S.commanded ? S.cmd_why : "game";
     DEV_NOTE(shift(prev, g, why, hint, now));
