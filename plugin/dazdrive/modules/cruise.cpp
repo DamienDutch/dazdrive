@@ -27,7 +27,7 @@
 #include <string.h>
 
 static float p_herm;
-static float p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_eco_k, p_power_k, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
+static float p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_eco_k, p_power_k, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
 static param g_params[] = {
@@ -35,6 +35,9 @@ static param g_params[] = {
     { "acc_short_s", &p_gap_s, 1.0f, "adaptive cruise gap in seconds when the game option is the short distance (20). Real trucks: 2.4-3.6 s (Detroit default 3.6), but the game is scaled: 1 s feels normal" },
     { "acc_middle_s", &p_gap_m, 1.25f, "... the middle distance (30)" },
     { "acc_long_s", &p_gap_l, 1.5f, "... the long distance (40)" },
+    { "acc_fast_from_kmh", &p_acc_fast_from, 75, "ACC: from this speed (km/h) the time gap shrinks toward acc_fast_factor, so it follows closer on a motorway (country roads keep the full gap)" },
+    { "acc_fast_full_kmh", &p_acc_fast_full, 95, "ACC: from this speed (km/h) the time gap is acc_fast_factor times the set gap; in between it changes smoothly" },
+    { "acc_fast_factor", &p_acc_fast_k, 0.8f, "ACC: the time gap times this at motorway speed (1 = same gap at every speed). Never below 0.7 s" },
     { "acc_eco_factor", &p_eco_k, 1.0f, "Eco: the gap times this (more room, less brake-and-go)" },
     { "acc_power_factor", &p_power_k, 1.0f, "Power: the gap times this" },
     { "acc_min_m", &p_min_m, 15, "the gap never gets shorter than this (meters)" },
@@ -861,13 +864,20 @@ static void level_tone(int lv)
     else play_cue(lv <= 0 ? CUE_ACC_1 : lv == 1 ? CUE_ACC_2 : CUE_ACC_3);
 }
 
-static float gap_s()
+static float gap_s(float v_ms)
 {
     float t = g_level == 0 ? p_gap_s : g_level == 2 ? p_gap_l : p_gap_m;
     if (g_level == 0) return t;  // level 1 is really acc_short_s, in every mode (Damien 11-10: it came out at ~1.5 s)
     float a = game_adaptive();
     if (a == a && a > 3.01f) t *= p_eco_k;
     if (a == a && a > 0 && a < 2.0f) t *= p_power_k;
+    // closer at motorway speed (Damien 25-10): the full gap up to acc_fast_from_kmh, acc_fast_factor times it from acc_fast_full_kmh,
+    // never below 0.7 s (or the set gap if that is already lower)
+    float k = p_acc_fast_k;
+    if (k < 1 && p_acc_fast_full > p_acc_fast_from) {
+        float f = fminf(1.0f, fmaxf(0.0f, (v_ms * 3.6f - p_acc_fast_from) / (p_acc_fast_full - p_acc_fast_from)));
+        t = fmaxf(t * (1 - f * (1 - k)), fminf(t, 0.7f));
+    }
     return t;
 }
 
@@ -923,7 +933,7 @@ static float desired_gap(float v_ms)
     float mx = fmaxf(p_max_m, p_own_stop_m);
     float fade = fminf(1.0f, v_ms / 8.33f);
     // level 1: the standstill gap only matters at low speed (max, not sum); 2 and 3 keep the margin on top
-    float m = g_level == 0 ? fmaxf(stop_gap(v_ms), gap_s() * v_ms) : stop_gap(v_ms) + gap_s() * v_ms * fade;
+    float m = g_level == 0 ? fmaxf(stop_gap(v_ms), gap_s(v_ms) * v_ms) : stop_gap(v_ms) + gap_s(v_ms) * v_ms * fade;
     return m > mx ? mx : m;
 }
 
@@ -1836,13 +1846,13 @@ static void cr_frame()
         return;
     }
     float v = fmaxf(fabsf(T.speed), 8.0f);
-    float gap_m = fminf(fmaxf(gap_s() * v, p_min_m), p_max_m);
+    float gap_m = fminf(fmaxf(gap_s(v) * v, p_min_m), p_max_m);
     float want = roundf(gap_m / (0.25f + v / 30) * 2) / 2;  // g_acc for that gap at this speed
     if (is_round(want)) want += 0.1f;                         // never a value the menu could have set
     if (g_acc_ours == g_acc_ours && fabsf(want - g_acc_ours) < 2) return;
     game_cvar_set(g_acc, want);
     if (!(g_acc_ours == g_acc_ours) || fabsf(want - g_acc_ours) >= 10)
-        logv(2, "Cruise: ACC gap %.0f m (%.1f s at %.0f km/h, g_acc %.1f)", gap_m, gap_s(), fabsf(T.speed) * 3.6f, want);
+        logv(2, "Cruise: ACC gap %.0f m (%.1f s at %.0f km/h, g_acc %.1f)", gap_m, gap_s(v), fabsf(T.speed) * 3.6f, want);
     g_acc_ours = want;
 }
 
