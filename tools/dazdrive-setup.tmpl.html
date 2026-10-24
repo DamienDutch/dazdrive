@@ -142,7 +142,7 @@ ol.facts{list-style:decimal inside}
 .bar .status .chg{color:var(--acc)}
 .bar .status .ok{color:var(--on)}
 .bar .status .badn{color:var(--bad)}
-.toast{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(100% + 10px);width:min(828px,calc(100vw - 32px));padding:10px 14px;border-radius:10px;
+.toast{position:fixed;z-index:9;left:50%;transform:translateX(-50%);bottom:16px;width:min(828px,calc(100vw - 32px));padding:10px 14px;border-radius:10px;
   background:var(--dash);color:var(--dashfg);border:1px solid var(--acc);box-shadow:0 6px 24px rgba(0,0,0,.35);font-size:.9rem;cursor:pointer}
 .toast.bad{border-color:var(--bad)}
 .bar .steps{color:var(--mute);font-size:.85rem}
@@ -152,9 +152,11 @@ ol.facts{list-style:decimal inside}
 body.wiz [data-step]{display:none}
 body.wiz [data-step].cur{display:block}
 body.wiz #guide{display:none}
-body.wiz .bar .wiznav{display:flex}
-body.wiz .bar .normal{display:none}
-body.wiz .bar .status{display:none}
+body.wiz .bar{display:none}
+body.wiz main{padding-bottom:40px}
+body:not(.wiz) .go,body:not(.wiz) .go2{display:none}
+.go{margin-top:18px}
+.go2{margin-top:6px}
 .wizhead{display:flex;justify-content:space-between;align-items:center;gap:6px;margin:14px 0 0;font-size:.85rem;color:var(--mute);flex-wrap:wrap}
 body:not(.wiz) .wizhead .wsteps{display:none}
 .wizhead .wsteps{display:flex;gap:4px;flex:1;flex-wrap:wrap}
@@ -233,12 +235,20 @@ body.explain .tiles{grid-template-columns:1fr}
 <p class="erablurb" id="erablurb"></p>
 <p class="story x" id="erastory"></p>
 <p class="legend"><span><span class="stage stable">Stable</span> tested a lot</span><span><span class="stage beta">Beta</span> light testing</span><span><span class="stage experimental">Experimental</span> not proven</span></p>
+<div class="start go">
+<button class="big" type="button" data-go="s-feat"><b>Check the feature list</b><small>See what is on, switch single features</small></button>
+<button class="big" type="button" data-go="s-save"><b>Continue</b><small>Go on with this year as it is</small></button>
+</div>
 </section>
 
 <section class="card" data-step data-title="Features" id="s-feat">
 <h2><span class="n">2</span> Features <span class="opt">optional</span> <span class="count" id="count"></span></h2>
 <p class="mute">Click a name for details.</p>
 <div id="tiles"></div>
+<div class="start go">
+<button class="big" type="button" data-go="s-tune"><b>Fine-tune settings</b><small>Presets and sliders per module</small></button>
+<button class="big" type="button" data-go="s-save"><b>Continue</b><small>Go on with these features</small></button>
+</div>
 </section>
 
 <section data-step data-title="Fine-tuning" id="s-tune">
@@ -252,10 +262,18 @@ body.explain .tiles{grid-template-columns:1fr}
 </div>
 <div id="modules"></div>
 <p class="mute offnote" id="offnote"></p>
+<div class="start go">
+<button class="big" type="button" data-go="s-save"><b>Continue</b><small>Save your settings</small></button>
+</div>
 </section>
 
 <section class="card" data-step data-title="Save" id="s-save">
 <h2><span class="n">4</span> Save</h2>
+<p class="mute" id="savestatus"></p>
+<div class="start go2">
+<button class="big" type="button" id="save2"><b>Save dazdrive.ini</b><small id="save2sub"></small></button>
+<button class="big" type="button" id="copy2"><b>Copy</b><small>If saving does not work</small></button>
+</div>
 <ol class="facts" id="savesteps"></ol>
 <p id="msg" class="mute"></p>
 <details><summary>Preview of the file</summary><pre id="preview"></pre></details>
@@ -271,15 +289,10 @@ body.explain .tiles{grid-template-columns:1fr}
 <p class="also" id="i_also"></p>
 <div class="btns"><button type="button" id="i_toggle"></button><button type="button" class="primary" id="i_close">Close</button></div>
 </dialog>
-<footer class="bar">
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<footer class="bar">
 <div class="in">
 <div class="status" id="status"></div>
-<div class="wiznav">
-<button type="button" id="wback">‹ Back</button>
-<span class="steps" id="wsteps"></span>
-<span class="wr"><button type="button" id="wcopy" hidden>Copy</button><button type="button" class="primary" id="wnext">Next ›</button></span>
-</div>
 <div class="normal btns" style="margin:0">
 <button type="button" id="copy">Copy</button>
 <button class="primary" type="button" id="save">Save dazdrive.ini</button>
@@ -515,7 +528,7 @@ if (typeof document !== "undefined") (function () {
     $("offnote").textContent = off.length ? "Hidden because they are off: " + off.join(", ") + "." : "";
     $("preview").textContent = buildIni(D, era, vals);
     // Save and Copy stay clickable: with a bad field a click says why and jumps to it (a disabled button says nothing)
-    ["save", "copy", "wcopy"].forEach(function (id) { $(id).classList.toggle("blocked", bad > 0); });
+    ["save", "copy", "save2", "copy2"].forEach(function (id) { $(id).classList.toggle("blocked", bad > 0); });
     $("msg").textContent = bad ? badText(bad) : "";
     var c = changes(), st = $("status"); st.textContent = "";
     st.appendChild(el("span", null, e.year + " " + e.name));
@@ -523,7 +536,7 @@ if (typeof document !== "undefined") (function () {
     else if (shipped && e === shipped && isPreset(e)) st.appendChild(el("span", "ok", " · Standard (as shipped)"));
     else if (c) st.appendChild(el("span", "chg", " · " + c + " change" + (c > 1 ? "s" : "")));
     else st.appendChild(el("span", "ok", " · as preset"));
-    $("wsteps").innerHTML = st.innerHTML;   // the wizard's bar shows the same status between Back and Next
+    $("savestatus").innerHTML = st.innerHTML;   // the Save step shows the same status
   }
   function bind(sec, key, type, node, err, label) {
     inputs[sec + "." + key] = { sec: sec, key: key, type: type, el: node, err: err, label: label };
@@ -733,10 +746,8 @@ if (typeof document !== "undefined") (function () {
   function li(html) { var l = el("li"); l.innerHTML = html; steps.appendChild(l); }
   var folder = "<code>&lt;ETS2&gt;\\bin\\win_x64\\plugins\\dazdrive\\</code><br><small>Windows: <code>C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2\\bin\\win_x64\\plugins\\dazdrive\\</code><br>Linux / Proton: <code>~/.local/share/Steam/steamapps/common/Euro Truck Simulator 2/bin/win_x64/plugins/dazdrive/</code></small>";
   if (canPick) {
-    li("Press <b>Save dazdrive.ini</b>");
     li("Pick the folder of this page and <b>overwrite</b> dazdrive.ini: " + folder);
   } else {
-    li("Press <b>Save dazdrive.ini</b>. It lands in Downloads");
     li("Move it next to this page and <b>overwrite</b> the old one: " + folder);
   }
   li("Restart the game");
@@ -789,7 +800,6 @@ if (typeof document !== "undefined") (function () {
   }
   $("save").addEventListener("click", doSave);
   $("copy").addEventListener("click", doCopy);
-  $("wcopy").addEventListener("click", doCopy);
 
   // start (the wizard's first question): open your ini, continue with what was saved here, or start fresh.
   // Nothing is loaded behind the player's back: the saved settings only come back when they pick "Continue".
@@ -846,13 +856,6 @@ if (typeof document !== "undefined") (function () {
     wi = Math.max(0, Math.min(wsteps.length - 1, i)); seen = Math.max(seen, wi);
     wsteps.forEach(function (s, j) { s.classList.toggle("cur", j === wi); });
     wbtns.forEach(function (b, j) { if (j === wi) b.setAttribute("aria-current", "step"); else b.removeAttribute("aria-current"); b.classList.toggle("done", j <= seen && j !== wi); });
-    var h = wsteps[wi].querySelector("h2");
-    $("wback").disabled = wi === 0;
-    var last = wi === wsteps.length - 1, opt = /optional/.test(h ? h.textContent : "");
-    $("wnext").hidden = wi === 0;   // the first question is answered with its own three buttons
-    $("wnext").textContent = last ? "Save dazdrive.ini" : opt ? "Skip ›" : "Next ›";
-    $("wnext").className = last || !opt ? "primary" : "";
-    $("wcopy").hidden = !last;
     window.scrollTo(0, 0);
   }
   // Extra info: the extra text (what a feature does, the story of a year, what a control is for) shows when it is on; off = scannable. Remembered.
@@ -861,8 +864,16 @@ if (typeof document !== "undefined") (function () {
   if (/[?&]explain/.test(location.search)) xb.checked = true;
   function xset() { document.body.classList.toggle("explain", xb.checked); try { localStorage.setItem(XKEY, xb.checked ? "1" : "0"); } catch (e) {} }
   xb.addEventListener("change", xset); xset();
-  $("wback").addEventListener("click", function () { wshow(wi - 1); });
-  $("wnext").addEventListener("click", function () { if (wi === wsteps.length - 1) doSave(); else wshow(wi + 1); });
+  // the choices at the end of a step: each goes to a step by id
+  document.querySelectorAll("[data-go]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var id = b.getAttribute("data-go");
+      for (var j = 0; j < wsteps.length; j++) if (wsteps[j].id === id) wshow(j);
+    });
+  });
+  $("save2").addEventListener("click", doSave);
+  $("copy2").addEventListener("click", doCopy);
+  $("save2sub").textContent = canPick ? "A file dialog opens" : "It lands in Downloads";
 
   refresh();
   if (!/[?&]all/.test(location.search)) { document.body.classList.add("wiz"); wshow(0); }  // ?all = everything on one page
@@ -871,7 +882,7 @@ if (typeof document !== "undefined") (function () {
   if (/[?&]selftest/.test(location.search)) (function () {
     var out = { fails: [] }, keep = JSON.parse(JSON.stringify(vals)), keepEra = era;
     function check(name, ok) { if (!ok) out.fails.push(name); }
-    check("wizard opens on the import question", wiz() && wi === 0 && wsteps[0].id === "s-start" && $("wnext").hidden);
+    check("wizard opens on the import question", wiz() && wi === 0 && wsteps[0].id === "s-start");
     setEra(recommended, false); out.rec = recommended; out.iniRec = buildIni(D, recommended, vals);
     D.eras.forEach(function (e) {
       setEra(e.id, false);
