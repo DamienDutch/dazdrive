@@ -236,7 +236,7 @@ body.explain .tiles{grid-template-columns:1fr}
 </section>
 
 <section class="card" data-step data-title="Features" id="s-feat">
-<h2><span class="n">2</span> Features <span class="count" id="count"></span></h2>
+<h2><span class="n">2</span> Features <span class="opt">optional</span> <span class="count" id="count"></span></h2>
 <p class="mute">Click a name for details.</p>
 <div id="tiles"></div>
 </section>
@@ -610,8 +610,8 @@ if (typeof document !== "undefined") (function () {
       nd.appendChild(document.createTextNode("Needs: "));
       f.needs.forEach(function (id, i) { var n = byId[id], ok = featureState(n, vals) !== "false"; if (i) nd.appendChild(document.createTextNode(", ")); nd.appendChild(el("span", ok ? "" : "off", n.label + (ok ? "" : " (off)"))); });
     }
-    $("i_also").textContent = also && also.length ? "Also switched on: " + also.join(", ") : "";
-    $("i_toggle").textContent = on ? "Switch off" : "Switch on";
+    $("i_also").textContent = also && also.length ? "Also turned on: " + also.join(", ") : "";
+    $("i_toggle").textContent = on ? "Turn off" : "Turn on";
   }
   function openInfo(f) { dlgF = f; fillDialog([]); if (dlg.showModal) dlg.showModal(); else dlg.setAttribute("open", ""); }
   $("i_close").addEventListener("click", function () { dlg.close ? dlg.close() : dlg.removeAttribute("open"); });
