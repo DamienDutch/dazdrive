@@ -39,6 +39,7 @@ section.card{scroll-margin-top:12px}
 .big{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:14px 16px;cursor:pointer;text-align:left;display:grid;gap:3px;min-width:0}
 .big b{font-size:1rem}
 .big:hover{border-color:var(--acc)}
+.big.drop{border-color:var(--acc);border-style:dashed;background:var(--onbg)}
 .big input{display:none}
 .note{border-left:3px solid var(--acc);padding:4px 10px;margin:10px 0 0;background:var(--bg);border-radius:0 8px 8px 0}
 #restore2{display:none;margin:0 0 10px}
@@ -220,7 +221,7 @@ body.explain .tiles{grid-template-columns:1fr}
 <h2>Do you have a dazdrive.ini?</h2>
 <p class="mute x">Open it to change only what you want. New settings get their standard value.</p>
 <div class="start">
-<label class="big"><b>Open my dazdrive.ini</b><small>In <code>plugins\dazdrive\</code>, next to this page.</small><input type="file" id="open" accept=".ini,text/plain"></label>
+<label class="big"><b>Open my dazdrive.ini</b><small>Click, or drop the file here. It is in <code>plugins\dazdrive\</code>.</small><input type="file" id="open" accept=".ini,text/plain"></label>
 <button class="big" id="resume" type="button" hidden><b>Continue where I left off</b><small id="resumewhen"></small></button>
 <button class="big" id="fresh" type="button"><b>Start fresh</b><small>Pick a truck year and go from there.</small></button>
 </div>
@@ -808,8 +809,7 @@ if (typeof document !== "undefined") (function () {
     var e = eraOf(D, era), c = changes();
     return "Read " + n + " settings. Closest year: " + e.year + " " + e.name + (c ? ", with " + c + " change" + (c > 1 ? "s" : "") : "") + ". Next keeps them; another year starts over. ";
   }
-  $("open").addEventListener("change", function () {
-    var f = this.files && this.files[0]; if (!f) return;
+  function openFile(f) {
     var rd = new FileReader();
     rd.onload = function () {
       var n = loadIni(rd.result);
@@ -818,8 +818,17 @@ if (typeof document !== "undefined") (function () {
       afterStart();
     };
     rd.readAsText(f);
+  }
+  $("open").addEventListener("change", function () {
+    var f = this.files && this.files[0]; if (f) openFile(f);
     this.value = "";
   });
+  // drop a file on the Open button (only there; a drop anywhere else is ignored so the browser does not leave the page)
+  var dz = $("open").parentNode;
+  ["dragenter", "dragover"].forEach(function (n) { dz.addEventListener(n, function (ev) { ev.preventDefault(); dz.classList.add("drop"); }); });
+  ["dragleave", "drop"].forEach(function (n) { dz.addEventListener(n, function (ev) { ev.preventDefault(); dz.classList.remove("drop"); }); });
+  dz.addEventListener("drop", function (ev) { var f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0]; if (f) openFile(f); });
+  ["dragover", "drop"].forEach(function (n) { window.addEventListener(n, function (ev) { ev.preventDefault(); }); });
   // the notice sits in the Start card and, for the wizard (which shows one step at a time), at the top of step 1
   function setNotice(text, withFresh) {
     ["restore", "restore2"].forEach(function (id) {
