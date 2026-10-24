@@ -83,6 +83,7 @@ button.link{border:0;background:none;color:var(--acc);padding:0;font:inherit;cur
 .tile small{margin:0}
 .tile .need{font-size:.78rem;color:var(--warn);margin:2px 0 0}
 .tile .need:empty{display:none}
+.tile.waits b,.tile.waits small{opacity:.6}
 .sw{border:0;padding:0;margin:0;align-self:start;width:40px;height:22px;border-radius:11px;background:var(--line);position:relative;flex:none;cursor:pointer;transition:background .15s}
 .sw::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .15s}
 .tile[aria-pressed=true]{background:var(--onbg);border-color:var(--on)}
@@ -530,8 +531,9 @@ if (typeof document !== "undefined") (function () {
     var n = 0;
     tiles.forEach(function (t) {
       var s = featureState(t.f, vals); t.el.setAttribute("aria-pressed", s); t.sw.setAttribute("aria-checked", s); if (s !== "false") n++;
-      var miss = s !== "false" ? needsOff(t.f) : [];
-      t.need.textContent = miss.length ? "Needs " + miss.join(" and ") + " (off)" : "";
+      var miss = needsOff(t.f);
+      t.need.textContent = miss.length ? "Needs " + miss.join(" and ") + (s !== "false" ? " (off)" : "") : "";
+      t.el.classList.toggle("waits", miss.length > 0 && s === "false");
     });
     $("count").textContent = n + " / " + tiles.length + " on";
     var e = eraOf(D, era);
@@ -637,14 +639,19 @@ if (typeof document !== "undefined") (function () {
   // 2. feature switches, grouped as the data says; the name opens the explanation, the switch toggles
   var th = $("tiles"), byId = {}, order = [];
   D.features.forEach(function (f) { byId[f.id] = f; if (order.indexOf(f.group) < 0) order.push(f.group); });
+  // turning a feature on turns on what it needs; turning one off turns off what needs it (the list says what moved)
   function setFeature(f, on) {
     var also = [];
     f.keys.forEach(function (k) { vals[k[0]][k[1]] = on ? k[2] : k[3]; });
     if (on) (f.needs || []).forEach(function (id) {
-      var n = byId[id]; if (n && featureState(n, vals) === "false") { setFeature(n, true); also.push(n.label); }
+      var n = byId[id]; if (n && featureState(n, vals) === "false") { also = also.concat([n.label], setFeature(n, true)); }
+    });
+    else D.features.forEach(function (d) {
+      if ((d.needs || []).indexOf(f.id) >= 0 && featureState(d, vals) !== "false") { also = also.concat([d.label], setFeature(d, false)); }
     });
     return also;
   }
+  function saidAlso(on, also) { if (also.length) flash((on ? "Also turned on: " : "Also turned off: ") + also.join(", ")); }
   function needsOff(f) { return (f.needs || []).filter(function (id) { return byId[id] && featureState(byId[id], vals) === "false"; }).map(function (id) { return byId[id].label; }); }
   var dlg = $("info"), dlgF = null;
   function fillDialog(also) {
@@ -663,7 +670,7 @@ if (typeof document !== "undefined") (function () {
   }
   function openInfo(f) { dlgF = f; fillDialog([]); if (dlg.showModal) dlg.showModal(); else dlg.setAttribute("open", ""); }
   $("i_close").addEventListener("click", function () { dlg.close ? dlg.close() : dlg.removeAttribute("open"); });
-  $("i_toggle").addEventListener("click", function () { var also = setFeature(dlgF, featureState(dlgF, vals) === "false"); refresh(); fillDialog(also); });
+  $("i_toggle").addEventListener("click", function () { var on = featureState(dlgF, vals) === "false", also = setFeature(dlgF, on); refresh(); fillDialog(on ? also : []); saidAlso(on, on ? [] : also); });
   dlg.addEventListener("click", function (ev) { if (ev.target === dlg) $("i_close").click(); });
   order.forEach(function (gname) {
     th.appendChild(el("h3", null, gname));
@@ -678,7 +685,7 @@ if (typeof document !== "undefined") (function () {
       if (f.stage && f.stage !== "stable") body.appendChild(el("span", "stage " + f.stage, f.stage));
       var need = el("div", "need", ""); body.appendChild(need);
       body.addEventListener("click", function () { if (!document.body.classList.contains("explain")) openInfo(f); });
-      sw.addEventListener("click", function () { setFeature(f, featureState(f, vals) !== "true"); refresh(); });
+      sw.addEventListener("click", function () { var on = featureState(f, vals) !== "true"; saidAlso(on, setFeature(f, on)); refresh(); });
       t.appendChild(body); t.appendChild(sw);
       tiles.push({ f: f, el: t, sw: sw, need: need });
       grid.appendChild(t);

@@ -69,7 +69,7 @@ The game already has an automatic, cruise control and lane assist. This changes 
 | AEB (automatic emergency braking) | stable | on | Warning tones, then partial, then full braking. Replaces the game's own emergency braking. |
 | Gearbox looks ahead | stable | off (~2015) | Predictive shifting: gears chosen for the climbs and tops on your navigation route. |
 | Cruise looks ahead (PCC, predictive cruise control) | stable | off (~2015) | Carries speed into climbs and eases off before tops. Needs a route. |
-| Slow for bends | stable | off (~2020) | Eases off, and brakes gently if needed, before sharp bends. Needs a route. |
+| Slow for bends | beta | off (~2020) | Eases off, and brakes gently if needed, before sharp bends. Needs a route. |
 | ACC (adaptive cruise control) | beta | off (~2015) | Follows the vehicle ahead smoothly and brakes early. |
 | Stop & Go | beta | off (~2015) | The ACC keeps going in a jam: stops behind the vehicle ahead and drives off with it. |
 | Auto Hold | beta | off (~2015) | Stays braked at a stop until you give gas. |

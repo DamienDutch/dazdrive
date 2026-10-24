@@ -102,7 +102,7 @@ ON in the included ini
 OFF in the included ini (switch on with the setup page; the year that turns it on is in brackets)
   Gearbox looks ahead            stable         (~2015)
   Cruise looks ahead (PCC)       stable         (~2015)
-  Slow for bends                 stable         (~2020)
+  Slow for bends                 beta           (~2020)
   ACC                            beta           (~2015)
   Stop & Go                      beta           (~2015)
   Auto Hold                      beta           (~2015)
