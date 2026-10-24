@@ -22,7 +22,7 @@
 
 // ---------------------------------------------------------------- settings
 
-static float p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, p_min_gap, p_dwell_ud, p_dwell_du,
+static float p_mode_char, p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, p_min_gap, p_dwell_ud, p_dwell_du,
     p_max_skip, p_skip_acc, p_skip_wait, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
@@ -34,6 +34,7 @@ static param g_params[] = {
     { "takeover_kmh", &p_on_kmh, 7, "TrueShift takes over from the game's automatic above this speed" },
     { "takeover_rpm", &p_on_rpm, 1000, "TrueShift takes over as soon as the engine has reached this rpm with the clutch closed in any gear (the clutch is locked then, so the rpm is real); 0 = by speed only (takeover_kmh)" },
     { "handback_kmh", &p_off_kmh, 4, "and hands back below this speed (starting, stopping, maneuvering)" },
+    { "mode_character", &p_mode_char, 1, "1 = Eco and Power differ from Normal in the small drivetrain details too (kickdown, how long a gear is held, hint hold, engine brake, pedal filter); 0 = only the main differences" },
     { "hint_hold_s", &p_hint_hold, 10, "seconds a gear chosen with the shift-hint buttons is held (0 = off)" },
     { "min_gap_s", &p_min_gap, 0.5f, "minimum time between two shifts" },
     { "dwell_up_down_s", &p_dwell_ud, 3.0f, "after an upshift, no downshift for this long (unless kickdown or lugging)" },
@@ -99,7 +100,6 @@ static param g_params[] = {
 
 // ---------------------------------------------------------------- state
 
-enum { MODE_NORMAL, MODE_ECO, MODE_POWER, MODE_M };
 static const char *const mode_name[] = { "Normal", "Eco", "Power", "M" };
 static const char mode_letter[] = { 'D', 'E', 'P', 'M' };
 
@@ -270,6 +270,12 @@ static float find_plateau(const engine_info *e)
 
 // ---------------------------------------------------------------- shift points
 
+// A value that differs per mode (Normal and M take the middle one); mode_character = 0 gives every mode the middle value
+static float by_mode(float eco, float normal, float power)
+{
+    if (p_mode_char <= 0) return normal;
+    return S.mode == MODE_ECO ? eco : S.mode == MODE_POWER ? power : normal;
+}
 static float mode_rpm() { return S.mode == MODE_ECO ? p_eco_rpm : S.mode == MODE_POWER ? p_power_rpm : 0; }
 static float mode_reserve()
 {
@@ -417,14 +423,7 @@ static void learn_fade(float dist_m)
 
 // ---------------------------------------------------------------- inputs
 
-static int mode_from_cvar(float a)
-{
-    if (a != a) return MODE_NORMAL;
-    if (a <= 0) return MODE_M;
-    if (a > 3.01f) return MODE_ECO;
-    if (a > 1.67f) return MODE_NORMAL;
-    return MODE_POWER;
-}
+static int mode_from_cvar(float a) { return mode_of(a); }
 
 // The mode from the game's adaptive-shift cvar; log and a tone on a change.
 // Called from the gearbox hook and from the frame (also while standing).
@@ -587,7 +586,7 @@ static void refresh(void *self)
 
     // Demand rises fast (0.3 s) and falls slowly (2 s). Load itself does not
     // move the shift points: the force checks handle it.
-    float tau = S.thr > S.demand ? 0.3f : 2.0f;
+    float tau = S.thr > S.demand ? by_mode(0.5f, 0.3f, 0.2f) : by_mode(1.5f, 2.0f, 3.0f);
     S.demand += (float)(dt / (tau + dt)) * (S.thr - S.demand);
 
     // Tractive force asked for (clutch closed only): up in 0.3 s, down in 3 s.
@@ -615,7 +614,8 @@ static void refresh(void *self)
     if (pdt > 0.05) {
         if (pdt < 0.5) {
             float rate = (float)((pedal - S.pedal_prev) / pdt);
-            if (pedal >= p_kick_pedal && S.pedal_prev < p_kick_pedal && rate >= p_kick_rate) S.kick_until = now + 3;
+            float kp = by_mode(0.97f, p_kick_pedal, 0.85f), kr = by_mode(2.5f, p_kick_rate, 1.0f);
+            if (pedal >= kp && S.pedal_prev < kp && rate >= kr) S.kick_until = now + 3;
         }
         S.pedal_prev = pedal;
         S.pedal_at = now;
@@ -961,7 +961,7 @@ static int decide_gear(void *self, const char **why)
     if ((T.motor_brake || S.eb_level > 0.01f) && thr < 0.05f) {
         float lo = S.eng.range[R_BRAKE][0], hi = S.eng.range[R_BRAKE][1];
         int full = p_eb_down > 0 || (p_eb_down < 0 && S.eb_full);
-        float keep = full ? lo : lerpf(fminf(p_eb_light, lo), lo, S.eb_level);
+        float keep = full ? lo : lerpf(fminf(by_mode(p_eb_light - 100, p_eb_light, p_eb_light + 150), lo), lo, S.eb_level);
         if (rpm < keep - 50 && cur > 1 && since > p_min_gap) {
             int l = pick_down(cur, v, full ? 0.5f * (lo + hi) : fminf(keep + 150, hi - 100), true);
             // two at a time when the second still fits under the brake range: every downshift costs a throttle blip
@@ -983,7 +983,7 @@ static int decide_gear(void *self, const char **why)
         if (slow_ahead) floor = fmaxf(floor, S.plateau + 200);
         if (rpm < floor && cur > 1 && since > 0.5) {
             // land high, so that fewer downshifts are needed on the way down
-            int l = pick_down(cur, v, eco_up(1) - 200, true);
+            int l = pick_down(cur, v, eco_up(1) + by_mode(-300, -200, -100), true);
             if (l < cur) { *why = slow_ahead ? "braking (junction ahead)" : "braking"; return l; }
         }
         *why = "braking hold";
@@ -997,7 +997,7 @@ static int decide_gear(void *self, const char **why)
 
     // A climb starts within ~3 s that this gear won't hold: one down now, at
     // the foot, instead of lugging into it.
-    if (rk && thr >= 0.5f && cur > 1 && since > 2 && !top_near && !top_ok) {
+    if (rk && thr >= by_mode(0.6f, 0.5f, 0.35f) && cur > 1 && since > 2 && !top_near && !top_ok) {
         float g_now = grade_pct(), g_climb = route_grade(v, v + fmaxf(200, v * 10));
         float g_start = route_max_grade(0, v * 3);
         if (g_climb == g_climb && g_start == g_start && g_climb > g_now + 1.5f && g_start > g_now + 1.0f &&
@@ -1160,7 +1160,7 @@ static int decide_gear(void *self, const char **why)
         bool wants_power = clampf(T.in_thr, 0, 1) >= 0.5f || thr >= 0.5f || thr > S.demand + 0.05f;
         bool jn_soon = jn >= 0 && jn < fmaxf(50.0f, v * 3);
         if (!wants_power && (T.accel < -0.2f || jn_soon) && rpm < lim * 0.9f) { *why = "up veto (slowing)"; return cur; }
-        if (S.shift_dir < 0 && since < (now - S.kd_at < p_kick_dwell + 1 ? p_kick_dwell : p_dwell_du) && rpm < S.up_pt + 100) { *why = "anti-hunt (up)"; return cur; }
+        if (S.shift_dir < 0 && since < (now - S.kd_at < by_mode(3, p_kick_dwell, 8) + 1 ? by_mode(3, p_kick_dwell, 8) : by_mode(p_dwell_du, p_dwell_du, 4.0f)) && rpm < S.up_pt + 100) { *why = "anti-hunt (up)"; return cur; }
         float a_req = lerpf(0.02f, 0.05f, S.demand);
         if (g_up > 2 && !coast) a_req = fmaxf(a_req, lerpf(0.05f, 0.12f, clampf((g_up - 2) / 3, 0, 1)));
         int best = cur, maxg = cur + 1 + (coast_p ? 0 : skips);   // no skipping with the pedal off: it only ends in the next brake (sim Y1: 6>8 at the lift-off, 8>6 a second later)
@@ -1262,8 +1262,9 @@ static void note_gear_change(void *self)
     }
 
     if (hint && p_hint_hold > 0 && S.mode != MODE_M) {
-        S.hold_until = now + p_hint_hold;
-        logv(1, "shift %d->%d by hint at %.0f km/h: hold %.0f s", prev, g, v * 3.6f, p_hint_hold);
+        float hh = by_mode(fminf(p_hint_hold, 6.0f), p_hint_hold, p_hint_hold * 2);
+        S.hold_until = now + hh;
+        logv(1, "shift %d->%d by hint at %.0f km/h: hold %.0f s", prev, g, v * 3.6f, hh);
     } else {
         logv(1, "shift %d->%d (%s) at %.0f km/h, %.0f rpm, pedal %.2f, demand %.2f, grade %.1f%%, %.1f t, %s", prev,
                 g, why ? why : "?", v * 3.6f, T.rpm, T.in_thr, S.demand, grade_pct(), S.mass / 1000,

@@ -156,6 +156,16 @@ static inline float band_scale(float set_ms)
     float k = set_ms * 3.6f / 70.0f;
     return k < 0.6f ? 0.6f : k > 1.4f ? 1.4f : k;
 }
+// The driving mode from the game's adaptive-shift cvar (one source for every module): <= 0 = M (manual hints), > 3.01 Eco, <= 1.67 Power
+enum { MODE_NORMAL, MODE_ECO, MODE_POWER, MODE_M };
+static inline int mode_of(float a)
+{
+    if (a != a) return MODE_NORMAL;
+    if (a <= 0) return MODE_M;
+    if (a > 3.01f) return MODE_ECO;
+    if (a > 1.67f) return MODE_NORMAL;
+    return MODE_POWER;
+}
 extern volatile float g_overspeed_cap;  // Cruise: ini overspeed_cap_kmh (0 = no cap)
 // How many km/h the truck may still be allowed over the set speed so it stays under the speed limit + overspeed_cap_kmh (a fine
 // starts a little above the limit). 1e9 = no cap (cap off or limit unknown). Used for every extra speed we grant above the set speed.

@@ -27,7 +27,7 @@
 #include <string.h>
 
 static float p_herm;
-static float p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_eco_k, p_power_k, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
+static float p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
 static param g_params[] = {
@@ -40,8 +40,6 @@ static param g_params[] = {
     { "acc_fast_from_kmh", &p_acc_fast_from, 75, "ACC: from this speed (km/h) the time gap shrinks toward acc_fast_factor, so it follows closer on a motorway (country roads keep the full gap)" },
     { "acc_fast_full_kmh", &p_acc_fast_full, 95, "ACC: from this speed (km/h) the time gap is acc_fast_factor times the set gap; in between it changes smoothly" },
     { "acc_fast_factor", &p_acc_fast_k, 0.8f, "ACC: the time gap times this at motorway speed (1 = same gap at every speed). Never below 0.7 s" },
-    { "acc_eco_factor", &p_eco_k, 1.0f, "Eco: the gap times this (more room, less brake-and-go)" },
-    { "acc_power_factor", &p_power_k, 1.0f, "Power: the gap times this" },
     { "acc_min_m", &p_min_m, 15, "the gap never gets shorter than this (meters)" },
     { "acc_max_m", &p_max_m, 90, "and never longer than this" },
     { "speed_limit", &p_isa, 1, "speed-limit following at the first start (before any on/off choice is remembered): 1 = on (at every new limit the cruise set speed becomes limit + offset; +/- still work until the next sign); after that your last on/off choice is remembered (cruise_state.txt)" },
@@ -187,10 +185,8 @@ static float load_mass()
 // 1 in Normal, eco_k in Eco, power_k in Power (the adaptive mode of the game)
 static float mode_k(float eco_k, float power_k)
 {
-    float a = game_adaptive();
-    if (a == a && a > 3.01f) return eco_k;
-    if (a == a && a > 0 && a < 2.0f) return power_k;
-    return 1.0f;
+    int md = mode_of(game_adaptive());
+    return md == MODE_ECO ? eco_k : md == MODE_POWER ? power_k : 1.0f;
 }
 // the ease-off before a top grows with the weight (Damien 25-10: a heavy load may drop a bit more)
 static float crest_mass_k()
@@ -623,9 +619,9 @@ static float cruise_body(void *ga, float dt, float pedal)
     s_cb_was_on = 1;
     float target = set;
     float kmh = fabsf(T.speed) * 3.6f;
-    float a = game_adaptive();
+    int md = mode_of(game_adaptive());
     // Predictive (route): momentum into a climb, ease off before a top.
-    int eco = a == a && a > 3.01f, power = a == a && a > 0 && a < 2.0f;
+    int eco = md == MODE_ECO, power = md == MODE_POWER;
     s_mom_up = 0;
     if (p_predict > 0 && route_ok()) {
         float v = fmaxf(fabsf(T.speed), 5.0f), up = band_up(), down = (eco ? 5 : 3) * band_scale(T.cruise) * crest_mass_k() * (power ? 0.5f : 1.0f);
@@ -748,7 +744,7 @@ static float cruise_body(void *ga, float dt, float pedal)
         float acc_kmhs = T.accel * 3.6f;
         if (!acc_init || !C.on) { acc_f = acc_kmhs; acc_init = 1; }
         else acc_f += (acc_kmhs - acc_f) * fminf(1.0f, dt / 0.5f);
-        float tau = p_approach_s * (a == a && a > 3.01f ? 1.2f : (a == a && a > 0 && a < 2.0f ? 0.6f : 1.0f));
+        float tau = p_approach_s * (md == MODE_ECO ? 1.2f : (md == MODE_POWER ? 0.6f : 1.0f));
         if (tau > 0 && acc_f > 0) ep = e - tau * acc_f;
     }
     // Too fast for a bend and the throttle is already off: a gentle brake request
@@ -766,8 +762,8 @@ static float cruise_body(void *ga, float dt, float pedal)
     if (p_curve_brake > 0 && jn_need > jn_thr && kmh > jn_kmh + 3)
         s_want_curve = fmaxf(s_want_curve, fminf(0.45f, 0.2f + 0.12f * (jn_need - jn_thr)));
     float kp = 0.25f, ki = 0.08f, rate = 0.6f;               // Normal / M (per km/h, per km/h·s, per s)
-    if (a == a && a > 3.01f) { kp = 0.18f; ki = 0.05f; rate = 0.4f; }        // Eco: gentle, lets it sag a bit
-    else if (a == a && a > 0 && a < 2.0f) { kp = 0.35f; ki = 0.12f; rate = 1.0f; }  // Power: keen
+    if (md == MODE_ECO) { kp = 0.18f; ki = 0.05f; rate = 0.4f; }        // Eco: gentle, lets it sag a bit
+    else if (md == MODE_POWER) { kp = 0.35f; ki = 0.12f; rate = 1.0f; }  // Power: keen
     if (!C.on) { C.on = 1; C.u = stock; C.i = stock - kp * ep; }   // bumpless start
     // at a standstill the open clutch is no shift: the throttle has to rise for Stop&Go to drive off (ts4r 189-193 and
     // 227-231 s: the lead pulled away, our throttle stayed frozen at 0.03, Damien had to give gas)
@@ -908,9 +904,6 @@ static float gap_s(float v_ms)
 {
     float t = g_level == 0 ? p_gap_s : g_level == 2 ? p_gap_l : p_gap_m;
     if (g_level == 0) return t;  // level 1 is really acc_short_s, in every mode (Damien 11-10: it came out at ~1.5 s)
-    float a = game_adaptive();
-    if (a == a && a > 3.01f) t *= p_eco_k;
-    if (a == a && a > 0 && a < 2.0f) t *= p_power_k;
     // closer at motorway speed (Damien 25-10): the full gap up to acc_fast_from_kmh, acc_fast_factor times it from acc_fast_full_kmh,
     // never below 0.7 s (or the set gap if that is already lower)
     float k = p_acc_fast_k;
