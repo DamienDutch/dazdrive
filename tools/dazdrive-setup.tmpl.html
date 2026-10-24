@@ -155,8 +155,8 @@ body.wiz #guide{display:none}
 body.wiz .bar .wiznav{display:flex}
 body.wiz .bar .normal{display:none}
 body.wiz .bar .status{display:none}
-.wizhead{display:none;align-items:center;gap:6px;margin:8px 0 0;font-size:.85rem;color:var(--mute);flex-wrap:wrap}
-body.wiz .wizhead{display:flex}
+.wizhead{display:flex;justify-content:space-between;align-items:center;gap:6px;margin:8px 0 0;font-size:.85rem;color:var(--mute);flex-wrap:wrap}
+body:not(.wiz) .wizhead .wsteps{display:none}
 .wizhead .wsteps{display:flex;gap:4px;flex:1;flex-wrap:wrap}
 .wizhead .wst{font-size:.82rem;padding:3px 10px;border-radius:99px;color:var(--mute)}
 .wizhead .wst.done{color:var(--fg);border-color:var(--on)}
@@ -196,6 +196,20 @@ details.more>summary{color:var(--acc);cursor:pointer}
 .eralist dd{margin:0}
 .eralist .stg{color:var(--warn)}
 .eralist .stg.experimental{color:var(--bad)}
+/* Explain: extra text is hidden until the switch in the step bar is on (what must be seen, like stages and "needs", never is .x) */
+.x{display:none}
+body.explain .x{display:block}
+body.explain dl.eralist{display:grid}
+body.explain ul.facts.x{display:grid}
+body.explain .tiles{grid-template-columns:1fr}
+.xinfo{font-size:.85rem;color:var(--mute);margin-top:3px}
+.xsw{display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--fg);font-size:.9rem;position:relative;margin-left:auto}
+.xsw input{position:absolute;opacity:0;width:0;height:0}
+.xsw i{width:36px;height:20px;border-radius:10px;background:var(--line);position:relative;flex:none}
+.xsw i::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .15s}
+.xsw input:checked+i{background:var(--on)}
+.xsw input:checked+i::after{left:19px}
+.xsw input:focus-visible+i{outline:2px solid var(--acc);outline-offset:2px}
 </style>
 </head>
 <body>
@@ -204,18 +218,17 @@ details.more>summary{color:var(--acc);cursor:pointer}
 <p>ETS2 1.60 (Steam beta temporary_1_60), gearbox on Automatic, singleplayer, not TruckersMP. Runs in your browser and sends nothing.</p>
 </div></header>
 <main>
-<nav class="wizhead" aria-label="Steps"><div class="wsteps" id="wsteplist"></div><button class="link" id="wizexit" type="button">Show everything on one page</button></nav>
+<nav class="wizhead" aria-label="Steps"><div class="wsteps" id="wsteplist"></div><label class="xsw"><input type="checkbox" id="explain"><i></i><span>Explain</span></label></nav>
 
 <section class="card" data-step data-title="Start" id="s-start">
 <h2>Do you already have a dazdrive.ini?</h2>
-<p class="mute">Open it to change only what you want. Settings new in this version get their standard value.</p>
+<p class="mute x">Open it to change only what you want. Settings new in this version get their standard value.</p>
 <div class="start">
 <label class="big"><b>Open my dazdrive.ini</b><small>It is in <code>plugins\dazdrive\</code>, next to this page.</small><input type="file" id="open" accept=".ini,text/plain"></label>
 <button class="big" id="resume" type="button" hidden><b>Continue where I left off</b><small id="resumewhen"></small></button>
 <button class="big" id="fresh" type="button"><b>Start fresh</b><small>Pick how smart your truck is and go from there.</small></button>
 </div>
 <p class="note" id="restore" hidden></p>
-<p><button class="link" id="guide" type="button">Step-by-step mode</button></p>
 </section>
 
 <section class="card" data-step data-title="Truck year" id="s-era">
@@ -224,10 +237,10 @@ details.more>summary{color:var(--acc);cursor:pointer}
 <p class="mute">Pick a year: what real trucks had by then. Newer years are less tested.</p>
 <div class="tl" id="eras"></div>
 <p class="erablurb" id="erablurb"></p>
-<details class="more"><summary>More about this year</summary>
+<div class="x" id="eraexplain">
 <p class="story" id="erastory"></p>
 <dl class="eralist" id="eradetail"></dl>
-</details>
+</div>
 <p class="legend"><span><span class="stage stable">Stable</span> ridden a lot</span><span><span class="stage beta">Beta</span> ridden a little, not confirmed yet</span><span><span class="stage experimental">Experimental</span> not proven yet</span></p>
 </section>
 
@@ -240,7 +253,7 @@ details.more>summary{color:var(--acc);cursor:pointer}
 <section data-step data-title="Fine-tuning" id="s-tune">
 <div class="card" style="margin-bottom:0">
 <h2><span class="n">3</span> Fine-tuning <span class="opt">optional</span></h2>
-<ul class="facts" style="margin:0">
+<ul class="facts x" style="margin:0">
 <li><b>Presets</b>: a few good choices, enough for most</li>
 <li><b>Advanced</b>: a few easy controls</li>
 <li><b>Custom</b>: every raw setting</li>
@@ -632,6 +645,7 @@ if (typeof document !== "undefined") (function () {
       body.type = "button"; sw.type = "button"; sw.setAttribute("role", "switch"); sw.setAttribute("aria-label", f.label);
       body.appendChild(el("b", null, f.label));
       body.appendChild(el("small", null, f.desc));
+      if (f.info) body.appendChild(el("span", "x xinfo", f.info + (f.since ? " Real trucks: since ~" + f.since + "." : "")));
       if (f.stage && f.stage !== "stable") body.appendChild(el("span", "stage " + f.stage, f.stage));
       var need = el("div", "need", ""); body.appendChild(need);
       body.addEventListener("click", function () { openInfo(f); });
@@ -652,7 +666,7 @@ if (typeof document !== "undefined") (function () {
     lab.appendChild(el("span", null, kb.label));
     if (kb.kind === "range") lab.appendChild(out);
     var odd = el("span", "odd", "");
-    lab.appendChild(el("small", null, kb.help)); lab.appendChild(odd);
+    lab.appendChild(el("small", "x", kb.help)); lab.appendChild(odd);
     if (kb.kind === "toggle") {
       ctl = el("input"); ctl.type = "checkbox";
       ctl.addEventListener("change", function () { setKnob(kb, ctl.checked, vals); refresh(); });
@@ -698,8 +712,8 @@ if (typeof document !== "undefined") (function () {
     sum.appendChild(m.cur);
     card.appendChild(sum);
     var body = el("div", "body");
-    body.appendChild(el("p", "mute", g.about[0]));
-    if (g.about.length > 1) { var ul = el("ul", "facts"); g.about.slice(1).forEach(function (t) { ul.appendChild(el("li", null, t)); }); body.appendChild(ul); }
+    body.appendChild(el("p", "mute x", g.about[0]));
+    if (g.about.length > 1) { var ul = el("ul", "facts x"); g.about.slice(1).forEach(function (t) { ul.appendChild(el("li", null, t)); }); body.appendChild(ul); }
     var tabs = el("div", "tabs"); tabs.setAttribute("role", "tablist");
     [["preset", "Presets"], ["advanced", "Advanced"], ["custom", "Custom"]].forEach(function (x) {
       if (x[0] === "advanced" && !g.knobs.length) return;
@@ -724,7 +738,7 @@ if (typeof document !== "undefined") (function () {
       body.appendChild(ap); m.panels.advanced = ap;
     }
     var cp = el("div", "panel");
-    cp.appendChild(el("p", "rawnote", "The raw settings of dazdrive.ini, each with the plugin's own one-line help. No safety net: the page only checks that a value is a number. Switches (1 / 0) also come on and off in step 2."));
+    cp.appendChild(el("p", "rawnote x", "The raw settings of dazdrive.ini, each with the plugin's own one-line help. No safety net: the page only checks that a value is a number. Switches (1 / 0) also come on and off in step 2."));
     g.scope.forEach(function (sk) { cp.appendChild(item(sk[0], sk[1], sk[2], sk[1], false)); });
     body.appendChild(cp); m.panels.custom = cp;
     card.appendChild(body);
@@ -860,8 +874,12 @@ if (typeof document !== "undefined") (function () {
     $("wcopy").hidden = !last;
     window.scrollTo(0, 0);
   }
-  $("guide").addEventListener("click", function () { document.body.classList.add("wiz"); wshow(0); });
-  $("wizexit").addEventListener("click", function () { document.body.classList.remove("wiz"); window.scrollTo(0, 0); });
+  // Explain: the extra text (what a feature does, the story of a year, what a control is for) shows when it is on; off = scannable. Remembered.
+  var xb = $("explain"), XKEY = "dazdrive-explain";
+  try { xb.checked = localStorage.getItem(XKEY) === "1"; } catch (e) {}
+  if (/[?&]explain/.test(location.search)) xb.checked = true;
+  function xset() { document.body.classList.toggle("explain", xb.checked); try { localStorage.setItem(XKEY, xb.checked ? "1" : "0"); } catch (e) {} }
+  xb.addEventListener("change", xset); xset();
   $("wback").addEventListener("click", function () { wshow(wi - 1); });
   $("wnext").addEventListener("click", function () { if (wi === wsteps.length - 1) doSave(); else wshow(wi + 1); });
 
