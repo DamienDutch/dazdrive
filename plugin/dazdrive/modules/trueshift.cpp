@@ -699,6 +699,12 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
     // a little gas before the roll (Damien 24-10): with cruise the roll may start up to roll_boost over the set speed, and the
     // cruise control builds that speed first; not in Power, not when the set speed is a speed limit being eased down
     float boost = cc && g_cruise_smooth && S.mode != MODE_POWER && !S.rolling ? p_roll_boost : 0;
+    // no gas for a roll when a bend, junction or roundabout ahead already asks for less than the boosted speed: it only ends in gas, then
+    // brakes (24-10 evening, 575 s and 743 s: gas 0.5 at 83 km/h, a bend plan of 76-80 km/h, braking 5 s later)
+    if (boost > 0 && p_lookahead > 0 && route_ok()) {
+        float vs = route_curve_speed(2.5f, 0.3f);
+        if (vs == vs && vs * 3.6f < set + boost + 6) boost = 0;
+    }
     if ((cc && !g_cruise_smooth) || brake > 0.02f || ebrake) return 0;
     if (S.rolling ? T.in_thr > 0.1f : (T.in_thr > 0.02f || (!cc && T.eff_thr > 0.02f) || pedal_free_s < 1.5)) return 0;
     // Damien: at most 1-2 km/h under the set speed, then back on the gas; leave a little early (re-engaging

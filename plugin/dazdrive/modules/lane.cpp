@@ -665,7 +665,11 @@ static float lane_step(float u, float o1, float o2, float o3, float dt, float wh
         float sharp = 1 - clampf((fabsf(o3) - 0.006f) / 0.003f, 0, 1);   // the outside shrinks again in a very sharp bend (from R 170 m): the lane edge is near
         float want = -clampf(p_bias, 0, 0.6f) * straight + clampf(p_bend_out, 0, 0.6f) * bend * sharp * (o3 > 0 ? 1.0f : -1.0f);
         if (!(kmh > 40 && !g_pause && fabsf(o1) < 1.2f && (p_bias > 0 || p_bend_out > 0))) want = 0;
-        float st = 0.15f * dt * (want == 0 ? 2.0f : 1.0f);   // out twice as fast as in
+        // The aim must not be a step for the loop: 24-10 evening, four sways in 11 min, each while the keep-right aim ran from 0 to
+        // -0.33 m at 0.15 m/s (the real wheel answers stronger than the plant model). So 0.05 m/s (a bend's outside needs 6 m of road for
+        // 0.3 m), and frozen while the sway cure is active (gains cut) or the lane was just lost.
+        float st = 0.05f * dt * (want == 0 ? 2.0f : 1.0f);   // out twice as fast as in
+        if (SW_fac < 0.99f && want != 0) st = 0;
         g_bias += clampf(want - g_bias, -st, st);
     }
     float e1 = o1 - g_ref - g_bias;   // the offset the assist works on (aim: your held offset and the keep-right bias)
