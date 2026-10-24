@@ -411,6 +411,7 @@ static void c_lift_jn_free(double t) { if (t < 10) hold(70); else M.pedal = 0; }
 static void c_release(double t) { if (t < 10 || t > 50) hold(80); else M.pedal = 0; }
 // the yard (24-10, 3853-3877 s): 13 km/h, a short brake, then gentle pedal through 5-25 km/h
 static void c_yard(double t) { if (t < 2) { M.pedal = 0.2f; M.brake = 0; } else if (t < 3.5) { M.pedal = 0; M.brake = 0.15f; } else { M.pedal = 0.3f; M.brake = 0; } }
+static void c_pull03(double t) { M.pedal = t < 3 ? 0 : 0.3f; M.brake = 0; }
 static void c_cc46(double) { cruise(46); }   // an ACC target behind a slow lead (24-10: lead 40-46 km/h)
 static void c_cc52(double) { cruise(52); }
 static void c_cc63(double) { cruise(63); }
@@ -602,6 +603,16 @@ int main(int argc, char **argv)
     run("C11 Renault 32.5 t, Eco, cruise 52 (ACC), flat then a 6 % climb of 400 m from 50 km/h in 13: a gear that can just hold it", {32500, 50, 13, 50, 10.0f, 1.0f, 0, -1, -1, r_climb6, 1}, c_cc52);
     run("C12 same on a long 3 % climb of 600 m from 52 km/h in 13", {32500, 52, 13, 60, 10.0f, 1.0f, 0, -1, -1, r_climb3, 1}, c_cc52);
     run("C10b same from 55 km/h in 13", {32500, 55, 13, 45, 10.0f, 1.0f, 0, -1, -1, r_climb10, 1}, c_cc63);
+    // start gear of the Renault box by load (24-10: 36.7 t started in 2 and climbed 2>3>4>5 in 7 s)
+    {
+        M.v = 0; T.speed = 0; M.grade_pct = 0; M.wet = 0; T.wipers = 0;
+        for (float tons : { 16.4f, 25.0f, 34.6f, 36.7f, 42.0f })
+            for (float ped : { 0.06f, 0.25f, 0.6f }) {
+                M.mass = tons * 1000; M.pedal = ped; T.in_thr = ped; m_trueshift.frame();
+                printf("Renault start gear %4.1f t, pedal %.2f: %d (game 1)\n", tons, ped, (int)s_start(SELF));
+            }
+    }
+    run("G1 Renault 36.7 t at a standstill, the game started in 2, pedal 0.3 (24-10, 324 s: 2>3>4>5 in 7 s)", {36700, 0, 2, 25, 10.0f, 1.0f, 0, -1, -1, r_flat, 0}, c_pull03);
     use_car();
     run("CAR1 2.5 t pickup, light 0.35 from 15 km/h", {2500, 15, 2, 40}, c_car_light);
     run("CAR2 2.5 t pickup, full throttle from 15", {2500, 15, 2, 25}, c_car_full);

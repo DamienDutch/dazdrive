@@ -26,7 +26,7 @@ static float p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, 
     p_max_skip, p_skip_acc, p_skip_wait, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
-    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_wet, p_stop, p_tones, p_crest_band;
+    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_wet, p_stop, p_tones, p_crest_band;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = TrueShift on, 0 = the game's own automatic" },
@@ -40,6 +40,7 @@ static param g_params[] = {
     { "dwell_down_up_s", &p_dwell_du, 2.0f, "after a downshift, no upshift for this long (unless clearly past the upshift point)" },
     { "max_skip", &p_max_skip, 2, "most gears an upshift may skip (0 = never skip)" },
     { "skip_accel", &p_skip_acc, 0.15f, "acceleration (m/s2) the skipped-to gear must still give" },
+    { "launch_correct", &p_launch_fix, 1, "1 = when the game picked a lower start gear than the physics of launch_max_kmh / launch_slip_s allow (after reversing, after the engine started, or its own downshift at a stop), the gear is changed at the standstill before the pull-away: no climbing through the low gears (0 = off)" },
     { "load_down_from", &p_load_from, 0.75f, "on a climb: a gear that needs this share of its full-throttle force to hold the speed (and the speed falls under real throttle) gets its downshift point raised towards the torque plateau (1 = off; a gear that cannot hold it at all downshifts at once anyway)" },
     { "skip_wait_over_rpm", &p_skip_over, 400, "skip_wait_s: how far over the upshift point the revs may build up while waiting for a skip (rpm; never above 85 % of the limit)" },
     { "kick_dwell_s", &p_kick_dwell, 5, "after a kickdown or lugging downshift no upshift for this long, unless clearly past the upshift point (the rpm path, not the rev limit)" },
@@ -168,6 +169,8 @@ static struct {
     float idle;             // learned idle rpm (0 = not yet)
     int rolling;            // eco-roll: in neutral by our choice
     double roll_at;
+    int launch_want;        // a start gear the game did not pick (launch_correct); the chooser hands it back until it is in or the truck rolls
+    double launch_at;
     int boost_want;         // eco-roll would start but wants the cruise control to build the roll_boost speed first
     float roll_kmh;         // speed when the roll started
     int roll_exit;          // gear to engage after a roll (kept as target until it is in)
@@ -1264,6 +1267,31 @@ static void note_gear_change(void *self)
     }
 }
 
+// A launch the start-gear function never saw (24-10: after reversing in the yard, and right after the engine started, the game picked
+// gear 2 itself with 36.7 t, and the box climbed 2>3>4>5 in 7 s; the start function says 4): at a standstill, in a low gear, the clutch
+// still slipping or even before the pedal, take the physics' gear straight away: a shift now costs next to nothing. Once per standstill.
+static int launch_pick(int stock, float thr);
+static bool takeover_launch_ok(float) { return p_takeover > 0; }
+static void launch_correct(void *self)
+{
+    static int done;
+    double now = sim_s();
+    float kmh = fabsf(T.speed) * 3.6f;
+    if (kmh > 6) { done = 0; return; }
+    if (done || kmh > 2.5f || !g_active || p_launch_fix <= 0 || p_start_fix <= 0 || p_launch_max <= 0 || T.parking_brake || T.in_brake > 0.3f || !S.eng_ok || S.mode == MODE_M || S.mode == MODE_POWER) return;
+    int cur = gb_gear(self);
+    if (cur < 1 || gb_state(self) != 0 || now - S.shift_at < 1.0 || S.rolling || g_crawl_on || S.mass < 3000) return;
+    // at a standstill with the pedal still up: the gear for a gentle pull-away (0.3); with the pedal down: for that pedal
+    int pick = launch_pick(cur, fmaxf(clampf(T.in_thr, 0, 1), 0.3f));
+    done = 1;
+    if (pick > cur && takeover_launch_ok(kmh)) {
+        logline("launch: the game started in %d, the physics say %d (%.1f t, grade %.1f%%): shifting at %.1f km/h", cur, pick, S.mass / 1000, grade_pct(), kmh);
+        S.launch_want = pick; S.launch_at = now;
+        gb_set_target(self, pick); gb_force(self);
+        S.commanded = pick; S.cmd_why = "start, corrected";
+    }
+}
+
 static float *stub_decide(void *self, float *out, unsigned gear)
 {
     float *r = o_window(self, out, gear);
@@ -1277,6 +1305,7 @@ static float *stub_decide(void *self, float *out, unsigned gear)
     S.target = gb_target(self);
     // Neutral goes in through the tail hook (the chooser path clamps to +-1).
     if (want > 0 && want != ROLL && want != gb_gear(self) && takeover()) gb_force(self);
+    launch_correct(self);
     return r;
 }
 
@@ -1289,6 +1318,8 @@ static int stub_choose(void *self)
     // A shift hint of the driver in M (the game's handler moves the target one gear, before this chooser runs). Out of its rpm window
     // (the rev limiter, 24-10 ride 124-130 s and 133-138 s) the chooser runs every tick and the call site writes its result into the
     // target: our "stay in this gear" erased the press until the pedal came off. So a target nobody here asked for is honored.
+    // the physics' start gear the game did not pick (launch_correct): keep handing it back until it is in
+    if (S.launch_want > 0 && (fabsf(T.speed) * 3.6f > 6 || sim_s() - S.launch_at > 2.5 || gb_gear(self) >= S.launch_want)) S.launch_want = 0;
     int hint_tgt = 0;
     if (S.mode == MODE_M && gb_state(self) == 0) {
         int cur = gb_gear(self), tgt = gb_target(self);
@@ -1301,6 +1332,7 @@ static int stub_choose(void *self)
         if (want == ROLL) { ret = gb_gear(self); why = w; }
         else if (want > 0) { ret = want; why = w; }
     }
+    if (S.launch_want > 0 && gb_gear(self) < S.launch_want) { ret = S.launch_want; why = "start, corrected"; }
     if (hint_tgt && (ret == gb_gear(self) || (ret > gb_gear(self)) == (hint_tgt > gb_gear(self)))) {
         static double said;
         if (sim_s() - said > 0.5) { said = sim_s(); logv(2, "hint target %d seen in %d (rpm %.0f): honored", hint_tgt, gb_gear(self), T.rpm); }
@@ -1386,6 +1418,29 @@ static void tail_pre(void *self)
     S.cmd_why = "roll end";
 }
 
+// The start gear by physics (see stub_start): lock speed and slip time at this mass and grade, never by a gear count. `stock` = the game's
+// pick; the result may be above it (launch_max_kmh) or below it.
+static int launch_pick(int stock, float thr)
+{
+    int pick = stock;
+    if (p_start_fix > 0 && takeover() && S.eng_ok && wheel_radius() > 0.1f && stock <= n_gears()) {
+        float r = wheel_radius(), f_res = resist(0);
+        // Above the game's pick: only by physics (lock speed and slip time at this mass and grade), never by a gear count,
+        // because every gearbox numbers its gears differently (Damien 13-10: "look at the gear ratio, not the number").
+        bool raise = p_launch_max > 0 && S.mode != MODE_POWER && S.mode != MODE_M;
+        float limit = p_slip_s * (thr >= p_kick_pedal && !raise ? 0.6f : 1.0f);
+        pick = 1;
+        for (int g = raise ? n_gears() : stock; g >= 1; g--) {
+            float ratio = T.ratio[g - 1] * T.diff;
+            float v_lock = p_launch_rpm / (ratio * 9.5493f) * r;
+            float a = (S.eng.torque * p_launch_torque * ratio * p_eta / r - f_res) / S.mass;
+            if (g > stock && v_lock * 3.6f > p_launch_max) continue;
+            if (a > 0 && v_lock / a <= limit) { pick = g; break; }
+        }
+    }
+    return pick;
+}
+
 static int stub_start(void *self)
 {
     int stock = o_start(self);
@@ -1404,23 +1459,8 @@ static int stub_start(void *self)
         S.cmd_why = "engage";
         return g;
     }
-    int pick = stock;
     float thr = clampf(T.in_thr, 0, 1);
-    if (p_start_fix > 0 && takeover() && S.eng_ok && wheel_radius() > 0.1f && stock <= n_gears()) {
-        float r = wheel_radius(), f_res = resist(0);
-        // Above the game's pick: only by physics (lock speed and slip time at this mass and grade), never by a gear count,
-        // because every gearbox numbers its gears differently (Damien 13-10: "look at the gear ratio, not the number").
-        bool raise = p_launch_max > 0 && S.mode != MODE_POWER && S.mode != MODE_M;
-        float limit = p_slip_s * (thr >= p_kick_pedal && !raise ? 0.6f : 1.0f);
-        pick = 1;
-        for (int g = raise ? n_gears() : stock; g >= 1; g--) {
-            float ratio = T.ratio[g - 1] * T.diff;
-            float v_lock = p_launch_rpm / (ratio * 9.5493f) * r;
-            float a = (S.eng.torque * p_launch_torque * ratio * p_eta / r - f_res) / S.mass;
-            if (g > stock && v_lock * 3.6f > p_launch_max) continue;
-            if (a > 0 && v_lock / a <= limit) { pick = g; break; }
-        }
-    }
+    int pick = launch_pick(stock, thr);
     // Wet road (wipers on): one gear higher, less torque at the wheels, as long
     // as the clutch would not slip much longer than allowed.
     if (S.wet && pick < stock + 1 && pick < n_gears() && wheel_radius() > 0.1f && S.eng_ok) {
