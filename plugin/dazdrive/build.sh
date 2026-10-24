@@ -20,7 +20,7 @@ echo "build: flavor $flavor"
 podman run --rm -v "$root:/w:Z" -w /w/dazdrive registry.fedoraproject.org/fedora:44 bash -c \
   "dnf -y -q install mingw64-gcc-c++ >/dev/null 2>&1 && x86_64-w64-mingw32-g++ -O2 -Wall -Wextra \
    -Wno-unused-parameter -Wno-missing-field-initializers -std=c++17 $extra -I../sdk/include -I. -shared \
-   -o $name.dll $srcs suite.def -static -static-libgcc -static-libstdc++ -lwinmm -ldinput8 -ldxguid"
+   -o $name.dll $srcs suite.def -static -static-libgcc -static-libstdc++ -lwinmm"
 ls -l "$here/$name.dll"
 if [ "${1:-}" = install ]; then
   dst="$HOME/.local/share/Steam/steamapps/common/Euro Truck Simulator 2/bin/win_x64/plugins"

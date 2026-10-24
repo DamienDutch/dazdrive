@@ -135,11 +135,9 @@ enum Cue { CUE_MODE_ECO, CUE_MODE_NORMAL, CUE_MODE_POWER, CUE_MODE_M, CUE_ACC_1,
            CUE_ON, CUE_OFF, CUE_AEB_WARN, CUE_AEB_PARTIAL, CUE_AEB_FULL, CUE_CRUISE_DROP,
            CUE_LANE_PAUSE, CUE_LANE_RESUME, CUE_OVERSPEED, CUE_COUNT };
 void play_cue(int cue);
-// input.cpp: wheel/joystick buttons (numbered from 1); input_pressed = went down since the last poll
+// input.cpp: finds the wheel (the present joystick with the most buttons) for lane's per-wheel profile
 void input_poll();
-int input_pressed(int button, int modifier);
 const char *input_wheel_name();  // winmm name of the most button-rich present joystick ("" = none found yet)
-int input_held(int button);  // down right now (any device)
 extern float g_volume;
 extern volatile float g_creep_brake;  // Creep: brake request it wants (crawl held on a descent; Cruise applies it)
 extern volatile int g_crawl_on;       // Creep: the driver has crawl switched on
