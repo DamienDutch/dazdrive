@@ -196,7 +196,7 @@ details.more>summary{color:var(--acc);cursor:pointer}
 .eralist dd{margin:0}
 .eralist .stg{color:var(--warn)}
 .eralist .stg.experimental{color:var(--bad)}
-/* Explain: extra text is hidden until the switch in the step bar is on (what must be seen, like stages and "needs", never is .x) */
+/* Extra info: extra text is hidden until the switch in the step bar is on (what must be seen, like stages and "needs", never is .x) */
 .x{display:none}
 body.explain .x{display:block}
 body.explain dl.eralist{display:grid}
@@ -218,7 +218,7 @@ body.explain .tiles{grid-template-columns:1fr}
 <p>ETS2 1.60 (Steam beta temporary_1_60), gearbox on Automatic, singleplayer, not TruckersMP. Runs in your browser and sends nothing.</p>
 </div></header>
 <main>
-<nav class="wizhead" aria-label="Steps"><div class="wsteps" id="wsteplist"></div><label class="xsw"><input type="checkbox" id="explain"><i></i><span>Explain</span></label></nav>
+<nav class="wizhead" aria-label="Steps"><div class="wsteps" id="wsteplist"></div><label class="xsw"><input type="checkbox" id="explain"><i></i><span>Extra info</span></label></nav>
 
 <section class="card" data-step data-title="Start" id="s-start">
 <h2>Do you already have a dazdrive.ini?</h2>
@@ -874,7 +874,7 @@ if (typeof document !== "undefined") (function () {
     $("wcopy").hidden = !last;
     window.scrollTo(0, 0);
   }
-  // Explain: the extra text (what a feature does, the story of a year, what a control is for) shows when it is on; off = scannable. Remembered.
+  // Extra info: the extra text (what a feature does, the story of a year, what a control is for) shows when it is on; off = scannable. Remembered.
   var xb = $("explain"), XKEY = "dazdrive-explain";
   try { xb.checked = localStorage.getItem(XKEY) === "1"; } catch (e) {}
   if (/[?&]explain/.test(location.search)) xb.checked = true;
