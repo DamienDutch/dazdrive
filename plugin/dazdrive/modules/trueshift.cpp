@@ -1280,12 +1280,25 @@ static int stub_choose(void *self)
     if (!g_active) return stock;
     int ret = stock;
     const char *why = "game";
+    // A shift hint of the driver in M (the game's handler moves the target one gear, before this chooser runs). Out of its rpm window
+    // (the rev limiter, 24-10 ride 124-130 s and 133-138 s) the chooser runs every tick and the call site writes its result into the
+    // target: our "stay in this gear" erased the press until the pedal came off. So a target nobody here asked for is honored.
+    int hint_tgt = 0;
+    if (S.mode == MODE_M && gb_state(self) == 0) {
+        int cur = gb_gear(self), tgt = gb_target(self);
+        if (cur > 0 && tgt > 0 && tgt != cur && tgt != S.commanded && abs(tgt - cur) <= 3 && tgt <= n_gears()) hint_tgt = tgt;
+    }
     if (takeover()) {
         const char *w;
         refresh(self);
         int want = decide_gear(self, &w);
         if (want == ROLL) { ret = gb_gear(self); why = w; }
         else if (want > 0) { ret = want; why = w; }
+    }
+    if (hint_tgt && (ret == gb_gear(self) || (ret > gb_gear(self)) == (hint_tgt > gb_gear(self)))) {
+        static double said;
+        if (sim_s() - said > 0.5) { said = sim_s(); logv(2, "hint target %d seen in %d (rpm %.0f): honored", hint_tgt, gb_gear(self), T.rpm); }
+        ret = hint_tgt; why = "hint";
     }
     // Every gear we hand back counts as ours, so that only the hint buttons
     // show up as shifts nobody here asked for.

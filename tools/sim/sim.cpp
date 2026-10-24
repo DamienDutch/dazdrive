@@ -88,7 +88,7 @@ static void use_car()  // a pickup-like car: 6 speeds, 450 Nm
 }
 static struct {
     int gear, target, state, parked, engaged; double shift_end; float v, mass, grade_pct, pedal, cc, brake; int force, ebrake, ret;
-    float cvar, shift_time, cruise_kmh; int eb_toggle; float eb_level, mass_seen, thr_floor;
+    float cvar, shift_time, cruise_kmh; int eb_toggle; float eb_level, mass_seen, thr_floor; int hint;   // hint: a shift-hint press the game's handler turns into target +-1 before its update
     double s;                 // distance driven (m)
     float (*road)(double s);  // grade (%) along the road, or NULL (scenario sets grade)
     int route_on, wet;
@@ -258,6 +258,9 @@ static void tick(double dt, int stats)
     // the tail (our eco-roll hook) right before the gearbox.
     if (!M.state) {
         M.target = M.gear;
+        // a hint press (the exe: target +-1 in the handler, before the update); the chooser below overwrites it, as the game's call site does
+        if (M.hint && M.gear > 0) { M.target = M.gear + M.hint; if (M.target < 1) M.target = 1; if (M.target > NG) M.target = NG; }
+        M.hint = 0;
         if (M.gear > 0) {
             float w[2];
             s_decide(SELF, w, M.gear);
@@ -431,6 +434,15 @@ static void c_m_hint(double t)
     if (t > 8 && done < 3 && !M.state && fmod(t, 4) < 0.05) { done++; M.target = M.gear + 1; M.state = 1; M.shift_end = t_now + 0.5; printf("  (hint up)\n"); }
 }
 
+// the rev-limiter bug of the 24-10 ride (124-130 s): full pedal in M against the limiter, three + presses; the chooser runs every tick out of the window
+static void c_m_limiter(double t)
+{
+    M.pedal = 1.0f;
+    static int done;
+    if (t < 0.1) done = 0;
+    if (t > 8 && done < 3 && !M.state && fmod(t, 3) < 0.06) { done++; M.hint = 1; printf("  (hint up at %.1f s, rpm %.0f)\n", t, rpm_now()); }
+}
+
 static void run_m()
 {
     run("M1 M mode, 40 t, full throttle from 50 in 8", {40000, 50, 8, 40, 0}, c_m_full);
@@ -438,6 +450,7 @@ static void run_m()
     run("M3 M mode, 40 t, braking to a stop from 60 in 10", {40000, 60, 10, 30, 0}, c_m_stop);
     run("M4 M mode, 40 t, 0.5 pedal, three hint-ups", {40000, 40, 7, 25, 0}, c_m_hint);
     run("M5 M mode, 40 t, 0.5 pedal, three hint-up presses the game ignores (ride 3)", {40000, 40, 7, 25, 0}, c_m_btn);
+    run("M6 M mode, 40 t, FULL pedal against the rev limiter in gear 3, three hint-up presses (ride 24-10, 124-130 s)", {40000, 12, 3, 25, 0}, c_m_limiter);
     sim_btn = 0;
 }
 
