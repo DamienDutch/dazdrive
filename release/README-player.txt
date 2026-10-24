@@ -263,9 +263,10 @@ log of the previous session is kept as dazdrive.prev.log, so you do not have to 
 before you start the game again.
 
 If something felt wrong but there is no incident file, say so in the issue: that is useful to know
-too. For that case, pick "Bug hunt" under Logging on the setup page (or set log_level=2 and trace=1
-in [trueshift], [cruise] and [creep]), drive again and also send the .csv files from the same
-folder (trueshift.csv, cruise.csv, lane.csv, creep.csv); they are large, so zip them.
+too. The betas ship with "Bug hunt" on (log_level=2 and trace=1 in [trueshift], [cruise] and
+[creep]), so the .csv files in the same folder (trueshift.csv, cruise.csv, lane.csv, creep.csv)
+already have the data: zip them and send them along (a few MB each). The first full release will
+ship with logging quiet; "Quiet" under Logging on the setup page does that now.
 
 
 CREDITS AND LICENSE

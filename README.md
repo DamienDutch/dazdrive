@@ -127,9 +127,9 @@ switch crawl mode). Unbound, only the part that needs the key does nothing.
   folder stays under 4 MB and the previous session's log is kept as `dazdrive.prev.log`.
 - the game version, truck and engine/gearbox (mods?), trailer or not, whether a route was active,
   and what you were doing.
-- nothing in the incidents folder but it felt wrong? Say so. For driving behavior you can pick "Bug
-  hunt" under Logging on the setup page, drive again and zip the `.csv` files from the same folder
-  (they only exist at log level 2).
+- nothing in the incidents folder but it felt wrong? Say so. The betas ship with "Bug hunt" on, so the
+  `.csv` files in the same folder already have the data: zip them and send them along. The first full
+  release will ship quiet ("Quiet" under Logging on the setup page does that now).
 
 ## For developers
 
