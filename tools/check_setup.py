@@ -15,7 +15,7 @@ page = os.path.join(tmp, "dazdrive-setup.html")
 subprocess.run([sys.executable, os.path.join(HERE, "gen_ini.py"), "html", "-o", page], check=True)
 standard = subprocess.run([sys.executable, os.path.join(HERE, "gen_ini.py"), "standard"], check=True, capture_output=True, text=True).stdout
 dom = subprocess.run([chromium, "--headless=new", "--disable-gpu", "--no-sandbox", f"--user-data-dir={tmp}/profile",
-                      "--dump-dom", f"file://{page}?selftest"], capture_output=True, text=True, timeout=60).stdout
+                      "--virtual-time-budget=15000", "--dump-dom", f"file://{page}?selftest"], capture_output=True, text=True, timeout=60).stdout
 i = dom.rfind('<pre id="selftest">')  # the last one: the script source mentions the id too
 if i < 0:
     raise SystemExit("selftest output not found in the DOM (page error?)")

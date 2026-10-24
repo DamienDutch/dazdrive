@@ -22,3 +22,12 @@ release/setup-preview/
 # Ride logs and test data
 runs/
 *.csv
+
+# Local-only files (also in .git/info/exclude): notes for Claude, the dev-only HA hook, personal tools
+CLAUDE.md
+notes/
+docs/artifacts/
+docs/ha-koppeling.md
+plugin/dazdrive/core/dev.cpp
+plugin/dazdrive/core/dev.h
+tools/import_runs.py
