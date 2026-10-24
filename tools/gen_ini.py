@@ -250,6 +250,8 @@ SETUP_GROUPS = [
          "key": ["cruise", "aeb_warn_s"], "options": [["3.5", "Early (3.5 s before a crash)"], ["3", "Normal (3 s)"], ["2.5", "Late (2.5 s)"]]},
         {"kind": "range", "label": "Set speed above the limit by", "help": "With Follow speed limits (ISA) on.",
          "unit": "km/h", "min": 0, "max": 10, "step": 1, "key": ["cruise", "speed_limit_offset_kmh"]},
+        {"kind": "range", "label": "Never more than this over the limit", "help": "The cruise's own extra speed (descents, hills, coasting boost) stops here. 0 = no cap. Needs the limit to be known.",
+         "unit": "km/h", "min": 0, "max": 10, "step": 1, "key": ["cruise", "overspeed_cap_kmh"]},
         {"kind": "choice", "label": "A tap on cruise + / −", "help": "Changes the set speed by this much.",
          "key": ["cruise", "step_tap_kmh"], "options": [["0", "The game's own step"], ["1", "1 km/h"], ["2", "2 km/h"], ["5", "5 km/h"], ["10", "10 km/h"]]},
         {"kind": "range", "label": "Speed limiter caps the set speed at", "help": "With the game's speed limiter on (0 = no cap).",

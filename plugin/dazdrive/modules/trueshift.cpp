@@ -703,7 +703,7 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
     if ((p_roll <= 0 && !cc_ok) || (S.mode != MODE_ECO && S.mode != MODE_NORMAL && S.mode != MODE_POWER) || !S.ours) return 0;
     // a little gas before the roll (Damien 24-10): with cruise the roll may start up to roll_boost over the set speed, and the
     // cruise control builds that speed first; not in Power, not when the set speed is a speed limit being eased down
-    float boost = cc && g_cruise_smooth && S.mode != MODE_POWER && !S.rolling ? p_roll_boost * band_scale(T.cruise) : 0;
+    float boost = cc && g_cruise_smooth && S.mode != MODE_POWER && !S.rolling ? fminf(p_roll_boost * band_scale(T.cruise), overspeed_room(T.cruise)) : 0;
     // no gas for a roll when a bend, junction or roundabout ahead already asks for less than the boosted speed: it only ends in gas, then
     // brakes (24-10 evening, 575 s and 743 s: gas 0.5 at 83 km/h, a bend plan of 76-80 km/h, braking 5 s later)
     if (boost > 0 && p_lookahead > 0 && route_ok()) {
@@ -1597,7 +1597,7 @@ static void overspeed_tone()
 static void ts_frame()
 {
     g_rolling = S.rolling || S.roll_exit > 0;  // neutral by our choice, also until the exit gear is in
-    g_roll_boost_kmh = S.boost_want && !S.rolling ? p_roll_boost * band_scale(T.cruise) : 0;
+    g_roll_boost_kmh = S.boost_want && !S.rolling ? fminf(p_roll_boost * band_scale(T.cruise), overspeed_room(T.cruise)) : 0;
     {
         static const int to_inc[] = { 2, 1, 3, 4 };  // Normal, Eco, Power, M -> incident file numbering
         int on = g_active && !S.unsupported && !manual_box();

@@ -27,7 +27,7 @@
 #include <string.h>
 
 static float p_herm;
-static float p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_eco_k, p_power_k, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
+static float p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_eco_k, p_power_k, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
 static param g_params[] = {
@@ -35,6 +35,7 @@ static param g_params[] = {
     { "acc_short_s", &p_gap_s, 1.0f, "adaptive cruise gap in seconds when the game option is the short distance (20). Real trucks: 2.4-3.6 s (Detroit default 3.6), but the game is scaled: 1 s feels normal" },
     { "acc_middle_s", &p_gap_m, 1.25f, "... the middle distance (30)" },
     { "acc_long_s", &p_gap_l, 1.5f, "... the long distance (40)" },
+    { "overspeed_cap_kmh", &p_os_cap, 5, "the extra speed we grant over the set speed (hills, descents, coasting boost, smart overspeed) stops this far over the speed limit (km/h; 0 = no cap). Only while the limit is known" },
     { "acc_fast_from_kmh", &p_acc_fast_from, 75, "ACC: from this speed (km/h) the time gap shrinks toward acc_fast_factor, so it follows closer on a motorway (country roads keep the full gap)" },
     { "acc_fast_full_kmh", &p_acc_fast_full, 95, "ACC: from this speed (km/h) the time gap is acc_fast_factor times the set gap; in between it changes smoothly" },
     { "acc_fast_factor", &p_acc_fast_k, 0.8f, "ACC: the time gap times this at motorway speed (1 = same gap at every speed). Never below 0.7 s" },
@@ -179,11 +180,11 @@ static float band_up()
 {
     if (!(p_predict > 0 && p_band_up > 0) || s_lead_near) return 0;
     float need = g_pcc_need_kmh;
-    float k = band_scale(T.cruise);
-    if (need == need) return fminf(p_band_up * k, need);
+    float k = band_scale(T.cruise), room = overspeed_room(T.cruise);
+    if (need == need) return fminf(fminf(p_band_up * k, need), room);
     static float m = 30000; static double at = -10;
     if (wall_s() - at > 2 || wall_s() < at) { at = wall_s(); float g = game_mass(); if (g == g && g > 500) m = g; }
-    return p_band_up * k * (0.4f + 0.6f * fminf(1.0f, fmaxf(0.0f, (m - 12000) / 28000)));
+    return fminf(p_band_up * k * (0.4f + 0.6f * fminf(1.0f, fmaxf(0.0f, (m - 12000) / 28000))), room);
 }
 
 // Hill-start: stopped on a slope, the driver lets go of the brake: hold it
@@ -1166,6 +1167,7 @@ static void cr_start()
         } else logline("Cruise: key handler code not found: + / - steps and retarder-off stay the game's");
     }
     g_pcc_on = p_predict > 0;
+    g_overspeed_cap = p_os_cap;
     if (p_smooth > 0) {
         uintptr_t h = game_scan("48 8B CB F3 44 0F 11 83 E4 1C 00 00 F3 45 0F 5F C3 41 0F 28 D0 E8");
         uintptr_t site = h ? h + 21 : 0;
@@ -1804,7 +1806,7 @@ static void cr_frame()
             // never brake below what our own momentum target asks (Damien 11-10, second 0.6 ride: "gas and retarder at once":
             // the player's smart overspeed 0 braked at the set speed while the PCC target was set + up)
             float want = down ? (s_dip ? up : fmaxf(0.0f, p_desc_kmh) * band_scale(T.cruise)) : smart_base();
-            want = fmaxf(want, s_mom_up + 0.5f * (s_mom_up > 0));
+            want = fminf(fmaxf(want, s_mom_up + 0.5f * (s_mom_up > 0)), overspeed_room(T.cruise));
             static int said = 0;  // 0 flat, 1 descent, 2 dip
             int st = down ? 1 + s_dip : 0;
             if (st != said) {

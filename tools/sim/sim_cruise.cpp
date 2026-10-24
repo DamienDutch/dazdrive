@@ -21,6 +21,7 @@ volatile int g_rolling, g_cruise_smooth, g_crawl_on;
 volatile float g_roll_boost_kmh;
 volatile double g_rb_cancel_at = -1e9;
 volatile int g_pcc_on;
+volatile float g_overspeed_cap = 5;
 volatile float g_pcc_need_kmh = NAN;
 volatile float g_creep_brake;
 int g_log_level = 2;
@@ -267,6 +268,12 @@ static void keys_test()
         printf("keys: resume while on, limit %.0f, set %.0f -> %.0f (expect %.0f)\n", rc[i].lim_kmh, rc[i].start, sv, want[i]);
         bad |= sv != want[i];
     }
+    // overspeed cap: limit 80, set 83, cap 5 -> 2 km/h of room; no limit known or cap 0 -> no cap
+    { float save = g_overspeed_cap; T.speed_limit = 80 / 3.6f; g_overspeed_cap = 5;
+      float r1 = overspeed_room(83 / 3.6f), r2 = overspeed_room(90 / 3.6f); T.speed_limit = 0; float r3 = overspeed_room(83 / 3.6f);
+      T.speed_limit = 80 / 3.6f; g_overspeed_cap = 0; float r4 = overspeed_room(83 / 3.6f); g_overspeed_cap = save; T.speed_limit = 0;
+      printf("overspeed cap: room %.1f (expect 2), set over the cap %.1f (expect 0), no limit %s, cap 0 %s\n", r1, r2, r3 > 1e8f ? "no cap" : "CAP", r4 > 1e8f ? "no cap" : "CAP");
+      bad |= fabsf(r1 - 2) > 0.01f || r2 != 0 || r3 < 1e8f || r4 < 1e8f; }
     T.speed_limit = 0;
     printf("keys test: %s\n", bad ? "FAIL" : "ok");
     if (bad) exit(1);

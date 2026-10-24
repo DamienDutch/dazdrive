@@ -156,6 +156,15 @@ static inline float band_scale(float set_ms)
     float k = set_ms * 3.6f / 80.0f;
     return k < 0.6f ? 0.6f : k > 1.25f ? 1.25f : k;
 }
+extern volatile float g_overspeed_cap;  // Cruise: ini overspeed_cap_kmh (0 = no cap)
+// How many km/h the truck may still be allowed over the set speed so it stays under the speed limit + overspeed_cap_kmh (a fine
+// starts a little above the limit). 1e9 = no cap (cap off or limit unknown). Used for every extra speed we grant above the set speed.
+static inline float overspeed_room(float set_ms)
+{
+    if (!(g_overspeed_cap > 0) || !(T.speed_limit > 1.0f)) return 1e9f;
+    float r = T.speed_limit * 3.6f + g_overspeed_cap - set_ms * 3.6f;
+    return r > 0 ? r : 0;
+}
 extern volatile int g_pcc_on;         // Cruise: predictive cruise (PCC) is switched on
 extern volatile int g_cruise_smooth;  // the Cruise module drives the cruise throttle itself
 extern volatile char g_dash_flash;    // a letter to show on the dashboard for a moment (ACC C/N/F/O, limit S/X, lane L/X)

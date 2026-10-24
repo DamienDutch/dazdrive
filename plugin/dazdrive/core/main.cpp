@@ -26,6 +26,7 @@ static int g_started, g_inactive;  // g_inactive: nothing hooked, so nothing is 
 volatile int g_rolling, g_cruise_smooth, g_crawl_on, g_pcc_on;
 volatile float g_roll_boost_kmh;
 volatile double g_rb_cancel_at = -1e9;
+volatile float g_overspeed_cap = 5;
 volatile float g_pcc_need_kmh = __builtin_nanf("");
 volatile float g_creep_brake;
 volatile char g_dash_flash, g_dash_status;
