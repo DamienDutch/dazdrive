@@ -19,6 +19,7 @@ static struct R_t {
     int ok, n;              // n = valid samples
     float h[N_SAMPLES];     // height (m) at i*STEP ahead
     float x[N_SAMPLES], z[N_SAMPLES];  // position at i*STEP ahead (for bends)
+    char herm[N_SAMPLES];   // the sample lies on a Hermite curve through the node directions (else on a straight line between nodes)
     float junction_m;
     // Junctions ahead whose turn / roundabout limits the speed (see build()).
     struct Jn { float d_in, d_out, turn, radius, ratio; int curves, round; } jn[4];
@@ -35,7 +36,8 @@ static struct R_t {
 typedef unsigned long long u64;
 
 // Junction look-ahead settings (cruise.cpp sets them from its ini).
-static struct { int on; float lat, rb_ms, min_deg, ratio; } JC = { 0, 2.0f, 25 / 3.6f, 25, 1.4f };
+static struct { int on; float lat, rb_ms, min_deg, ratio; int herm; } JC = { 0, 2.0f, 25 / 3.6f, 25, 1.4f, 1 };
+void route_hermite(int on) { JC.herm = on; }
 void route_junction_cfg(int on, float lat, float roundabout_kmh, float min_deg, float roundabout_ratio)
 {
     JC.on = on; JC.lat = lat > 0.3f ? lat : 0.3f; JC.rb_ms = roundabout_kmh / 3.6f;
@@ -51,6 +53,42 @@ static int node_pos(const char *items, u64 i, float p[3])
     p[0] = c[0] / 256.0f;
     p[1] = c[1] / 256.0f;
     p[2] = c[2] / 256.0f;
+    return 1;
+}
+
+// The road direction at a node (xz, unit): the node's quaternion (w, x, y, z at +0x10) rotates the forward axis (0, 0, -1); a tangent that
+// points backwards is turned round (the node has no travel direction). 0 when it cannot be read. (Offline on a real run: this matches the
+// driven heading at the nodes to 2 degrees, median, runs/run2.)
+static int node_tan(const char *items, u64 i, float t[2])
+{
+    const char *node = *(char *const *)(items + i * 0x20);
+    if (!node || !mem_readable(node + 0x10, 16)) return 0;
+    float q[4];
+    memcpy(q, node + 0x10, 16);
+    float w = q[0], x = q[1], y = q[2], z = q[3];
+    float n2 = w * w + x * x + y * y + z * z;
+    if (!(n2 > 0.5f && n2 < 1.5f)) return 0;
+    float vx = 0, vy = 0, vz = -1;
+    float tx = 2 * (y * vz - z * vy), ty = 2 * (z * vx - x * vz), tz = 2 * (x * vy - y * vx);
+    float fx = vx + w * tx + (y * tz - z * ty), fz = vz + w * tz + (x * ty - y * tx);
+    float m = sqrtf(fx * fx + fz * fz);
+    if (m < 1e-3f) return 0;
+    t[0] = fx / m; t[1] = fz / m;
+    return 1;
+}
+
+// Tangents for the segment pa -> pb (chord length len) from the directions of its two nodes: turned along the chord and refused when one is
+// more than 80 degrees off it (a prefab / junction node, a U-turn: then the straight chord stays, as before).
+static int seg_tangents(const char *items, u64 i, const float pa[3], const float pb[3], float len, float ta[2], float tb[2])
+{
+    if (!node_tan(items, i, ta) || !node_tan(items, i + 1, tb)) return 0;
+    float cx = (pb[0] - pa[0]) / len, cz = (pb[2] - pa[2]) / len;
+    float *tt[2] = { ta, tb };
+    for (int k = 0; k < 2; k++) {
+        float d = tt[k][0] * cx + tt[k][1] * cz;
+        if (d < 0) { tt[k][0] = -tt[k][0]; tt[k][1] = -tt[k][1]; d = -d; }
+        if (d < 0.1736f) return 0;   // cos 80 degrees
+    }
     return 1;
 }
 
@@ -261,6 +299,8 @@ static void build(char *task)
     float seg_len = len;
     u64 j = seg;
     float pa[3] = { a[0], a[1], a[2] }, pb[3] = { b[0], b[1], b[2] };
+    float ta[2] = { 0, 0 }, tb[2] = { 0, 0 };
+    int herm = JC.herm && seg_tangents(items, seg, pa, pb, seg_len, ta, tb);
     int i = 0;
     float junction_m = -1;
     float end_trk = NAN, end_j = NAN;
@@ -283,8 +323,15 @@ static void build(char *task)
         float s = (float)(i * STEP);
         if (s <= s0 + seg_len) {
             float k = (s - s0) / seg_len;
-            R.x[i] = pa[0] + (pb[0] - pa[0]) * k;
-            R.z[i] = pa[2] + (pb[2] - pa[2]) * k;
+            if (herm) {   // cubic Hermite through the two nodes with their directions (the chord length as the speed): the curve of the road, not the diagonal
+                float k2 = k * k, k3 = k2 * k, h00 = 2 * k3 - 3 * k2 + 1, h10 = k3 - 2 * k2 + k, h01 = -2 * k3 + 3 * k2, h11 = k3 - k2;
+                R.x[i] = h00 * pa[0] + h10 * seg_len * ta[0] + h01 * pb[0] + h11 * seg_len * tb[0];
+                R.z[i] = h00 * pa[2] + h10 * seg_len * ta[1] + h01 * pb[2] + h11 * seg_len * tb[1];
+            } else {
+                R.x[i] = pa[0] + (pb[0] - pa[0]) * k;
+                R.z[i] = pa[2] + (pb[2] - pa[2]) * k;
+            }
+            R.herm[i] = (char)herm;
             R.h[i++] = pa[1] + (pb[1] - pa[1]) * k;
             continue;
         }
@@ -297,6 +344,7 @@ static void build(char *task)
         float ex = pb[0] - pa[0], ez = pb[2] - pa[2];
         seg_len = sqrtf(ex * ex + ez * ez);
         if (seg_len < 0.1f) seg_len = 0.1f;
+        herm = JC.herm && seg_tangents(items, j, pa, pb, seg_len, ta, tb);
         memcpy(&end_j, items + j * 0x20 + 0x14, 4);
         if (junction_m < 0 && next_prefab == next_prefab && end_j <= next_prefab) junction_m = s0;
     }
@@ -497,8 +545,12 @@ static float route_bend_speed(float a_lat, float a_dec)
     // samples run straight between them, so over one step every node looks
     // like a sharp corner (ts3e: bends taken far too slowly). The heading
     // change between the two chords is the one over K steps of arc.
-    const int K = 3;
-    for (int i = K; i + K < R.n; i++) {
+    // On a Hermite stretch (the curve of the road, no corners at the nodes) a window of 2 steps does: a tight bend is not smoothed away by a
+    // 75 m chord (offline on a real run, 45 bends: mean log error of the radius 0.54 -> 0.37, too-fast cases 11 -> 8, too-slow 15 -> 10).
+    for (int i = 2; i + 2 < R.n; i++) {
+        int K = 3;
+        if (R.herm[i - 2] && R.herm[i - 1] && R.herm[i] && R.herm[i + 1] && R.herm[i + 2]) K = 2;
+        if (i < K || i + K >= R.n) continue;
         float ax = R.x[i] - R.x[i - K], az = R.z[i] - R.z[i - K];
         float bx = R.x[i + K] - R.x[i], bz = R.z[i + K] - R.z[i];
         float la = sqrtf(ax * ax + az * az), lb = sqrtf(bx * bx + bz * bz);

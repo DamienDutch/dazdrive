@@ -85,6 +85,7 @@ static float g_bend_ms = NAN;
 float route_curve_speed(float, float, float) { return route_ok() ? g_bend_ms : NAN; }
 float route_junction_m() { return -1; }
 void route_junction_cfg(int, float, float, float, float) {}
+void route_hermite(int) {}
 float route_junction_speed(float, route_junction_t *) { return NAN; }
 float route_limit_ahead(float, float *d) { if (d) *d = NAN; return NAN; }
 void route_probe_limit(float) {}

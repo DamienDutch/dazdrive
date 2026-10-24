@@ -19,6 +19,7 @@ float route_curve_speed(float a_lat, float a_dec, float a_dec_jn = -1);  // a_de
 // route_junction_cfg(on, ...) has been called (cruise.cpp does, from its ini).
 struct route_junction_t { float dist_m, turn_deg, limit_ms, ratio; int roundabout, curves; };
 void route_junction_cfg(int on, float lat, float roundabout_kmh, float min_deg, float roundabout_ratio);
+void route_hermite(int on);   // 1 (default) = the route between two nodes is a curve through their directions, not a straight line
 float route_junction_speed(float a_dec, route_junction_t *info);  // m/s allowed now for the junctions ahead; NAN if none
 
 // Speed limit ahead (docs/speedlimit-ahead-re.md): the next LOWER limit (km/h) within max_m and the

@@ -26,6 +26,7 @@
 #include <math.h>
 #include <string.h>
 
+static float p_herm;
 static float p_key_slide, p_acc_calm, p_set_ease, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_ramp, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_eco_k, p_power_k, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
@@ -63,6 +64,7 @@ static param g_params[] = {
     { "emergency_kmh", &p_ess_kmh, 50, "only above this speed (km/h)" },
     { "air_min_psi", &p_air_min, 75, "below this brake air pressure (psi) the module stops its own brake requests (bends, crawl descent) and leaves descents to the engine brake" },
     { "curve_lat", &p_curve_lat, 3.125f, "sideways acceleration (m/s2) allowed in bends at about 92 km/h, the same in every mode (higher = faster through bends). Slower bends get more, up to 1.23x (4 m/s2), like the allowance in a Mercedes-Benz patent" },
+    { "route_hermite", &p_herm, 1, "1 = with navigation: the road between two route points is read as a curve through the directions of the points, so tight bends are seen earlier and sharper (0 = straight lines between the points, the older way)" },
     { "junctions", &p_junc, 1, "1 = with navigation: also slow down before junctions where the route turns, and before roundabouts (needs curves = 1; always on with own_acc = 1)" },
     { "junction_lat", &p_junc_lat, 2.5f, "sideways acceleration (m/s2) allowed in a junction turn (v = sqrt(this x turn radius), at least 15 km/h)" },
     { "junction_margin_kmh", &p_jn_margin, 10, "junctions and roundabouts: brake only down to the junction's speed plus this (km/h); the rest is yours. 0 = down to the junction speed itself" },
@@ -1654,6 +1656,7 @@ static void cr_frame()
         if (g_csv && wall_s() - flushed > 2) { flushed = wall_s(); fflush(g_csv); csv_cap(&g_csv, "cruise.csv"); }
     }
     route_junction_cfg(junc_on(), p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio);
+    route_hermite(p_herm > 0);
     if (g_keys_ok) keys_tick(game_actor_safe());
     emergency_hazards();
     // Speed-limit following on/off: hold the game's own ACC distance key (no wheel button number: the key is read from the
