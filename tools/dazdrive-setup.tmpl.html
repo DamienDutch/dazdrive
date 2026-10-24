@@ -191,15 +191,15 @@ body:not(.wiz) .wizhead .wsteps{display:none}
 details.more{margin:10px 0 0}
 details.more>summary{color:var(--acc);cursor:pointer}
 .story{margin:8px 0 0}
-.eralist{margin:8px 0 0;display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;font-size:.9rem}
-.eralist dt{font-weight:700;color:var(--mute)}
-.eralist dd{margin:0}
+.eralist{margin:8px 0 0;font-size:.9rem}
+.eralist h4{margin:10px 0 2px;font-size:.9rem;color:var(--mute)}
+.eralist ul{margin:0;padding-left:1.2em;columns:2 15em;column-gap:20px}
+.eralist li{margin:1px 0;break-inside:avoid}
 .eralist .stg{color:var(--warn)}
 .eralist .stg.experimental{color:var(--bad)}
 /* Extra info: extra text is hidden until the switch in the step bar is on (what must be seen, like stages and "needs", never is .x) */
 .x{display:none}
 body.explain .x{display:block}
-body.explain dl.eralist{display:grid}
 body.explain ul.facts.x{display:grid}
 body.explain .tiles{grid-template-columns:1fr}
 .xinfo{font-size:.85rem;color:var(--mute);margin-top:3px}
@@ -239,7 +239,7 @@ body.explain .tiles{grid-template-columns:1fr}
 <p class="erablurb" id="erablurb"></p>
 <div class="x" id="eraexplain">
 <p class="story" id="erastory"></p>
-<dl class="eralist" id="eradetail"></dl>
+<div class="eralist" id="eradetail"></div>
 </div>
 <p class="legend"><span><span class="stage stable">Stable</span> tested a lot</span><span><span class="stage beta">Beta</span> light testing, not confirmed yet</span><span><span class="stage experimental">Experimental</span> not proven yet</span></p>
 </section>
@@ -502,21 +502,23 @@ if (typeof document !== "undefined") (function () {
     var eb = $("erablurb"); eb.textContent = "";
     eb.appendChild(el("b", null, e.name + " (" + e.year + ")")); eb.appendChild(el("span", "mute", e.blurb));
     $("erastory").textContent = e.story || "";
-    // what this year switches on (its own preset, not your changes), what it adds to the year before, and what stays off
-    var ev = presetValues(D, era), pv = D.eras.indexOf(e) > 0 ? presetValues(D, D.eras[D.eras.indexOf(e) - 1].id) : null, eon = [], enew = [], eoff = [];
-    function fname(f) { var sp = el("span", null, f.label); if (f.stage && f.stage !== "stable") sp.appendChild(el("span", "stg " + f.stage, " (" + f.stage + ")")); return sp; }
-    function flist(dd, arr) {
-      if (!arr.length) { dd.appendChild(el("span", "mute", "nothing")); return; }
-      arr.forEach(function (f, i) { if (i) dd.appendChild(document.createTextNode(", ")); dd.appendChild(fname(f)); });
-    }
+    // what a year adds to the year before, and what it keeps (nothing is listed twice); the first year lists what it includes
+    var ev = presetValues(D, era), pi = D.eras.indexOf(e) - 1, pv = pi >= 0 ? presetValues(D, D.eras[pi].id) : null, keep = [], enew = [];
     D.features.forEach(function (f) {
-      if (featureState(f, ev) === "false") eoff.push(f);
-      else { eon.push(f); if (pv && featureState(f, pv) === "false") enew.push(f); }
+      if (featureState(f, ev) === "false") return;
+      if (pv && featureState(f, pv) === "false") enew.push(f); else keep.push(f);
     });
     var ed = $("eradetail"); ed.textContent = "";
-    [["On in this year", eon], pv ? ["New since " + D.eras[D.eras.indexOf(e) - 1].year, enew] : null].forEach(function (r) {
-      if (!r) return;
-      ed.appendChild(el("dt", null, r[0])); var dd = el("dd"); flist(dd, r[1]); ed.appendChild(dd);
+    (pv ? [["Difference from " + D.eras[pi].year, enew], ["Keeping", keep]] : [["Includes", keep]]).forEach(function (r) {
+      if (!r[1].length) return;
+      ed.appendChild(el("h4", null, r[0]));
+      var ul = el("ul");
+      r[1].forEach(function (f) {
+        var li = el("li", null, f.label);
+        if (f.stage && f.stage !== "stable") li.appendChild(el("span", "stg " + f.stage, " (" + f.stage + ")"));
+        ul.appendChild(li);
+      });
+      ed.appendChild(ul);
     });
     var base = presetValues(D, era), off = [];
     mods.forEach(function (m) {
