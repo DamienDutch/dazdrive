@@ -315,11 +315,11 @@ BUTTONS = []
 _OFF_1995 = {
     "trueshift": {"eco_roll": 0, "lookahead": 0, "smooth_stop": 0, "mode_character": 0, "eco_rev_ceiling_rpm": 0},
     "cruise": {"curves": 0, "curve_brake": 0, "descent": 0, "emergency_hazards": 0, "acc_calm_cut_in": 0,
-               "hill_start": 0, "predictive": 0, "aeb": 0, "pedal_curve_eco": 1, "pedal_curve_power": 1},
+               "hill_start": 0, "predictive": 0, "aeb": 0, "pedal_curve_eco": 1, "pedal_curve_power": 1, "eco_cruise_throttle_cap": 1},
 }
 _OFF_2000 = {
     "trueshift": {"eco_roll": 0, "lookahead": 0, "mode_character": 0, "eco_rev_ceiling_rpm": 0},
-    "cruise": {"curves": 0, "curve_brake": 0, "emergency_hazards": 0, "predictive": 0, "aeb": 0, "pedal_curve_eco": 1, "pedal_curve_power": 1},
+    "cruise": {"curves": 0, "curve_brake": 0, "emergency_hazards": 0, "predictive": 0, "aeb": 0, "pedal_curve_eco": 1, "pedal_curve_power": 1, "eco_cruise_throttle_cap": 1},
 }
 # ~2010 is the shipped preset, so it overrides nothing
 _ON_2015 = {"trueshift": {"lookahead": 1},
