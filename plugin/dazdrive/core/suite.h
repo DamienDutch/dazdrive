@@ -148,6 +148,14 @@ extern volatile float g_creep_thr;     // Creep asks the merged throttle for thi
 extern volatile float g_clutch_ours;  // the clutch value Creep puts on the drivetrain (launch or crawl), NAN when the game's own applies
 static inline float clutch_seen() { float c = g_clutch_ours; return c == c ? c : T.eff_clutch; }  // what the drivetrain sees: use instead of T.eff_clutch for 'is the clutch closed'
 extern volatile float g_pcc_need_kmh;  // TrueShift: extra speed over the set speed the next climb on the route needs (NAN = unknown)
+// PCC bands written in km/h are meant for a set speed of 80 km/h and scale with it (Scania's band is a percentage of the set speed):
+// calmer at 60, roomier at 90. 1 when the cruise is off.
+static inline float band_scale(float set_ms)
+{
+    if (!(set_ms > 0.5f)) return 1.0f;
+    float k = set_ms * 3.6f / 80.0f;
+    return k < 0.6f ? 0.6f : k > 1.25f ? 1.25f : k;
+}
 extern volatile int g_pcc_on;         // Cruise: predictive cruise (PCC) is switched on
 extern volatile int g_cruise_smooth;  // the Cruise module drives the cruise throttle itself
 extern volatile char g_dash_flash;    // a letter to show on the dashboard for a moment (ACC C/N/F/O, limit S/X, lane L/X)

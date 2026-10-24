@@ -77,10 +77,10 @@ static param g_params[] = {
     { "idle_rpm", &p_idle, 550, "engine idle rpm to start with (learned while standing still)" },
     { "lookahead", &p_lookahead, 1, "1 = use the navigation route ahead (climbs, tops, junctions); without a route TrueShift stays careful" },
     { "crest_band_kmh", &p_crest_band, 5, "with the route (predictive cruise, PCC): no downshift for a top ahead that this gear gets over at full throttle while losing at most this much below the set speed (without cruise: below the speed when the top came into view) and staying on the torque plateau. Full at 40 t, 60 % solo, 60 % in Power; 0 = off" },
-    { "eco_roll_under_kmh", &p_roll_under, 1.5f, "Normal mode, with cruise control: the roll ends when the speed is about to drop this far below the set speed (km/h; Volvo I-Roll: 1-3)" },
-    { "eco_roll_under_eco_kmh", &p_roll_under_eco, 2.0f, "the same in Eco: a little more room, the most relaxed" },
-    { "eco_roll_under_power_kmh", &p_roll_under_pw, 1.0f, "the same in Power: the strictest (keep it between 1 and 2 km/h; values around 0.5 give very short rolls that hunt)" },
-    { "eco_roll_boost_kmh", &p_roll_boost, 2.0f, "with cruise control, Eco and Normal: just before an eco-roll starts, the cruise control lets the speed come this far over the set speed (km/h), so the roll takes the speed down to a little under it and the average stays near the set speed (0 = roll from the set speed)" },
+    { "eco_roll_under_kmh", &p_roll_under, 1.5f, "Normal mode, with cruise control: the roll ends when the speed is about to drop this far below the set speed (km/h; Volvo I-Roll: 1-3) (Written for a set speed of 80 km/h; it scales with the set speed.)" },
+    { "eco_roll_under_eco_kmh", &p_roll_under_eco, 2.0f, "the same in Eco: a little more room, the most relaxed (Written for a set speed of 80 km/h; it scales with the set speed.)" },
+    { "eco_roll_under_power_kmh", &p_roll_under_pw, 1.0f, "the same in Power: the strictest (keep it between 1 and 2 km/h; values around 0.5 give very short rolls that hunt) (Written for a set speed of 80 km/h; it scales with the set speed.)" },
+    { "eco_roll_boost_kmh", &p_roll_boost, 2.0f, "with cruise control, Eco and Normal: just before an eco-roll starts, the cruise control lets the speed come this far over the set speed (km/h), so the roll takes the speed down to a little under it and the average stays near the set speed (0 = roll from the set speed) (Written for a set speed of 80 km/h; it scales with the set speed.)" },
     { "low_calm_kmh", &p_calm, 12, "below this speed (km/h) with a gentle pedal the gear is only changed down for a stall or lugging: no hunting through the gears while maneuvering (0 = off)" },
     { "eco_roll_max_decel", &p_roll_dec, 0.04f, "eco-roll only where the truck would lose at most this much speed in neutral (m/s2; 0.04 = ~3 km/h in 20 s: a slight descent, not the flat)" },
     { "eco_roll_max_decel_eco", &p_roll_dec_eco, 0.08f, "the same in Eco: a slightly steeper stretch may still be rolled (0.08 = ~6 km/h in 20 s)" },
@@ -703,7 +703,7 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
     if ((p_roll <= 0 && !cc_ok) || (S.mode != MODE_ECO && S.mode != MODE_NORMAL && S.mode != MODE_POWER) || !S.ours) return 0;
     // a little gas before the roll (Damien 24-10): with cruise the roll may start up to roll_boost over the set speed, and the
     // cruise control builds that speed first; not in Power, not when the set speed is a speed limit being eased down
-    float boost = cc && g_cruise_smooth && S.mode != MODE_POWER && !S.rolling ? p_roll_boost : 0;
+    float boost = cc && g_cruise_smooth && S.mode != MODE_POWER && !S.rolling ? p_roll_boost * band_scale(T.cruise) : 0;
     // no gas for a roll when a bend, junction or roundabout ahead already asks for less than the boosted speed: it only ends in gas, then
     // brakes (24-10 evening, 575 s and 743 s: gas 0.5 at 83 km/h, a bend plan of 76-80 km/h, braking 5 s later)
     if (boost > 0 && p_lookahead > 0 && route_ok()) {
@@ -716,7 +716,7 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
     // takes ~1 s) using the current deceleration
     float kmh_soon = kmh + fminf(0, T.accel) * 3.6f * 1.0f;
     // how far under the set speed it may roll: Eco most, Power least (Damien 11-10: between 1 and 2 km/h)
-    float under = S.mode == MODE_ECO ? p_roll_under_eco : S.mode == MODE_POWER ? p_roll_under_pw : p_roll_under;
+    float under = (S.mode == MODE_ECO ? p_roll_under_eco : S.mode == MODE_POWER ? p_roll_under_pw : p_roll_under) * band_scale(T.cruise);
     if (cc && (S.rolling ? (kmh > set + 3 || kmh_soon < set - under) : (kmh > set + 2 + boost || kmh < set - 0.5f))) return 0;
     float a_n = -f_res / S.mass;  // acceleration in neutral
     int rk = p_lookahead > 0 && route_ok();
@@ -1597,7 +1597,7 @@ static void overspeed_tone()
 static void ts_frame()
 {
     g_rolling = S.rolling || S.roll_exit > 0;  // neutral by our choice, also until the exit gear is in
-    g_roll_boost_kmh = S.boost_want && !S.rolling ? p_roll_boost : 0;
+    g_roll_boost_kmh = S.boost_want && !S.rolling ? p_roll_boost * band_scale(T.cruise) : 0;
     {
         static const int to_inc[] = { 2, 1, 3, 4 };  // Normal, Eco, Power, M -> incident file numbering
         int on = g_active && !S.unsupported && !manual_box();

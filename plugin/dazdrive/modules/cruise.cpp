@@ -71,15 +71,15 @@ static param g_params[] = {
     { "junction_min_deg", &p_junc_deg, 25, "turns smaller than this (degrees) are not slowed for" },
     { "roundabout_kmh", &p_rb_kmh, 25, "speed at the entry of a roundabout, also when going straight through" },
     { "roundabout_ratio", &p_rb_ratio, 1.4f, "a prefab with 2+ route curves counts as a roundabout when the path through it is this many times its entry-exit chord (lower = more prefabs count)" },
-    { "descent_overspeed_kmh", &p_desc_kmh, 2, "on a descent (descent = 1) the engine brake / retarder hold the set speed plus this (km/h; 0 = exactly the set speed)" },
-    { "smart_overspeed_kmh", &p_smart_kmh, 3, "cruise downhill: how far over the set speed the truck may run before the engine brake / retarder hold it (the game's 'smart' cruise option, km/h); -1 = keep the game's setting (at 0 the retarder comes in the moment the truck is over the set speed). On a descent of 2 % or more descent_overspeed_kmh applies instead; never less than the predictive cruise (PCC) momentum asks for" },
+    { "descent_overspeed_kmh", &p_desc_kmh, 2, "on a descent (descent = 1) the engine brake / retarder hold the set speed plus this (km/h; 0 = exactly the set speed) (Written for a set speed of 80 km/h; it scales with the set speed.)" },
+    { "smart_overspeed_kmh", &p_smart_kmh, 3, "cruise downhill: how far over the set speed the truck may run before the engine brake / retarder hold it (the game's 'smart' cruise option, km/h); -1 = keep the game's setting (at 0 the retarder comes in the moment the truck is over the set speed). On a descent of 2 % or more descent_overspeed_kmh applies instead; never less than the predictive cruise (PCC) momentum asks for (Written for a set speed of 80 km/h; it scales with the set speed.)" },
     { "acc_ignore_crossing", &p_acc_cross, 1, "own ACC: a vehicle crossing in front (on a roundabout, at a junction) is passed, not followed: no braking or stopping for it, only no speeding up. Seen as a lead that drives (> 11 km/h) while the gap closes as if it stood still" },
     { "junction_plan_decel", &p_jn_dec, 1.15f, "junctions and roundabouts: the BRAKES are planned with this deceleration (m/s2); higher = later and firmer braking" },
     { "curve_brake_decel", &p_cv_brake, 1.05f, "bends (on/off-ramps): the brakes are planned with this deceleration (m/s2): only when it takes this much" },
     { "curve_coast_decel", &p_cv_coast, 0.4f, "bends and junctions: lifting off the throttle is planned with this gentle deceleration (m/s2), so the truck coasts first and brakes late" },
     { "curve_brake", &p_curve_brake, 1, "1 = and brake gently (engine brake / retarder first) when releasing the throttle is not enough" },
     { "predictive", &p_predict, 1, "1 = with navigation: carry a few km/h extra into a climb, ease off before a top with a descent after it (Eco most, Power not)" },
-    { "band_up_kmh", &p_band_up, 6, "with predictive = 1 and navigation (predictive cruise, PCC): carry up to this much over the set speed into a climb, and in a dip (a descent with a climb right after it) let the truck run up to it before the engine brake / retarder hold it. At most this: only as much as the next climb needs (TrueShift: mass, engine, route; solo often 0); 0 = off" },
+    { "band_up_kmh", &p_band_up, 6, "with predictive = 1 and navigation (predictive cruise, PCC): carry up to this much over the set speed into a climb, and in a dip (a descent with a climb right after it) let the truck run up to it before the engine brake / retarder hold it. At most this: only as much as the next climb needs (TrueShift: mass, engine, route; solo often 0); 0 = off (Written for a set speed of 80 km/h; it scales with the set speed.)" },
     { "band_max_s", &p_band_s, 40, "a dip may run over the set speed for at most this long, then the engine brake / retarder hold the set speed again (Mercedes PPC: 40 s)" },
     { "min_kmh", &p_min_kmh, 5, "lowest speed at which cruise control can be switched on or resumed (game: 30), e.g. in a jam" },
     { "limiter_kmh", &p_limiter, 90, "with the game's speed limiter on, the cruise set speed never goes above this (km/h; 0 = no cap)" },
@@ -176,10 +176,11 @@ static float band_up()
 {
     if (!(p_predict > 0 && p_band_up > 0) || s_lead_near) return 0;
     float need = g_pcc_need_kmh;
-    if (need == need) return fminf(p_band_up, need);
+    float k = band_scale(T.cruise);
+    if (need == need) return fminf(p_band_up * k, need);
     static float m = 30000; static double at = -10;
     if (wall_s() - at > 2 || wall_s() < at) { at = wall_s(); float g = game_mass(); if (g == g && g > 500) m = g; }
-    return p_band_up * (0.4f + 0.6f * fminf(1.0f, fmaxf(0.0f, (m - 12000) / 28000)));
+    return p_band_up * k * (0.4f + 0.6f * fminf(1.0f, fmaxf(0.0f, (m - 12000) / 28000)));
 }
 
 // Hill-start: stopped on a slope, the driver lets go of the brake: hold it
@@ -601,7 +602,7 @@ static float cruise_body(void *ga, float dt, float pedal)
     int eco = a == a && a > 3.01f, power = a == a && a > 0 && a < 2.0f;
     s_mom_up = 0;
     if (p_predict > 0 && !power && route_ok()) {
-        float v = fmaxf(fabsf(T.speed), 5.0f), up = band_up(), down = eco ? 5 : 3;
+        float v = fmaxf(fabsf(T.speed), 5.0f), up = band_up(), down = (eco ? 5 : 3) * band_scale(T.cruise);
         float g_now = route_grade(0, 50), g_up = route_max_grade(v * 3, v * 15);
         float crest = route_crest_m(v * 12);
         float after = crest >= 0 ? route_min_grade(crest, crest + v * 15) : NAN;
@@ -800,7 +801,7 @@ static float cruise_body(void *ga, float dt, float pedal)
 static void *g_acc, *g_smart;
 static float g_smart_player = NAN, g_smart_ours = NAN;
 // the margin we use on the flat: the ini value, else the player's own game setting (restored when the game closes)
-static float smart_base() { return p_smart_kmh >= 0 ? p_smart_kmh : g_smart_player; }
+static float smart_base() { return p_smart_kmh >= 0 ? p_smart_kmh * band_scale(T.cruise) : g_smart_player; }
 static float g_acc_player = NAN;  // the player's own setting, restored on exit
 static float g_acc_ours = NAN;
 static float s_press_before = NAN;   // ACC distance before the last key press (a long press undoes it)
@@ -1792,7 +1793,7 @@ static void cr_frame()
             if (s_dip_spent) s_dip = 0;
             // never brake below what our own momentum target asks (Damien 11-10, second 0.6 ride: "gas and retarder at once":
             // the player's smart overspeed 0 braked at the set speed while the PCC target was set + up)
-            float want = down ? (s_dip ? up : fmaxf(0.0f, p_desc_kmh)) : smart_base();
+            float want = down ? (s_dip ? up : fmaxf(0.0f, p_desc_kmh) * band_scale(T.cruise)) : smart_base();
             want = fmaxf(want, s_mom_up + 0.5f * (s_mom_up > 0));
             static int said = 0;  // 0 flat, 1 descent, 2 dip
             int st = down ? 1 + s_dip : 0;
