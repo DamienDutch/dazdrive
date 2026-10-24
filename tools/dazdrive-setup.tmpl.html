@@ -18,25 +18,25 @@ main{max-width:860px;margin:0 auto;padding:12px 16px 110px}
 h1{font-size:1.5rem;margin:0;letter-spacing:.01em;display:flex;align-items:center;gap:10px}
 h1 svg{width:30px;height:30px;flex:none}
 h1 .ver{font:600 .8rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--acc);border:1px solid var(--acc);border-radius:99px;padding:1px 8px;align-self:center}
-h2{font-size:1.15rem;margin:0 0 .3em;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+h2{font-size:1.15rem;margin:0 0 .6em;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
 h2 .n{font:700 .8rem ui-monospace,monospace;color:var(--accfg);background:var(--acc);border-radius:99px;padding:1px 8px}
 h2 .opt{font-size:.8rem;font-weight:400;color:var(--mute)}
-h3{font-size:.85rem;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:14px 0 6px}
-p{margin:.4em 0}
+h3{font-size:.85rem;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:26px 0 10px}
+p{margin:.55em 0}
 .mute,small{color:var(--mute)}
 small{display:block;font-size:.82rem;line-height:1.35;margin-top:2px}
 code{background:var(--code);padding:0 4px;border-radius:4px;overflow-wrap:anywhere}
 /* dashboard strip */
 .dash{background:var(--dash);color:var(--dashfg);border-bottom:3px solid var(--acc)}
-.dash .in{max-width:860px;margin:0 auto;padding:14px 16px;display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;justify-content:space-between}
+.dash .in{max-width:860px;margin:0 auto;padding:20px 16px;display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;justify-content:space-between}
 .dash .facts{display:flex;gap:14px;flex-wrap:wrap;margin:0;padding:0;list-style:none;font-size:.85rem;color:var(--dashmute)}
 .dash .facts b{color:var(--dashfg);font-weight:600}
 /* cards */
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:14px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin:18px 0}
 section.card{scroll-margin-top:12px}
 /* start */
-.start{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
-.big{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px 14px;cursor:pointer;text-align:left;display:grid;gap:2px;min-width:0}
+.start{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+.big{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:14px 16px;cursor:pointer;text-align:left;display:grid;gap:3px;min-width:0}
 .big b{font-size:1rem}
 .big:hover{border-color:var(--acc)}
 .big input{display:none}
@@ -45,7 +45,7 @@ section.card{scroll-margin-top:12px}
 body.wiz #restore2:not([hidden]){display:block}
 button.link{border:0;background:none;color:var(--acc);padding:0;font:inherit;cursor:pointer;text-decoration:underline}
 /* era timeline */
-.tl{position:relative;display:grid;grid-template-columns:repeat(var(--n,5),1fr);margin:16px 0 4px;--p:50%;--n:5}
+.tl{position:relative;display:grid;grid-template-columns:repeat(var(--n,5),1fr);margin:24px 0 10px;--p:50%;--n:5}
 .tl::before,.tl::after{content:"";position:absolute;left:calc(50% / var(--n));right:calc(50% / var(--n));top:17px;height:5px;background:var(--line);border-radius:3px}
 .tl::after{right:auto;width:calc((100% - 100% / var(--n)) * var(--p) / 100%);background:var(--acc);transition:width .2s}
 .stop{position:relative;display:grid;justify-items:center;text-align:center;cursor:pointer;padding:0 4px;gap:3px;z-index:1}
@@ -58,11 +58,11 @@ button.link{border:0;background:none;color:var(--acc);padding:0;font:inherit;cur
 .stage.beta{color:var(--warn);border-color:var(--warn)}
 .stage.experimental{color:var(--bad);border-color:var(--bad)}
 .tile .stage{justify-self:start;margin-top:3px}
-.legend{font-size:.82rem;color:var(--mute);margin:8px 0 0;display:flex;gap:6px 14px;flex-wrap:wrap}
+.legend{font-size:.82rem;color:var(--mute);margin:18px 0 0;display:flex;gap:6px 14px;flex-wrap:wrap}
 .stop:hover .dot{border-color:var(--acc)}
 .stop:has(input:checked) .dot{background:var(--acc);border-color:var(--acc);box-shadow:0 0 0 7px var(--glow)}
 .stop:has(input:focus-visible) .dot{outline:2px solid var(--acc);outline-offset:3px}
-.erablurb{margin:10px 0 0;padding:10px 12px;border-radius:8px;background:var(--bg);display:flex;flex-direction:column;gap:2px;align-items:flex-start}
+.erablurb{margin:20px 0 0;padding:14px 16px;border-radius:8px;background:var(--bg);display:flex;flex-direction:column;gap:2px;align-items:flex-start}
 .erablurb b{font-size:1.05rem}
 @media (max-width:560px){
   .tl{grid-template-columns:1fr;gap:4px;margin-top:8px}
@@ -73,8 +73,8 @@ button.link{border:0;background:none;color:var(--acc);padding:0;font:inherit;cur
   .start{grid-template-columns:1fr}
 }
 /* feature switches */
-.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
-.tile{color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:grid;grid-template-columns:1fr auto;gap:0 10px;min-width:0;align-content:start}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+.tile{color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;grid-template-columns:1fr auto;gap:0 12px;min-width:0;align-content:start}
 .tile .body{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;text-align:left;cursor:pointer;display:grid;gap:2px;min-width:0;align-content:start;border-radius:6px}
 .tile .body:hover b{text-decoration:underline dotted}
 .tile b{font-size:.95rem}
@@ -155,7 +155,7 @@ body.wiz #guide{display:none}
 body.wiz .bar .wiznav{display:flex}
 body.wiz .bar .normal{display:none}
 body.wiz .bar .status{display:none}
-.wizhead{display:flex;justify-content:space-between;align-items:center;gap:6px;margin:8px 0 0;font-size:.85rem;color:var(--mute);flex-wrap:wrap}
+.wizhead{display:flex;justify-content:space-between;align-items:center;gap:6px;margin:14px 0 0;font-size:.85rem;color:var(--mute);flex-wrap:wrap}
 body:not(.wiz) .wizhead .wsteps{display:none}
 .wizhead .wsteps{display:flex;gap:4px;flex:1;flex-wrap:wrap}
 .wizhead .wst{font-size:.82rem;padding:3px 10px;border-radius:99px;color:var(--mute)}
@@ -190,19 +190,13 @@ body:not(.wiz) .wizhead .wsteps{display:none}
 /* the era step: one line always, the rest on request */
 details.more{margin:10px 0 0}
 details.more>summary{color:var(--acc);cursor:pointer}
-.story{margin:8px 0 0}
-.eralist{margin:8px 0 0;font-size:.9rem}
-.eralist h4{margin:10px 0 2px;font-size:.9rem;color:var(--mute)}
-.eralist ul{margin:0;padding-left:1.2em;columns:2 15em;column-gap:20px}
-.eralist li{margin:1px 0;break-inside:avoid}
-.eralist .stg{color:var(--warn)}
-.eralist .stg.experimental{color:var(--bad)}
+.story{margin:16px 0 0}
 /* Extra info: extra text is hidden until the switch in the step bar is on (what must be seen, like stages and "needs", never is .x) */
 .x{display:none}
 body.explain .x{display:block}
 body.explain ul.facts.x{display:grid}
 body.explain .tiles{grid-template-columns:1fr}
-.xinfo{font-size:.85rem;color:var(--mute);margin-top:3px}
+.xinfo{font-size:.85rem;color:var(--mute);margin-top:8px}
 .xsw{display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--fg);font-size:.9rem;position:relative;margin-left:auto}
 .xsw input{position:absolute;opacity:0;width:0;height:0}
 .xsw i{width:36px;height:20px;border-radius:10px;background:var(--line);position:relative;flex:none}
@@ -215,18 +209,18 @@ body.explain .tiles{grid-template-columns:1fr}
 <body>
 <header class="dash"><div class="in">
 <h1>DazDrive<span class="ver" id="ver"></span>setup</h1>
-<p>ETS2 1.60 (Steam beta temporary_1_60), gearbox on Automatic, singleplayer, not TruckersMP. Runs in your browser and sends nothing.</p>
+<p>For ETS2 1.60 (Steam beta temporary_1_60). Gearbox on Automatic. Singleplayer, not TruckersMP. Nothing leaves this page.</p>
 </div></header>
 <main>
 <nav class="wizhead" aria-label="Steps"><div class="wsteps" id="wsteplist"></div><label class="xsw"><input type="checkbox" id="explain"><i></i><span>Extra info</span></label></nav>
 
 <section class="card" data-step data-title="Start" id="s-start">
-<h2>Do you already have a dazdrive.ini?</h2>
-<p class="mute x">Open it to change only what you want. Settings new in this version get their standard value.</p>
+<h2>Do you have a dazdrive.ini?</h2>
+<p class="mute x">Open it to change only what you want. New settings get their standard value.</p>
 <div class="start">
-<label class="big"><b>Open my dazdrive.ini</b><small>It is in <code>plugins\dazdrive\</code>, next to this page.</small><input type="file" id="open" accept=".ini,text/plain"></label>
+<label class="big"><b>Open my dazdrive.ini</b><small>In <code>plugins\dazdrive\</code>, next to this page.</small><input type="file" id="open" accept=".ini,text/plain"></label>
 <button class="big" id="resume" type="button" hidden><b>Continue where I left off</b><small id="resumewhen"></small></button>
-<button class="big" id="fresh" type="button"><b>Start fresh</b><small>Pick how smart your truck is and go from there.</small></button>
+<button class="big" id="fresh" type="button"><b>Start fresh</b><small>Pick a truck year and go from there.</small></button>
 </div>
 <p class="note" id="restore" hidden></p>
 </section>
@@ -234,19 +228,16 @@ body.explain .tiles{grid-template-columns:1fr}
 <section class="card" data-step data-title="Truck year" id="s-era">
 <p class="note" id="restore2" hidden></p>
 <h2><span class="n">1</span> Truck era</h2>
-<p class="mute">Pick a year: what real trucks had by then. Newer years are less tested.</p>
+<p class="mute">What real trucks had by then. Newer years are less tested.</p>
 <div class="tl" id="eras"></div>
 <p class="erablurb" id="erablurb"></p>
-<div class="x" id="eraexplain">
-<p class="story" id="erastory"></p>
-<div class="eralist" id="eradetail"></div>
-</div>
-<p class="legend"><span><span class="stage stable">Stable</span> tested a lot</span><span><span class="stage beta">Beta</span> light testing, not confirmed yet</span><span><span class="stage experimental">Experimental</span> not proven yet</span></p>
+<p class="story x" id="erastory"></p>
+<p class="legend"><span><span class="stage stable">Stable</span> tested a lot</span><span><span class="stage beta">Beta</span> light testing</span><span><span class="stage experimental">Experimental</span> not proven</span></p>
 </section>
 
 <section class="card" data-step data-title="Features" id="s-feat">
 <h2><span class="n">2</span> Features <span class="count" id="count"></span></h2>
-<p class="mute">Click a name to read what it does. A half switch means partly on.</p>
+<p class="mute">Click a name for details.</p>
 <div id="tiles"></div>
 </section>
 
@@ -268,7 +259,7 @@ body.explain .tiles{grid-template-columns:1fr}
 <ol class="facts" id="savesteps"></ol>
 <p id="msg" class="mute"></p>
 <details><summary>Preview of the file</summary><pre id="preview"></pre></details>
-<details><summary>Save did not work?</summary><p class="mute">Press "Copy", open Notepad (or any editor), paste, and save the file as <code>dazdrive.ini</code> (file type "All files", not .txt) in the folder above. If copying is blocked too, select the text in the preview and copy it by hand.</p></details>
+<details><summary>Save did not work?</summary><p class="mute">Press Copy, paste into Notepad, and save as <code>dazdrive.ini</code> (type "All files", not .txt) in the folder above. If copying fails, select the text in the preview and copy it yourself.</p></details>
 </section>
 </main>
 
@@ -486,46 +477,34 @@ if (typeof document !== "undefined") (function () {
       if (i.type === "b") i.el.checked = same(v, 1);
       else if (i.type === "c") { i.el.value = v; if (i.el.value !== v) { i.el.value = num(v); } }
       else if (i.type === "btn") { if (document.activeElement !== i.el) i.el.value = same(v, 0) ? "" : v; markBad(i, !(isNum(v) && +v >= 0 && +v <= 128 && +v === Math.floor(+v)), "Use a whole number from 1 to 128, or leave it empty."); }
-      else { if (document.activeElement !== i.el) i.el.value = v; markBad(i, !isNum(v), "Not a number. Use digits, like 1.5 (a comma works too)."); }
+      else { if (document.activeElement !== i.el) i.el.value = v; markBad(i, !isNum(v), "Not a number. Use digits, like 1.5."); }
     });
     var bad = badList.length;
     var n = 0;
     tiles.forEach(function (t) {
       var s = featureState(t.f, vals); t.el.setAttribute("aria-pressed", s); t.sw.setAttribute("aria-checked", s); if (s !== "false") n++;
       var miss = s !== "false" ? needsOff(t.f) : [];
-      t.need.textContent = miss.length ? "Needs " + miss.join(" and ") + ": switched off above" : "";
+      t.need.textContent = miss.length ? "Needs " + miss.join(" and ") + " (off)" : "";
     });
     $("count").textContent = n + " / " + tiles.length + " on";
     var e = eraOf(D, era);
     document.querySelectorAll("#eras input").forEach(function (r) { r.checked = r.value === era; });
     $("eras").style.setProperty("--p", (D.eras.indexOf(e) / (D.eras.length - 1) * 100) + "%");
-    var eb = $("erablurb"); eb.textContent = "";
-    eb.appendChild(el("b", null, e.name + " (" + e.year + ")")); eb.appendChild(el("span", "mute", e.blurb));
-    $("erastory").textContent = e.story || "";
-    // what a year adds to the year before, and what it keeps (nothing is listed twice); the first year lists what it includes
-    var ev = presetValues(D, era), pi = D.eras.indexOf(e) - 1, pv = pi >= 0 ? presetValues(D, D.eras[pi].id) : null, keep = [], enew = [];
+    // what a year adds to the year before (the first year: what it includes); the story and "keeps" are the extra info
+    var ev = presetValues(D, era), pi = D.eras.indexOf(e) - 1, pv = pi >= 0 ? presetValues(D, D.eras[pi].id) : null, added = [];
     D.features.forEach(function (f) {
-      if (featureState(f, ev) === "false") return;
-      if (pv && featureState(f, pv) === "false") enew.push(f); else keep.push(f);
+      if (featureState(f, ev) !== "false" && (!pv || featureState(f, pv) === "false")) added.push(/^[A-Z][a-z-]+( [a-z]+)*( \([A-Z]+\))?$/.test(f.label) ? f.label.charAt(0).toLowerCase() + f.label.slice(1) : f.label);
     });
-    var ed = $("eradetail"); ed.textContent = "";
-    (pv ? [["Difference from " + D.eras[pi].year, enew], ["Keeping", keep]] : [["Includes", keep]]).forEach(function (r) {
-      if (!r[1].length) return;
-      ed.appendChild(el("h4", null, r[0]));
-      var ul = el("ul");
-      r[1].forEach(function (f) {
-        var li = el("li", null, f.label);
-        if (f.stage && f.stage !== "stable") li.appendChild(el("span", "stg " + f.stage, " (" + f.stage + ")"));
-        ul.appendChild(li);
-      });
-      ed.appendChild(ul);
-    });
+    var eb = $("erablurb"); eb.textContent = "";
+    eb.appendChild(el("b", null, e.name + " (" + e.year + ")"));
+    eb.appendChild(el("span", "mute", (pv ? "Adds " : "Includes ") + (added.length > 1 ? added.slice(0, -1).join(", ") + " and " + added[added.length - 1] : added.join("")) + "."));
+    $("erastory").textContent = (e.story || "") + (pv ? " Keeps everything from " + D.eras[pi].year + "." : "");
     var base = presetValues(D, era), off = [];
     mods.forEach(function (m) {
       var det = detectLayer(D, m.g, base, vals), pre = det.layer === "preset";
       if (!m.tab) m.tab = det.layer;   // after an era change or an opened ini: show the layer the values are in
       m.chips.forEach(function (c, i) { c.setAttribute("aria-pressed", String(pre && i === det.i)); });
-      m.desc.textContent = pre ? m.g.tuning[det.i].desc : "None of the presets: your own values under " + (det.layer === "advanced" ? "Advanced" : "Custom") + ". A preset puts the whole module back.";
+      m.desc.textContent = pre ? m.g.tuning[det.i].desc : "Your own values (" + (det.layer === "advanced" ? "Advanced" : "Custom") + "). A preset resets this module.";
       m.cur.textContent = pre ? m.g.tuning[det.i].name : det.layer === "advanced" ? "Advanced" : "Custom";
       Object.keys(m.tabs).forEach(function (k) { m.tabs[k].setAttribute("aria-selected", String(k === m.tab)); m.panels[k].hidden = k !== m.tab; });
       m.knobs.forEach(function (r) { r.show(); });
@@ -533,7 +512,7 @@ if (typeof document !== "undefined") (function () {
       m.card.hidden = !!(ow && same(vals[ow[0]][ow[1]], ow[2]));  // switched off in step 2: nothing to tune
       if (m.card.hidden) off.push(m.g.title);
     });
-    $("offnote").textContent = off.length ? "Off, so not shown: " + off.join(", ") + ". Switch them on in step 2 to tune them." : "";
+    $("offnote").textContent = off.length ? "Hidden because they are off: " + off.join(", ") + "." : "";
     $("preview").textContent = buildIni(D, era, vals);
     // Save and Copy stay clickable: with a bad field a click says why and jumps to it (a disabled button says nothing)
     ["save", "copy", "wcopy"].forEach(function (id) { $(id).classList.toggle("blocked", bad > 0); });
@@ -624,7 +603,7 @@ if (typeof document !== "undefined") (function () {
     var f = dlgF, on = featureState(f, vals) !== "false";
     $("i_title").textContent = f.label;
     $("i_stage").textContent = f.stage || "stable"; $("i_stage").className = "stage " + (f.stage || "stable");
-    $("i_since").textContent = f.since ? "Real trucks: since ~" + f.since + " · DazDrive: " + ({stable: "tested a lot", beta: "light testing, not confirmed yet", experimental: "not proven yet"})[f.stage || "stable"] : "";
+    $("i_since").textContent = f.since ? "Real trucks: since ~" + f.since + " · DazDrive: " + ({stable: "tested a lot", beta: "light testing", experimental: "not proven"})[f.stage || "stable"] : "";
     $("i_text").textContent = f.info || f.desc;
     var nd = $("i_needs"); nd.textContent = "";
     if (f.needs && f.needs.length) {
@@ -703,7 +682,7 @@ if (typeof document !== "undefined") (function () {
         if (kb.kind === "range") out.textContent = fmtVal(v, kb.unit);
         if (mk) mk.forEach(function (b, i) { b.classList.toggle("on", same(v, kb.at[i])); });
       }
-      odd.textContent = fits ? "" : "Changed under Custom: moving this puts it back in line.";
+      odd.textContent = fits ? "" : "Set under Custom. Moving this resets it.";
     } });
     return row;
   }
@@ -754,10 +733,10 @@ if (typeof document !== "undefined") (function () {
   function li(html) { var l = el("li"); l.innerHTML = html; steps.appendChild(l); }
   var folder = "<code>&lt;ETS2&gt;\\bin\\win_x64\\plugins\\dazdrive\\</code><br><small>Windows: <code>C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2\\bin\\win_x64\\plugins\\dazdrive\\</code><br>Linux / Proton: <code>~/.local/share/Steam/steamapps/common/Euro Truck Simulator 2/bin/win_x64/plugins/dazdrive/</code></small>";
   if (canPick) {
-    li("Press <b>Save dazdrive.ini</b>: a file dialog opens");
-    li("Go to the folder of this page and <b>overwrite</b> dazdrive.ini there: " + folder);
+    li("Press <b>Save dazdrive.ini</b>");
+    li("Pick the folder of this page and <b>overwrite</b> dazdrive.ini: " + folder);
   } else {
-    li("Press <b>Save dazdrive.ini</b> (it lands in Downloads)");
+    li("Press <b>Save dazdrive.ini</b>. It lands in Downloads");
     li("Move it next to this page and <b>overwrite</b> the old one: " + folder);
   }
   li("Restart the game");
@@ -770,7 +749,7 @@ if (typeof document !== "undefined") (function () {
   }
   $("toast").addEventListener("click", function () { this.hidden = true; });
   function say(msg, isBad) { $("msg").textContent = msg; flash(msg, isBad); }
-  function done(how) { $("msg").textContent = how + " This page remembers these settings until you save new ones."; flash(how); remember(text()); }
+  function done(how) { $("msg").textContent = how + " This page remembers them until you save again."; flash(how); remember(text()); }
   // a field that is not a number blocks Save and Copy: say which one, open it and put the cursor in it
   function blocked() {
     if (!badList.length) return false;
@@ -788,7 +767,7 @@ if (typeof document !== "undefined") (function () {
     var a = document.createElement("a");
     a.href = URL.createObjectURL(blob); a.download = "dazdrive.ini";
     document.body.appendChild(a); a.click(); a.remove();
-    done("Saved in Downloads. Move it to plugins\\dazdrive\\ (overwrite the old one) and restart the game.");
+    done("Saved in Downloads. Move it to plugins\\dazdrive\\, overwrite the old one, and restart the game.");
   }
   function doSave() {
     if (blocked()) return;
@@ -803,7 +782,7 @@ if (typeof document !== "undefined") (function () {
     function fallback() {
       var t = document.createElement("textarea"); t.value = text(); document.body.appendChild(t); t.select();
       var ok = false; try { ok = document.execCommand("copy"); } catch (e) {}
-      t.remove(); if (ok) done("Copied. Paste it into a new file named dazdrive.ini."); else say("Copy blocked: select the preview text and copy it by hand.", true);
+      t.remove(); if (ok) done("Copied. Paste it into a new file named dazdrive.ini."); else say("Copy blocked. Select the preview text and copy it yourself.", true);
     }
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text()).then(function () { done("Copied. Paste it into a new file named dazdrive.ini."); }, fallback);
     else fallback();
@@ -818,14 +797,14 @@ if (typeof document !== "undefined") (function () {
   function afterStart() { if (wiz()) wshow(1); }
   function took(n) {
     var e = eraOf(D, era), c = changes();
-    return n + " settings taken over, closest to " + e.year + " " + e.name + (c ? " with " + c + " change" + (c > 1 ? "s" : "") : "") + ". Next keeps them; picking another year starts again from that year. ";
+    return "Read " + n + " settings. Closest year: " + e.year + " " + e.name + (c ? ", with " + c + " change" + (c > 1 ? "s" : "") : "") + ". Next keeps them; another year starts over. ";
   }
   $("open").addEventListener("change", function () {
     var f = this.files && this.files[0]; if (!f) return;
     var rd = new FileReader();
     rd.onload = function () {
       var n = loadIni(rd.result);
-      if (!n) { setNotice("That file has no DazDrive settings in it. Pick another one, or start fresh.", false); return; }
+      if (!n) { setNotice("No DazDrive settings in that file. Pick another, or start fresh.", false); return; }
       setNotice("Opened " + f.name + ": " + took(n), true);
       afterStart();
     };
