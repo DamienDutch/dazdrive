@@ -274,6 +274,13 @@ static void keys_test()
       T.speed_limit = 80 / 3.6f; g_overspeed_cap = 0; float r4 = overspeed_room(83 / 3.6f); g_overspeed_cap = save; T.speed_limit = 0;
       printf("overspeed cap: room %.1f (expect 2), set over the cap %.1f (expect 0), no limit %s, cap 0 %s\n", r1, r2, r3 > 1e8f ? "no cap" : "CAP", r4 > 1e8f ? "no cap" : "CAP");
       bad |= fabsf(r1 - 2) > 0.01f || r2 != 0 || r3 < 1e8f || r4 < 1e8f; }
+    // smart overspeed: full on the flat, gliding down to the steep-descent value between -1 % and -2 %, less with a heavy trailer
+    { float sp = p_smart_kmh, dc = p_desc_kmh, cr = T.cruise; p_smart_kmh = 3; p_desc_kmh = 2; T.cruise = 80 / 3.6f;
+      auto at = [](float g) { T.place.orientation.pitch = atanf(g / 100) / 6.2831853f; return smart_dynamic(); };
+      float w0 = at(0), w1 = at(-1.5f), w2 = at(-3), w3 = at(+2);
+      printf("smart overspeed: flat %.2f, -1.5 %% %.2f, -3 %% %.2f, uphill %.2f (expect 3.2, between, 2.0, 3.2)\n", w0, w1, w2, w3);
+      bad |= !(w0 > 3.0f && w0 < 3.4f) || !(w1 < w0 && w1 > w2) || !(w2 > 1.9f && w2 < 2.2f) || fabsf(w3 - w0) > 0.01f;
+      T.place.orientation.pitch = 0; p_smart_kmh = sp; p_desc_kmh = dc; T.cruise = cr; }
     T.speed_limit = 0;
     printf("keys test: %s\n", bad ? "FAIL" : "ok");
     if (bad) exit(1);

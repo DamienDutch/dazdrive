@@ -828,6 +828,23 @@ static void *g_acc, *g_smart;
 static float g_smart_player = NAN, g_smart_ours = NAN;
 // the margin we use on the flat: the ini value, else the player's own game setting (restored when the game closes)
 static float smart_base() { return p_smart_kmh >= 0 ? p_smart_kmh * band_scale(T.cruise) * mode_k(4.0f / 3, 2.0f / 3) : g_smart_player; }
+// The smart overspeed on the flat and gentle descents is not a fixed number (Damien 25-10):
+// A grade: the full value down to -1 %, gliding to the steep-descent value at -2 % (no jump);
+// B route: a bend or junction within ~300 m that asks for less than we run: no extra speed at all, so the engine brake holds the set speed;
+// C weight: a heavy trailer rolls on, so up to 0.5 km/h less at 40 t (linear from 20 t).
+// The player's own game setting (smart_overspeed_kmh = -1) is left alone.
+static float smart_dynamic()
+{
+    float base = smart_base();
+    if (p_smart_kmh < 0) return base;
+    float desc = fmaxf(0.0f, p_desc_kmh) * band_scale(T.cruise);
+    float f = fminf(1.0f, fmaxf(0.0f, -pitch_grade() - 1.0f));
+    float w = base + (fminf(desc, base) - base) * f;
+    float jn = route_ok() && junc_on() ? route_junction_m() : -1;
+    if (route_ok() && ((s_bend_coast_kmh == s_bend_coast_kmh && s_bend_coast_kmh < T.cruise * 3.6f + 3) || (jn >= 0 && jn < 300))) w = 0;
+    w -= 0.5f * fminf(1.0f, fmaxf(0.0f, (load_mass() - 20000) / 20000));
+    return fmaxf(0.0f, w);
+}
 static float g_acc_player = NAN;  // the player's own setting, restored on exit
 static float g_acc_ours = NAN;
 static float s_press_before = NAN;   // ACC distance before the last key press (a long press undoes it)
@@ -1827,7 +1844,7 @@ static void cr_frame()
             if (s_dip_spent) s_dip = 0;
             // never brake below what our own momentum target asks (Damien 11-10, second 0.6 ride: "gas and retarder at once":
             // the player's smart overspeed 0 braked at the set speed while the PCC target was set + up)
-            float want = down ? (s_dip ? up : fmaxf(0.0f, p_desc_kmh) * band_scale(T.cruise)) : smart_base();
+            float want = down ? (s_dip ? up : fmaxf(0.0f, p_desc_kmh) * band_scale(T.cruise)) : smart_dynamic();
             want = fminf(fmaxf(want, s_mom_up + 0.5f * (s_mom_up > 0)), overspeed_room(T.cruise));
             static int said = 0;  // 0 flat, 1 descent, 2 dip
             int st = down ? 1 + s_dip : 0;
