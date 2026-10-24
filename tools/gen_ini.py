@@ -329,16 +329,22 @@ _ON_2024 = {"trueshift": _ON_2020["trueshift"], "cruise": dict(_ON_2020["cruise"
             "creep": _ON_2020["creep"], "lane": _ON_2020["lane"]}
 ERAS = [
     {"id": "1995", "name": "Classic", "year": "~1995", "base": "standard", "over": _OFF_1995,
+     "story": "The first automated manual gearboxes on series trucks (Scania Opticruise 1995, ZF AS-Tronic around 1997) and a plain cruise control: no radar, no help beyond the gearbox. Pick it if you want the gearbox only and drive the rest yourself.",
      "blurb": "Smart gearbox, plain cruise control. The rest is up to you."},
     {"id": "2000", "name": "Radar cruise", "year": "~2000", "base": "standard", "over": _OFF_2000,
+     "story": "Radar cruise control arrives (Mercedes Actros ART, around 2000), the retarder can hold a set speed downhill, and trucks get a hill holder and smoother stops. The game's own ACC works in every year; this year adds calm following, downhill speed control, hill start assist and smooth stop.",
      "blurb": "+ smooth stop, calm following of the game's own ACC, downhill speed control, hill start assist"},
     {"id": "2010", "name": "Modern", "year": "~2010", "base": "standard", "over": {}, "recommended": True, "shipped": True,
+     "story": "Eco-roll coasting (Volvo I-Roll 2006, Mercedes EcoRoll 2008), emergency braking (Mercedes 2006, mandatory on new trucks in the EU from 2015) and hazard lights on hard braking. This is the year the ini in the zip is set to, because everything in it has been driven a lot.",
      "blurb": "+ eco-roll, emergency braking, emergency stop signal"},
     {"id": "2015", "name": "Looks ahead", "year": "~2015", "base": "standard", "over": _ON_2015,
+     "story": "Predictive gearbox and cruise that read the road ahead (Scania, Mercedes and Volvo, 2012 to 2015), radar cruise that keeps going in a jam, and auto hold at a standstill. Here the road ahead is your navigation route; without an active route it shifts and cruises like ~2010. Parts of this year are still beta.",
      "blurb": "+ gearbox and cruise look ahead, ACC with Stop & Go, Auto Hold"},
     {"id": "2020", "name": "Assisted", "year": "~2020", "base": "standard", "over": _ON_2020,
+     "story": "Trucks slow for bends and roundabouts by themselves (Mercedes 2019) and steer along in the lane with the radar cruise (Mercedes Active Drive Assist, 2019). Crawl mode follows Scania's maneuvering mode (2009). These parts are experimental here; lane centering in particular has only been tried with one wheel.",
      "blurb": "+ slows for bends and roundabouts, lane centering, crawl mode"},
     {"id": "2024", "name": "Current", "year": "2024", "base": "standard", "over": _ON_2024,
+     "story": "Adds speed limit following (ISA), mandatory on all new trucks in the EU since July 2024: the cruise set speed follows the signs, a little above them. Everything from ~2020 stays, so the experimental parts do too.",
      "blurb": "+ follows speed limits (ISA)"},
 ]
 

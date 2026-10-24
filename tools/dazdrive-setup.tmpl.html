@@ -64,6 +64,12 @@ button.link{border:0;background:none;color:var(--acc);padding:0;font:inherit;cur
 .legend .stage{margin-right:4px}
 .erablurb{margin:10px 0 0;padding:8px 12px;border-radius:3px;background:var(--sel);display:block}
 .erablurb b{font-weight:700;margin-right:.4em}
+.story{margin:10px 0 0}
+.eralist{margin:8px 0 0;display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;font-size:.9rem}
+.eralist dt{font-weight:700;color:var(--mute)}
+.eralist dd{margin:0}
+.eralist .stg{color:var(--warn)}
+.eralist .stg.experimental{color:var(--bad)}
 @media (max-width:560px){
   .tl{grid-template-columns:1fr;gap:2px;margin-top:6px}
   .tl::before,.tl::after{display:none}
@@ -211,6 +217,8 @@ body.wiz .wizhead{display:flex}
 <p class="mute">Pick a year: what real trucks had by then. The newest years include parts that are new in DazDrive too, and less tested.</p>
 <div class="tl" id="eras"></div>
 <p class="erablurb" id="erablurb"></p>
+<p class="story" id="erastory"></p>
+<dl class="eralist" id="eradetail"></dl>
 <p class="legend"><span><span class="stage stable">Stable</span> ridden a lot</span><span><span class="stage beta">Beta</span> ridden a little, not confirmed yet</span><span><span class="stage experimental">Experimental</span> not proven yet</span></p>
 </section>
 
@@ -471,6 +479,23 @@ if (typeof document !== "undefined") (function () {
     $("eras").style.setProperty("--p", (D.eras.indexOf(e) / (D.eras.length - 1) * 100) + "%");
     var eb = $("erablurb"); eb.textContent = "";
     eb.appendChild(el("b", null, e.name + " (" + e.year + ")")); eb.appendChild(el("span", "mute", e.blurb));
+    $("erastory").textContent = e.story || "";
+    // what this year switches on (its own preset, not your changes), what it adds to the year before, and what stays off
+    var ev = presetValues(D, era), pv = D.eras.indexOf(e) > 0 ? presetValues(D, D.eras[D.eras.indexOf(e) - 1].id) : null, eon = [], enew = [], eoff = [];
+    function fname(f) { var sp = el("span", null, f.label); if (f.stage && f.stage !== "stable") sp.appendChild(el("span", "stg " + f.stage, " (" + f.stage + ")")); return sp; }
+    function flist(dd, arr) {
+      if (!arr.length) { dd.appendChild(el("span", "mute", "nothing")); return; }
+      arr.forEach(function (f, i) { if (i) dd.appendChild(document.createTextNode(", ")); dd.appendChild(fname(f)); });
+    }
+    D.features.forEach(function (f) {
+      if (featureState(f, ev) === "false") eoff.push(f);
+      else { eon.push(f); if (pv && featureState(f, pv) === "false") enew.push(f); }
+    });
+    var ed = $("eradetail"); ed.textContent = "";
+    [["On in this year", eon], pv ? ["New since " + D.eras[D.eras.indexOf(e) - 1].year, enew] : null, ["Off", eoff]].forEach(function (r) {
+      if (!r) return;
+      ed.appendChild(el("dt", null, r[0])); var dd = el("dd"); flist(dd, r[1]); ed.appendChild(dd);
+    });
     var base = presetValues(D, era), off = [];
     mods.forEach(function (m) {
       var det = detectLayer(D, m.g, base, vals), pre = det.layer === "preset";
