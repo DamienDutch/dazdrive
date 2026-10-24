@@ -11,7 +11,7 @@
 // [core]: settings of the suite itself (no code of its own).
 static float p_log_level, p_log_max_mb, p_csv_max_mb, p_incident_mb;
 static param g_params[] = {
-    { "incident_mb", &p_incident_mb, 40, "incidents\\ folder: something went wrong (hunting gearbox, a shift you fought, rpm limiter, stuck in neutral, AEB, ...) = one file with the 20 s before and 15 s after, with the log lines of that time. The folder is kept under this size (MB), oldest first; 0 = no incident files" },
+    { "incident_mb", &p_incident_mb, 40, "incidents folder: something went wrong (hunting gearbox, a shift you fought, rpm limiter, stuck in neutral, AEB, ...) = one file with the 20 s before and 15 s after, with the log lines of that time. The folder is kept under this size (MB), oldest first; 0 = no incident files" },
     { "log_level", &p_log_level, 2, "dazdrive.log: 0 = start-up, errors, mode changes and one line per incident, 1 = + every shift and the modules' detail lines, 2 = + periodic traces and the csv trace files. The detail lines of level 1 are in every incident file anyway" },
     { "csv_max_mb", &p_csv_max_mb, 5, "a csv trace (log_level 2 only) moves to <name>.1 and starts again beyond this size (MB, 0.5-200): ~2.5 hours of driving per file" },
     { "log_max_mb", &p_log_max_mb, 5, "dazdrive.log moves to dazdrive.log.1 and starts again beyond this size (MB, 0.2-100). The log of the previous session stays as dazdrive.prev.log" },
@@ -42,7 +42,7 @@ static const struct { const char *sec, *key; float lo, hi; } k_bounds[] = {
     { "cruise", "roundabout_kmh", 10, 60 }, { "cruise", "roundabout_ratio", 1, 3 }, { "cruise", "junction_plan_decel", 0.2f, 3 },
     { "cruise", "curve_brake_decel", 0.2f, 3 }, { "cruise", "curve_coast_decel", 0.1f, 2 }, { "cruise", "band_up_kmh", 0, 15 },
     { "cruise", "band_max_s", 5, 300 }, { "cruise", "min_kmh", 5, 60 }, { "cruise", "set_ease_kmh_s", 0.5f, 20 },
-    { "cruise", "limiter_kmh", 0, 150 }, { "cruise", "min_set_kmh", 0, 60 }, { "cruise", "step_tap_kmh", 1, 10 },
+    { "cruise", "limiter_kmh", 0, 150 }, { "cruise", "min_set_kmh", 0, 60 }, { "cruise", "step_tap_kmh", 0, 10 },
     { "cruise", "step_hold_kmh", 1, 10 }, { "cruise", "hold_s", 0.1f, 5 }, { "cruise", "hold_rate", 0.5f, 20 },
     { "cruise", "own_acc_gain", 0.05f, 2 }, { "cruise", "own_acc_stop_m", 2, 20 }, { "cruise", "own_acc_plan_decel", 0.3f, 4 },
     { "cruise", "own_acc_brake", 0, 1 }, { "cruise", "own_acc_decel", 0.3f, 6 }, { "cruise", "own_acc_accel", 0.1f, 4 },

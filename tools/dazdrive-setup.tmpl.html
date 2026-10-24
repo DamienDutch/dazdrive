@@ -6,7 +6,7 @@
 <title>DazDrive setup</title>
 <style>
 /* One step at a time (wizard), or everything on one page (?all). Light or dark with the system. */
-:root{--bg:#f3f4f1;--card:#fff;--fg:#1c2421;--mute:#5d6863;--line:#d8ddd8;--acc:#d2611a;--accfg:#fff;--on:#2f7d4f;--onbg:#e7f3ec;--sel:#fbf0e6;
+:root{--bg:#f3f4f1;--card:#fff;--fg:#1c2421;--mute:#5d6863;--line:#d8ddd8;--acc:#b8520f;--accfg:#fff;--on:#2f7d4f;--onbg:#e7f3ec;--sel:#fbf0e6;
   --warn:#9a5b06;--bad:#c0262d;--code:#eef0ec;--dash:#1b1f1e;--dashfg:#f1f3ef;--dashmute:#9aa6a0;--bar:rgba(255,255,255,.92);--glow:rgba(210,97,26,.25)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121615;--card:#1b201e;--fg:#e6ebe8;--mute:#9aa6a0;--line:#2f3633;--acc:#f08a3c;--accfg:#1a0d03;
   --on:#6cc28f;--onbg:#17291f;--sel:#2a211a;--warn:#e7a54f;--bad:#ff7b80;--code:#101413;--dash:#0c0f0e;--dashfg:#f1f3ef;--dashmute:#8e9994;--bar:rgba(27,32,30,.92);--glow:rgba(240,138,60,.3);color-scheme:dark}}
@@ -18,7 +18,7 @@ body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-appl
 main{max-width:860px;margin:0 auto;padding:12px 16px 110px}
 h1{font-size:1.5rem;margin:0;letter-spacing:.01em;display:flex;align-items:center;gap:10px}
 h1 svg{width:30px;height:30px;flex:none}
-h1 .ver{font:600 .8rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--acc);border:1px solid var(--acc);border-radius:99px;padding:1px 8px;align-self:center}
+h1 .ver{white-space:nowrap;font:600 .8rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--acc);border:1px solid var(--acc);border-radius:99px;padding:1px 8px;align-self:center}
 h2{font-size:1.15rem;margin:0 0 .6em;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
 h2 .n{font:700 .8rem ui-monospace,monospace;color:var(--accfg);background:var(--acc);border-radius:99px;padding:1px 8px}
 h2 .opt{font-size:.8rem;font-weight:400;color:var(--mute)}
@@ -41,7 +41,8 @@ section.card{scroll-margin-top:12px}
 .big b{font-size:1rem}
 .big:hover{border-color:var(--acc)}
 .big.drop{border-color:var(--acc);border-style:dashed;background:var(--onbg)}
-.big input{display:none}
+.big input{position:absolute;opacity:0;width:0;height:0}
+.big:has(input:focus-visible){outline:2px solid var(--acc);outline-offset:2px}
 .note{border-left:3px solid var(--acc);padding:4px 10px;margin:10px 0 0;background:var(--bg);border-radius:0 8px 8px 0}
 #restore2{display:none;margin:0 0 10px}
 body.wiz #restore2:not([hidden]){display:block}
@@ -84,6 +85,7 @@ button.link{border:0;background:none;color:var(--acc);padding:0;font:inherit;cur
 .tile .need{font-size:.78rem;color:var(--warn);margin:2px 0 0}
 .tile .need:empty{display:none}
 .tile.waits b,.tile.waits small{opacity:.6}
+.sw::before{content:"";position:absolute;inset:-12px -6px}
 .sw{border:0;padding:0;margin:0;align-self:start;width:40px;height:22px;border-radius:11px;background:var(--line);position:relative;flex:none;cursor:pointer;transition:background .15s}
 .sw::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .15s}
 .tile[aria-pressed=true]{background:var(--onbg);border-color:var(--on)}
@@ -141,7 +143,7 @@ ol.facts{list-style:decimal inside}
 /* sticky bar */
 .bar{position:fixed;left:0;right:0;bottom:0;background:var(--bar);backdrop-filter:blur(8px);border-top:1px solid var(--line);z-index:5}
 .bar .in{max-width:860px;margin:0 auto;padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.bar .status{flex:1;min-width:0;font:600 .9rem ui-monospace,SFMono-Regular,Menlo,monospace}
+.bar .status{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font:600 .9rem ui-monospace,SFMono-Regular,Menlo,monospace}
 .bar .status .chg{color:var(--acc)}
 .bar .status .ok{color:var(--on)}
 .bar .status .badn{color:var(--bad)}
@@ -225,18 +227,19 @@ details.more>summary{color:var(--acc);cursor:pointer}
 .optlist li{margin:2px 0}
 .tg2{display:flex;justify-content:space-between;align-items:center;gap:14px}
 .tg2 .sw{flex:none}
-.tg2 .sw[aria-pressed=true]{background:var(--on)}
-.tg2 .sw[aria-pressed=true]::after{left:21px}
+.tg2 .sw[aria-checked=true]{background:var(--on)}
+.tg2 .sw[aria-checked=true]::after{left:21px}
 .ctl .odd{display:block;color:var(--warn);font-size:.82rem;margin-top:6px}
 .note2{color:var(--warn);font-size:.9rem;margin:10px 0 0}
 .raw{margin:22px 0 0;color:var(--acc);cursor:pointer;text-decoration:underline;background:none;border:0;font:inherit;padding:6px 0}
 .rawbox{margin-top:8px}
-@media(max-width:700px){.pane{grid-template-columns:1fr}.side{grid-auto-flow:column;grid-auto-columns:minmax(150px,1fr);overflow-x:auto;padding-bottom:6px}}
+@media(max-width:700px){.pane{grid-template-columns:1fr}.side{grid-template-columns:repeat(2,1fr)}}
 /* Extra info: extra text is hidden until the switch in the step bar is on (what must be seen, like stages and "needs", never is .x) */
 .x{display:none}
 body.explain .x{display:block}
 body.explain .nx{display:none}
 body.explain .tile .body{cursor:default}
+.tile .body:disabled{color:inherit}
 body.explain .tile .body:hover b{text-decoration:none}
 body.explain ul.facts.x{display:grid}
 body.explain .tiles{grid-template-columns:1fr}
@@ -271,7 +274,7 @@ body.explain .tiles{grid-template-columns:1fr}
 
 <section class="card" data-step data-title="Truck year" id="s-era">
 <p class="note" id="restore2" hidden></p>
-<h2><span class="n">1</span> Truck era</h2>
+<h2><span class="n">1</span> Truck year</h2>
 <p class="mute">What real trucks had by then. Newer years are less tested.</p>
 <div class="tl" id="eras"></div>
 <p class="erablurb" id="erablurb"></p>
@@ -459,6 +462,7 @@ function parseIni(text) {
     var kv = l.match(/^([A-Za-z0-9_]+)\s*=\s*(.*)$/);
     if (kv && sec) { out[sec] = out[sec] || {}; out[sec][kv[1]] = kv[2].trim(); }
   });
+  if (out.lane && /^\s*1\s*$/.test(out.lane.mode || "")) out.lane.mode = "2";   // the plugin treats lane mode 1 as 2
   return out;
 }
 // put the known numeric values of a parsed ini into vals; returns how many were taken
@@ -530,7 +534,7 @@ if (typeof document !== "undefined") (function () {
     var bad = badList.length;
     var n = 0;
     tiles.forEach(function (t) {
-      var s = featureState(t.f, vals); t.el.setAttribute("aria-pressed", s); t.sw.setAttribute("aria-checked", s); if (s !== "false") n++;
+      var s = featureState(t.f, vals); t.el.setAttribute("aria-pressed", s); t.sw.setAttribute("aria-checked", s === "false" ? "false" : "true"); if (s !== "false") n++;
       var miss = needsOff(t.f);
       t.need.textContent = miss.length ? "Needs " + miss.join(" and ") + (s !== "false" ? " (off)" : "") : "";
       t.el.classList.toggle("waits", miss.length > 0 && s === "false");
@@ -552,11 +556,11 @@ if (typeof document !== "undefined") (function () {
     mods.forEach(function (m) {
       var det = detectLayer(D, m.g, base, vals), pre = det.layer === "preset";
       m.chips.forEach(function (c, i) { c.setAttribute("aria-pressed", String(pre && i === det.i)); });
-      m.desc.textContent = pre ? "" : "Your own values (" + (det.layer === "advanced" ? "Advanced" : "Custom") + "). A preset resets this module.";
-      m.cur.textContent = pre ? m.g.tuning[det.i].name : det.layer === "advanced" ? "Advanced" : "Custom";
+      m.desc.textContent = pre ? "" : "Your own values (" + (det.layer === "advanced" ? "Adjusted" : "Raw") + "). A preset resets this module.";
+      m.cur.textContent = pre ? m.g.tuning[det.i].name : det.layer === "advanced" ? "Adjusted" : "Raw";
       m.knobs.forEach(function (r) { r.show(); });
       var ow = m.g.off_when;
-      m.off = !!(ow && same(vals[ow[0]][ow[1]], ow[2]));  // switched off in step 2: nothing to tune
+      m.off = !!(ow && same(vals[ow[0]][ow[1]], ow[2])) && !m.force;  // switched off in step 2: nothing to tune
       m.side.hidden = m.off;
       if (m.off) off.push(m.g.title);
     });
@@ -703,7 +707,7 @@ if (typeof document !== "undefined") (function () {
       row.className = "ctl tg2";
       var txt = el("span"); txt.appendChild(el("b", null, kb.label)); txt.appendChild(el("small", "x", kb.help)); txt.appendChild(odd);
       ctl = el("button", "sw"); ctl.type = "button"; ctl.setAttribute("role", "switch"); ctl.setAttribute("aria-label", kb.label);
-      ctl.addEventListener("click", function () { setKnob(kb, ctl.getAttribute("aria-pressed") !== "true", vals); refresh(); });
+      ctl.addEventListener("click", function () { setKnob(kb, ctl.getAttribute("aria-checked") !== "true", vals); refresh(); });
       row.appendChild(txt); row.appendChild(ctl);
     } else {
       top.appendChild(el("b", null, kb.label)); if (kb.kind === "range") top.appendChild(out);
@@ -736,7 +740,7 @@ if (typeof document !== "undefined") (function () {
     }
     m.knobs.push({ show: function () {
       var fits = knobFits(kb, vals);
-      if (kb.kind === "toggle") ctl.setAttribute("aria-pressed", String(kb.keys.every(function (k) { return same(vals[k[0]][k[1]], k[2]); })));
+      if (kb.kind === "toggle") ctl.setAttribute("aria-checked", String(kb.keys.every(function (k) { return same(vals[k[0]][k[1]], k[2]); })));
       else {
         var v = vals[kb.key[0]][kb.key[1]];
         if (kb.kind === "choice") opts.forEach(function (b, i) { b.setAttribute("aria-pressed", String(same(kb.options[i][0], num(v)) || same(kb.options[i][0], v))); });
@@ -780,7 +784,7 @@ if (typeof document !== "undefined") (function () {
     var cp = el("div", "rawbox"); cp.hidden = true;
     rb.addEventListener("click", function () { cp.hidden = !cp.hidden; rb.textContent = cp.hidden ? "All raw settings" : "Hide raw settings"; });
     cp.appendChild(el("p", "rawnote x", "The raw settings of dazdrive.ini, each with the plugin's own one-line help. No safety net: the page only checks that a value is a number."));
-    g.scope.forEach(function (sk) { cp.appendChild(item(sk[0], sk[1], sk[2], sk[1], false)); });
+    ownKeys(D, g).forEach(function (sk) { cp.appendChild(item(sk[0], sk[1], sk[2], sk[1], false)); });
     pn.appendChild(rb); pn.appendChild(cp); m.panels.custom = cp; m.rawBtn = rb;
     m.panel = pn;
     mods.push(m);
@@ -792,7 +796,7 @@ if (typeof document !== "undefined") (function () {
   function li(html) { var l = el("li"); l.innerHTML = html; steps.appendChild(l); }
   var folder = "<code>&lt;ETS2&gt;\\bin\\win_x64\\plugins\\dazdrive\\</code><br><small>Windows: <code>C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2\\bin\\win_x64\\plugins\\dazdrive\\</code><br>Linux / Proton: <code>~/.local/share/Steam/steamapps/common/Euro Truck Simulator 2/bin/win_x64/plugins/dazdrive/</code></small>";
   if (canPick) {
-    li("Pick the folder of this page and <b>overwrite</b> dazdrive.ini: " + folder);
+    li("Save over dazdrive.ini in the folder of this page: " + folder);
   } else {
     li("Move it next to this page and <b>overwrite</b> the old one: " + folder);
   }
@@ -811,7 +815,7 @@ if (typeof document !== "undefined") (function () {
   function blocked() {
     if (!badList.length) return false;
     var i = badList[0], steps = document.querySelectorAll("[data-step]");
-    mods.forEach(function (m) { if (m.panels.custom.contains(i.el)) { selMod = m; m.panels.custom.hidden = false; m.rawBtn.textContent = "Hide raw settings"; } });
+    mods.forEach(function (m) { if (m.panels.custom.contains(i.el)) { selMod = m; m.force = true; m.panels.custom.hidden = false; m.rawBtn.textContent = "Hide raw settings"; } });
     refresh();
     for (var p = i.el.parentNode; p; p = p.parentNode) if (p.tagName === "DETAILS") p.open = true;
     if (document.body.classList.contains("wiz")) for (var j = 0; j < steps.length; j++) if (steps[j].contains(i.el)) wshow(j);
@@ -853,7 +857,7 @@ if (typeof document !== "undefined") (function () {
   function afterStart() { if (wiz()) wshow(1); }
   function took(n) {
     var e = eraOf(D, era), c = changes();
-    return "Read " + n + " settings. Closest year: " + e.year + " " + e.name + (c ? ", with " + c + " change" + (c > 1 ? "s" : "") : "") + ". Next keeps them; another year starts over. ";
+    return "Read " + n + " settings. Closest year: " + e.year + " " + e.name + (c ? ", with " + c + " change" + (c > 1 ? "s" : "") : "") + ". Continue keeps them; another year starts over. ";
   }
   function openFile(f) {
     var rd = new FileReader();
@@ -916,7 +920,7 @@ if (typeof document !== "undefined") (function () {
   var xb = $("explain"), XKEY = "dazdrive-explain";
   try { xb.checked = localStorage.getItem(XKEY) === "1"; } catch (e) {}
   if (/[?&]explain/.test(location.search)) xb.checked = true;
-  function xset() { document.body.classList.toggle("explain", xb.checked); try { localStorage.setItem(XKEY, xb.checked ? "1" : "0"); } catch (e) {} }
+  function xset() { document.body.classList.toggle("explain", xb.checked); document.querySelectorAll(".tile .body").forEach(function (b) { b.disabled = xb.checked; }); try { localStorage.setItem(XKEY, xb.checked ? "1" : "0"); } catch (e) {} }
   xb.addEventListener("change", xset); xset();
   // the choices at the end of a step: each goes to a step by id
   document.querySelectorAll("[data-go]").forEach(function (b) {
@@ -976,11 +980,11 @@ if (typeof document !== "undefined") (function () {
     var ccm = null; mods.forEach(function (m) { if (m.g.id === "cc") ccm = m; });
     var v2 = presetValues(D, recommended); setKnob(ccm.g.knobs[0], 1.6, v2);
     loadIni(buildIni(D, recommended, v2));
-    check("opened ini shows Advanced", ccm.cur.textContent === "Advanced" && vals.cruise.acc_short_s === "1.25" && vals.cruise.acc_long_s === "1.95");
+    check("opened ini shows Advanced", ccm.cur.textContent === "Adjusted" && vals.cruise.acc_short_s === "1.25" && vals.cruise.acc_long_s === "1.95");
     // the page's own controls: the slider, a mark under it and a preset chip
     var gap = ccm.panels.advanced.querySelector("input[type=range]");
     gap.value = "1.6"; gap.dispatchEvent(new Event("input"));
-    check("slider sets Advanced", ccm.cur.textContent === "Advanced" && vals.cruise.acc_short_s === "1.25" && /1\.6 s/.test(ccm.panels.advanced.textContent));
+    check("slider sets Advanced", ccm.cur.textContent === "Adjusted" && vals.cruise.acc_short_s === "1.25" && /1\.6 s/.test(ccm.panels.advanced.textContent));
     ccm.panels.advanced.querySelectorAll(".marks button")[1].click();
     check("mark sets the Relaxed gaps", vals.cruise.acc_short_s === "1.5" && vals.cruise.acc_middle_s === "2" && vals.cruise.acc_long_s === "2.5");
     ccm.chips[0].click();

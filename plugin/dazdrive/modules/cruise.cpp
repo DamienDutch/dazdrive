@@ -53,7 +53,7 @@ static param g_params[] = {
     { "hill_start_s", &p_hill_s, 3, "at most this long (s)" },
     { "stop_go", &p_sg, 1, "1 = adaptive cruise keeps going in a jam: stays on at a standstill behind a vehicle and drives off with it" },
     { "stop_go_auto_s", &p_sg_auto, 0, "after standing longer than this (s), driving off needs resume or the pedal; 0 = always drives off by itself (real trucks, MAN/Detroit: 2)" },
-    { "descent", &p_descent, 1, "1 = with navigation: on a descent brake gently ahead (engine brake / retarder) so the set speed holds instead of overshooting" },
+    { "descent", &p_descent, 1, "1 = on a descent of 2 % or more (a navigation route lets it start earlier) brake gently ahead (engine brake / retarder) so the set speed holds instead of overshooting" },
     { "curves", &p_curve, 1, "1 = with navigation: slow down gently before sharp bends and exits" },
     { "acc_cycle_up", &p_acc_up, 1, "1 = the ACC distance key steps further away: off, close, middle, far, off (the game: far, middle, close, off)" },
     { "acc_calm_cut_in", &p_acc_calm, 1, "1 = a vehicle cutting in or pulling away (the gap opening) does not make the cruise slow down, it only stops speeding up" },
