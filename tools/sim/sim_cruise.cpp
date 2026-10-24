@@ -19,6 +19,8 @@ const layout *L;
 game_addrs G;
 volatile int g_rolling, g_cruise_smooth, g_crawl_on;
 volatile float g_roll_boost_kmh;
+volatile double g_rb_cancel_at = -1e9;
+volatile int g_pcc_on;
 volatile float g_pcc_need_kmh = NAN;
 volatile float g_creep_brake;
 int g_log_level = 2;
@@ -217,7 +219,6 @@ static float key_run(int key, double down, int repeat, float start, int cruise_o
 }
 static void keys_test()
 {
-    p_key_slide = 0;  // the logic, not the dash slide (that needs frames)
     g_keys_ok = 1; g_ret_ok = 1; o_retarder = fake_retarder; g_low_ok = 1;
     p_step_tap = 5; p_step_hold = 1; p_hold_s = 0.4f; p_hold_rate = 8; p_ret_off = 1; p_min_set = 20; p_min_kmh = 5;
     int bad = 0;
@@ -252,21 +253,21 @@ static void keys_test()
     key_event(GA, act_buf[0]);  // on/off key while on = switching off: leave the retarder
     printf("keys: retarder 3, on/off pressed with cruise on -> retarder %u (3 = untouched)\n", *(unsigned *)(GA + 0x180));
     bad |= *(unsigned *)(GA + 0x180) != 3;
-    // resume while on -> limit + offset (lower eases, higher at once, unknown limit = nothing)
-    p_res_lim = 1; p_isa_off = 3; p_isa_ramp = 2.5f; p_limiter = 0; p_min_set = 20;
+    // resume while on -> limit + offset at once (unknown limit = nothing)
+    p_res_lim = 1; p_isa_off = 3; p_limiter = 0; p_min_set = 20;
     struct { float lim_kmh, start; } rc[] = { { 80, 100 }, { 120, 100 }, { 0, 100 }, { 15, 100 } };
-    float want[] = { 100, 123, 100, 100 };  // 80: eases (set stays 100, goal 83); 15 -> min_set 20, eases
+    float want[] = { 83, 123, 100, 20 };  // 80 -> 83; 15 -> min_set 20
     for (int i = 0; i < 4; i++) {
-        T.speed_limit = rc[i].lim_kmh / 3.6f; isa_goal = NAN;
+        T.speed_limit = rc[i].lim_kmh / 3.6f;
         *(unsigned char *)(GA + GA_ON) = 1; *(float *)(GA + GA_SET) = rc[i].start;
         key_event(GA, act_buf[3]);
         *(float *)(GA + GA_SET) = 110;  // the game's own resume does something to the set speed
         keys_tick(GA);
         float sv = *(float *)(GA + GA_SET);
-        printf("keys: resume while on, limit %.0f, set %.0f -> %.0f (expect %.0f), easing goal %.0f\n", rc[i].lim_kmh, rc[i].start, sv, want[i], isa_goal);
-        bad |= sv != want[i] || (i == 0 && isa_goal != 83) || (i == 3 && isa_goal != 20) || (i == 1 && isa_goal == isa_goal);
+        printf("keys: resume while on, limit %.0f, set %.0f -> %.0f (expect %.0f)\n", rc[i].lim_kmh, rc[i].start, sv, want[i]);
+        bad |= sv != want[i];
     }
-    T.speed_limit = 0; isa_goal = NAN;
+    T.speed_limit = 0;
     printf("keys test: %s\n", bad ? "FAIL" : "ok");
     if (bad) exit(1);
 }

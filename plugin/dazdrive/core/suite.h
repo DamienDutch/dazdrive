@@ -143,10 +143,12 @@ extern volatile float g_creep_brake;  // Creep: brake request it wants (crawl he
 extern volatile int g_crawl_on;       // Creep: the driver has crawl switched on
 extern volatile int g_rolling;        // TrueShift has the truck in neutral (eco-roll)
 extern volatile float g_roll_boost_kmh;   // TrueShift asks Cruise for this much over the set speed (km/h) just before an eco-roll starts (0 = none)
+extern volatile double g_rb_cancel_at;   // Cruise: wall time it cancelled itself for a roundabout (Lane switches lane keeping off for it, back on at the next cruise resume)
 extern volatile float g_creep_thr;     // Creep asks the merged throttle for this much (0..~0.15): Cruise's stub maxes it in
 extern volatile float g_clutch_ours;  // the clutch value Creep puts on the drivetrain (launch or crawl), NAN when the game's own applies
 static inline float clutch_seen() { float c = g_clutch_ours; return c == c ? c : T.eff_clutch; }  // what the drivetrain sees: use instead of T.eff_clutch for 'is the clutch closed'
 extern volatile float g_pcc_need_kmh;  // TrueShift: extra speed over the set speed the next climb on the route needs (NAN = unknown)
+extern volatile int g_pcc_on;         // Cruise: predictive cruise (PCC) is switched on
 extern volatile int g_cruise_smooth;  // the Cruise module drives the cruise throttle itself
 extern volatile char g_dash_flash;    // a letter to show on the dashboard for a moment (ACC C/N/F/O, limit S/X, lane L/X)
 extern volatile char g_dash_status;   // a letter shown while something holds (B hill-start brake, K creep); 0 = none

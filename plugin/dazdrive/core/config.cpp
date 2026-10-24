@@ -41,7 +41,7 @@ static const struct { const char *sec, *key; float lo, hi; } k_bounds[] = {
     { "cruise", "curve_lat", 1, 6 }, { "cruise", "junction_lat", 0.5f, 6 }, { "cruise", "junction_min_deg", 5, 90 },
     { "cruise", "roundabout_kmh", 10, 60 }, { "cruise", "roundabout_ratio", 1, 3 }, { "cruise", "junction_plan_decel", 0.2f, 3 },
     { "cruise", "curve_brake_decel", 0.2f, 3 }, { "cruise", "curve_coast_decel", 0.1f, 2 }, { "cruise", "band_up_kmh", 0, 15 },
-    { "cruise", "band_max_s", 5, 300 }, { "cruise", "min_kmh", 5, 60 }, { "cruise", "set_ease_kmh_s", 0.5f, 20 },
+    { "cruise", "band_max_s", 5, 300 }, { "cruise", "min_kmh", 5, 60 },
     { "cruise", "limiter_kmh", 0, 150 }, { "cruise", "min_set_kmh", 0, 60 }, { "cruise", "step_tap_kmh", 0, 10 },
     { "cruise", "step_hold_kmh", 1, 10 }, { "cruise", "hold_s", 0.1f, 5 }, { "cruise", "hold_rate", 0.5f, 20 },
     { "cruise", "own_acc_gain", 0.05f, 2 }, { "cruise", "own_acc_stop_m", 2, 20 }, { "cruise", "own_acc_plan_decel", 0.3f, 4 },

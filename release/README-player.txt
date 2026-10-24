@@ -92,7 +92,6 @@ speed assistance (following the speed limits), PCC = predictive cruise control.
 ON in the included ini
   TrueShift (the gearbox)        stable
   Eco-roll                       stable
-  Eco-roll with cruise           stable
   Smooth stop                    stable
   SteadyCruise                   stable
   Downhill speed control         stable

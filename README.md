@@ -61,7 +61,6 @@ The game already has an automatic, cruise control and lane assist. This changes 
 |---|---|---|---|
 | **TrueShift** gearbox | stable | on | The game's automatic shifts like a real truck AMT: gear from engine torque, load and grade instead of fixed rpm. Low rpm when it can, learns when an upshift does not pull, skips gears, kickdown, engine brake and retarder aware. Modes Eco / Normal / Power / M, shown as a letter on the dash. |
 | Eco-roll | stable | on | Neutral on gentle descents. |
-| Eco-roll with cruise | stable | on | The same while the cruise is on. Needs SteadyCruise. |
 | Smooth stop | stable | on | The clutch opens around idle when you brake to a halt. |
 | **SteadyCruise** | stable | on | A calm cruise throttle: no bursts after shifts, no hunting. Most cruise features build on it. |
 | Downhill speed control | stable | on | Holds the set speed downhill with engine brake and retarder. |
@@ -69,7 +68,7 @@ The game already has an automatic, cruise control and lane assist. This changes 
 | Emergency stop signal | stable | on | Hazards flash after a hard stop. |
 | AEB (automatic emergency braking) | stable | on | Warning tones, then partial, then full braking. Replaces the game's own emergency braking. |
 | Gearbox looks ahead | stable | off (~2015) | Predictive shifting: gears chosen for the climbs and tops on your navigation route. |
-| Cruise looks ahead (PCC, predictive cruise control) | stable | off (~2015) | Carries speed into climbs and eases off before tops. Needs a route. |
+| Cruise looks ahead (PCC, predictive cruise control) | stable | off (~2015) | Carries speed into climbs and eases off before tops. Needs a route. With it, the truck also coasts in neutral on gentle descents with the cruise on (Fine-tuning, Cruise control). |
 | Slow for bends | beta | off (~2020) | Eases off, and brakes gently if needed, before sharp bends. Needs a route. |
 | ACC (adaptive cruise control) | beta | off (~2015) | Follows the vehicle ahead smoothly and brakes early. |
 | Stop & Go | beta | off (~2015) | The ACC keeps going in a jam: stops behind the vehicle ahead and drives off with it. |

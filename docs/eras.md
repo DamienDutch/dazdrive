@@ -19,7 +19,6 @@ proves itself. A year shows the weakest stage of the features it switches on.
 | Downhill speed control (Bremsomat: engine brake/retarder hold the set speed) | stable | ~2000 | 1990s (k): Mercedes SK/Actros 1996 Telligent | |
 | Hill start assist | stable | ~2000 | ~2000-2005 (k): Actros Telligent hill holder; standard on every brand by ~2010 | |
 | Eco-roll (neutral on gentle descents) | stable | ~2010 | 2006 Volvo I-Roll (k), 2008 Mercedes EcoRoll with PowerShift as standard (k) | Mercedes page gives no year: [MB](https://mercedes-benz-trucks.com/en_SG/models/actros/driving-dynamics/propulsion-technology.html) |
-| Eco-roll with cruise (the same with the cruise on) | stable | ~2010 | same as above | needs SteadyCruise |
 | Emergency stop signal (hazards flash on hard braking) | stable | ~2010 | ~2010 (k): Actros 2011 generation; UN R48 made it mandatory with the 07 series (adopted 2019/2020) | [GAR](https://globalautoregs.com/documents/21509) |
 | AEB (emergency braking) | stable | ~2010 | 2006 Mercedes Active Brake Assist (k); EU mandatory on new trucks November 2015 (k) | DazDrive's own AEB replaces the game's |
 | Gearbox looks ahead (predictive shifting) | stable | ~2015 | 2012 Scania Active Prediction, 2012 Mercedes PPC, 2012/2013 Volvo I-See; DAF ~2015 (k) | [Commercial Motor 2012](https://archive.commercialmotor.com/article/23rd-august-2012/35/longer-sighted-lorries), [eurotransport](https://www.eurotransport.de/fahrzeuge/lkw/vorausschauender-tempomat-i-see-von-volvo-soll-fuenf-prozent-sprit-sparen/) |

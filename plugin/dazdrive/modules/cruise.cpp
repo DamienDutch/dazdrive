@@ -27,7 +27,7 @@
 #include <string.h>
 
 static float p_herm;
-static float p_key_slide, p_acc_calm, p_set_ease, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_ramp, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_eco_k, p_power_k, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
+static float p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_eco_k, p_power_k, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
 static param g_params[] = {
@@ -41,7 +41,6 @@ static param g_params[] = {
     { "acc_max_m", &p_max_m, 90, "and never longer than this" },
     { "speed_limit", &p_isa, 1, "speed-limit following at the first start (before any on/off choice is remembered): 1 = on (at every new limit the cruise set speed becomes limit + offset; +/- still work until the next sign); after that your last on/off choice is remembered (cruise_state.txt)" },
     { "speed_limit_hold_s", &p_isa_hold, 0.8f, "hold the ACC distance key of the game this long (s) to switch speed-limit following on/off; the distance stays as it was. No button number to set" },
-    { "speed_limit_ease_kmh_s", &p_isa_ramp, 2.5f, "a lower limit: the set speed goes down this fast (km/h per second; 0 = at once, the game then brakes hard at the sign)" },
     { "speed_limit_offset_kmh", &p_isa_off, 3, "set speed = limit plus this (3: 80 -> 83)" },
     { "auto_hold", &p_ah, 1, "1 = Auto Hold: after stopping with the brake the truck stays held when you release the pedal (any slope, no timer) until you give gas; it lets go smoothly as the engine pulls. Not with crawl on, the parking brake, reverse or Stop&Go. With auto_hold on, hill_start is not used" },
     { "auto_hold_request", &p_ah_req, 0.6f, "how hard the hold brakes (brake request 0..1)" },
@@ -83,8 +82,6 @@ static param g_params[] = {
     { "band_up_kmh", &p_band_up, 6, "with predictive = 1 and navigation (predictive cruise, PCC): carry up to this much over the set speed into a climb, and in a dip (a descent with a climb right after it) let the truck run up to it before the engine brake / retarder hold it. At most this: only as much as the next climb needs (TrueShift: mass, engine, route; solo often 0); 0 = off" },
     { "band_max_s", &p_band_s, 40, "a dip may run over the set speed for at most this long, then the engine brake / retarder hold the set speed again (Mercedes PPC: 40 s)" },
     { "min_kmh", &p_min_kmh, 5, "lowest speed at which cruise control can be switched on or resumed (game: 30), e.g. in a jam" },
-    { "key_slide_s", &p_key_slide, 0.15f, "your own +/- slides the set speed on the dash over this long (s), up and down alike; 0 = a jump" },
-    { "set_ease_kmh_s", &p_set_ease, 2.5f, "a lower cruise set speed (-, resume, speed limit) is reached by easing down this fast (km/h per second; 0 = at once: the game brakes)" },
     { "limiter_kmh", &p_limiter, 90, "with the game's speed limiter on, the cruise set speed never goes above this (km/h; 0 = no cap)" },
     { "min_set_kmh", &p_min_set, 20, "the set speed never goes below this: switched on slower, it sets this (with ACC it follows the vehicle ahead)" },
     { "step_tap_kmh", &p_step_tap, 5, "a short tap on cruise + / - changes the set speed by this (rounded to a multiple of it: 83 -> 85); 0 = the game's own step" },
@@ -143,11 +140,6 @@ static int s_btn_fired, s_acc_armed, s_acc_key_bad;
 static float s_hold_before = NAN;  // the ACC distance when the hold of its key began (a held key may step it again)
 static float s_ahead_ours = NAN;                        // limit ahead: the set speed we wrote
 static int s_ahead_ignore = -1, s_ahead_logged = -1;
-static double s_isa_at;                                 // ISA easing clock
-static float s_ease_prev = NAN, s_ease_goal = NAN;      // set-speed easing anchor
-static float s_anim_from = NAN, s_anim_to = NAN;        // the driver's +/- shown as a short slide on the dash
-static double s_anim_t0;
-static double s_ease_at;
 static int s_down_now, s_dip, s_dip_spent;              // descent hysteresis; in a dip (climb after it); its time is up
 static double s_dip_at;                                 // when the dip margin started
 static double s_flat_since, s_desc_at;
@@ -198,6 +190,7 @@ static float band_up()
 // option is off: what we write stays (ts3c: brakes on, hazards forced on,
 // throttle dead, docs/neutral-exit-re.md § 3). So all our wishes meet here,
 // once per tick, and what we wrote goes back to 0 when we no longer want it.
+static int s_sg_wait;  // Stop&Go: standing longer than stop_go_auto_s, the driver has to press Resume or the pedal: the dash shows B
 static float s_want_hill, s_want_hold, s_want_curve, s_want_acc, s_want_aeb, s_req_ours;
 static int s_aeb_was;                                  // brake_request: the AEB was asking last call (it ramps by itself)
 static float s_lv_prev = NAN, s_a_lead;                 // own ACC: lead speed history (reset without a lead)
@@ -394,14 +387,13 @@ static void auto_hold(char *g, float dt)
         break; }
     }
     s_want_hold = AH.r;
-    if (AH.r > 0) g_dash_status = 'B';
+    if (AH.r > 0 || s_sg_wait) g_dash_status = 'B';
     else if (g_dash_status == 'B') g_dash_status = 0;
 }
 
 
 
 // ---------------------------------------------------------------- ISA state (limit following, resume to limit)
-static float isa_goal = NAN, isa_ours;  // easing the set speed down to a lower limit
 static int s_res_ev;                     // resume pressed while cruise was on (handled in keys_tick)
 static double s_res_press_at = -10;      // last resume press (on or off): cruise coming on by resume follows ISA, by set not
 static float s_res_before;
@@ -426,10 +418,8 @@ static void resume_to_limit(char *ga)
     int lim = (int)roundf(T.speed_limit * 3.6f);
     float v = fmaxf(lim + p_isa_off, p_min_set);
     if (g_low_ok && p_limiter > 0 && limiter_on() && v > p_limiter) v = p_limiter;
-    float cur = *set;
-    if (p_isa_ramp > 0 && v < cur - 1) { isa_goal = v; isa_ours = cur; }
-    else { isa_goal = NAN; *set = v; }
-    logv(1, "Cruise: resume while on: set speed %.0f (limit %d)%s", v, lim, isa_goal == isa_goal ? " (easing down)" : "");
+    *set = v;
+    logv(1, "Cruise: resume while on: set speed %.0f (limit %d)", v, lim);
 }
 
 // ---------------------------------------------------------------- cruise keys (docs/cruise-keys-re.md)
@@ -479,7 +469,6 @@ static void key_event(char *ga, void *act)
     if (g_keys_ok && is_res && on && p_res_lim > 0) { s_res_ev = 1; s_res_before = *(float *)(ga + GA_SET); }
     if (g_keys_ok && (is_inc || is_dec)) {
         keydir &k = K[is_dec];
-        if (s_anim_to == s_anim_to) { *(float *)(ga + GA_SET) = s_anim_to; s_anim_to = NAN; }  // finish a slide first
         k.ev = 1; k.was_on = on; k.before = *(float *)(ga + GA_SET);
     }
 }
@@ -510,13 +499,8 @@ static void key_apply(char *ga, int dir, float base, float step, const char *why
         logv(1, "Cruise: %s - from %.0f: below the minimum, cruise off", why, base);
         return;
     }
-    // the driver's own +/- is taken at once (ts4o: five taps 40 -> 35 while the easing still walked down: "I could
-    // hardly do anything by hand"), shown as a short slide on the dash (Damien: ~0.1 s, a few in-between steps)
-    float from = *(float *)(ga + GA_SET);
+    // the driver's own +/- is taken at once, no slide on the dash (Damien 25-10)
     *(float *)(ga + GA_SET) = r;
-    s_ease_goal = NAN;
-    s_ease_prev = r;
-    if (p_key_slide > 0 && from == from && fabsf(from - r) > 0.5f) { s_anim_from = from; s_anim_to = r; s_anim_t0 = wall_s(); *(float *)(ga + GA_SET) = from; }
     logv(2, "Cruise: %s %c from %.0f to %.0f km/h", why, dir > 0 ? '+' : '-', base, r);
 }
 
@@ -673,6 +657,7 @@ static float cruise_body(void *ga, float dt, float pedal)
                                                 : (now_c - s_cb_on_since > 5 && now_c - s_jn_cancel_at > 20);
             if (t_to <= p_jn_cancel_s && kmh > jn_orig_kmh + 3 && free_to_cancel) {
                 s_jn_cancel_at = now_c;
+                if (ji.roundabout) g_rb_cancel_at = now_c;
                 *(unsigned char *)(g + GA_ON) = 0;
                 play_cue(CUE_CRUISE_DROP);
                 logline("Cruise: %s in %.0f m (%.1f s) at %.0f km/h, its speed %.0f (+%.0f margin): cruise cancelled for you, Resume brings the set speed back",
@@ -795,6 +780,7 @@ static float cruise_body(void *ga, float dt, float pedal)
         else if (!g_stopped_at) g_stopped_at = now;
         int may_wait = p_sg_auto <= 0 || (g_stopped_at && now - g_stopped_at < p_sg_auto);
         g_sg_hold = p_sg > 0 && slow && lead > 0.5f && may_wait && !T.parking_brake;
+        s_sg_wait = p_sg > 0 && p_sg_auto > 0 && slow && g_stopped_at && !may_wait && !T.parking_brake;
         g_feed = (p_sg > 0 && kmh < 10 && (g_sg_hold || g_stopped_at) && u > 0.02f) ? u : 0;
     }
     // Held back by something else (ts4n 433-448 s: brake air low → the game's spring brakes stopped the truck while our
@@ -1168,6 +1154,7 @@ static void cr_start()
                     p_step_hold, p_hold_s, p_hold_rate, g_keys_ok ? "" : ", steps off", g_ret_ok ? "yes" : "no");
         } else logline("Cruise: key handler code not found: + / - steps and retarder-off stay the game's");
     }
+    g_pcc_on = p_predict > 0;
     if (p_smooth > 0) {
         uintptr_t h = game_scan("48 8B CB F3 44 0F 11 83 E4 1C 00 00 F3 45 0F 5F C3 41 0F 28 D0 E8");
         uintptr_t site = h ? h + 21 : 0;
@@ -1732,12 +1719,9 @@ static void cr_frame()
                 logv(1, "Cruise: set at %.0f km/h with ISA on: kept, limit %d follows from the next sign", *(float *)(ga + GA_SET), lim);
             } else if (lim != s_isa_last) {
                 s_isa_last = lim;
-                float set = fmaxf(lim + p_isa_off, p_min_set), cur = *(float *)(ga + GA_SET);
-                // Lower: ease the set speed down (Damien: not full on the brakes at the sign), higher: at once.
-                cur = fmaxf(set, fminf(cur, fabsf(T.speed) * 3.6f + 1));  // already slower than the old set speed: start from our speed
-                if (p_isa_ramp > 0 && set < cur - 1) { isa_goal = set; isa_ours = cur; *(float *)(ga + GA_SET) = cur; }
-                else { isa_goal = NAN; *(float *)(ga + GA_SET) = set; }
-                logv(1, "Cruise: speed limit %d km/h: set speed %.0f%s", lim, set, isa_goal == isa_goal ? " (easing down)" : "");
+                float set = fmaxf(lim + p_isa_off, p_min_set);
+                *(float *)(ga + GA_SET) = set;  // lower or higher, at once (the game brakes on the set speed)
+                logv(1, "Cruise: speed limit %d km/h: set speed %.0f", lim, set);
             }
         }
         // Probe for the test ride: every change of the SDK limit dumps the route nodes (docs/speedlimit-ahead-re.md).
@@ -1766,20 +1750,6 @@ static void cr_frame()
                 } else { s_ahead_ours = NAN; s_ahead_logged = -1; s_ahead_ignore = -1; }
             } else { s_ahead_ours = NAN; s_ahead_logged = -1; s_ahead_ignore = -1; }
         }
-        // easing down; a +/- press by the driver (set speed not what we wrote) ends it
-        if (on && isa_goal == isa_goal) {
-            double now = wall_s(), dt = now - s_isa_at;
-            s_isa_at = now;
-            float *set = (float *)(ga + GA_SET);
-            if (fabsf(*set - isa_ours) > 0.5f) isa_goal = NAN;  // the driver changed it
-            else if (dt > 0 && dt < 0.5) {
-                isa_ours = fmaxf(isa_goal, isa_ours - p_isa_ramp * (float)dt);
-                *set = isa_ours;
-                if (isa_ours <= isa_goal) isa_goal = NAN;
-            }
-        }
-        if (!on && isa_goal == isa_goal && ga) *(float *)(ga + GA_SET) = isa_goal;  // cruise off: the goal at once
-        if (!on) isa_goal = NAN;
     }
     // Switched on below min_set_kmh (or set lower with -): set speed up to min_set_kmh.
     if (g_low_ok && p_min_set > 0) {
@@ -1791,38 +1761,6 @@ static void cr_frame()
         char *ga = game_actor_safe();
         if (limiter_on() && ga && *(unsigned char *)(ga + GA_ON) && *(float *)(ga + GA_SET) > p_limiter)
             *(float *)(ga + GA_SET) = p_limiter;
-    }
-    // Every lower set speed eases down (Damien: "so cool, do it for everything with cruise"): -, hold -, resume
-    // to a lower limit, ISA. The game brakes on the set speed itself, so the set speed is walked down; a higher
-    // one is taken at once (our throttle is smooth anyway). Pressing + or a new lower value takes over.
-    if (s_anim_to == s_anim_to) {
-        char *ga = game_actor_safe();
-        float k = p_key_slide > 0 ? (float)((wall_s() - s_anim_t0) / p_key_slide) : 1;
-        if (!ga || !*(unsigned char *)(ga + GA_ON) || k >= 1) { if (ga) *(float *)(ga + GA_SET) = s_anim_to; s_anim_to = NAN; }
-        else *(float *)(ga + GA_SET) = s_anim_from + (s_anim_to - s_anim_from) * k;
-        if (ga) { s_ease_prev = *(float *)(ga + GA_SET); s_ease_goal = NAN; }
-    }
-    if (g_low_ok && p_set_ease > 0 && !(s_anim_to == s_anim_to)) {
-        double now = wall_s(), dt = now - s_ease_at;
-        s_ease_at = now;
-        char *ga = game_actor_safe();
-        if (!ga || T.paused) s_ease_prev = s_ease_goal = NAN;
-        else if (!*(unsigned char *)(ga + GA_ON)) {  // cruise off: no easing in the background, the s_ease_goal at once (Damien)
-            if (s_ease_goal == s_ease_goal) *(float *)(ga + GA_SET) = s_ease_goal;
-            s_ease_prev = s_ease_goal = NAN;
-        }
-        else {
-            float *set = (float *)(ga + GA_SET);
-            // a step down: start from where we were, or at once from the speed we actually drive if that is lower
-            // (Damien: slowed by a climb, then a lower limit: no easing from a speed we are not doing)
-            if (s_ease_prev == s_ease_prev && *set < s_ease_prev - 0.3f) { s_ease_goal = *set; *set = fmaxf(s_ease_goal, fminf(s_ease_prev, fabsf(T.speed) * 3.6f + 1)); }
-            else if (s_ease_prev == s_ease_prev && *set > s_ease_prev + 0.05f) s_ease_goal = NAN;              // up: at once
-            if (s_ease_goal == s_ease_goal && dt > 0 && dt < 0.5) {
-                *set = fmaxf(s_ease_goal, *set - p_set_ease * (float)dt);
-                if (*set <= s_ease_goal) s_ease_goal = NAN;
-            }
-            s_ease_prev = *set;
-        }
     }
     // Descent: on or just before a descent of 2 % or more, the game's own
     // overspeed braking (retarder / engine brake) starts right at the set
@@ -1946,6 +1884,7 @@ static void cr_reset(int level, const char *why)
     s_hill_was = s_hold_was = 0;
     s_br_at = 0;
     s_thr_pass = 0;
+    s_sg_wait = 0;
     if (g_dash_status == 'B') g_dash_status = 0;
     if (s_req_ours > 0 && ga) {
         float *req = (float *)(ga + GA_BRAKE_REQ);
@@ -1953,9 +1892,6 @@ static void cr_reset(int level, const char *why)
     }
     s_req_ours = 0;
     s_hazard_mute = 0;
-    // set speed and ISA easing
-    s_ease_prev = s_ease_goal = NAN; s_ease_at = 0;
-    isa_goal = NAN; isa_ours = 0; s_isa_at = 0;
     s_ahead_ours = NAN; s_ahead_ignore = s_ahead_logged = -1;
     // calm cut-in / own-ACC filters
     s_lead_prev = -1; s_gap_rate = 0;

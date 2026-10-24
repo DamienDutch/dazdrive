@@ -15,6 +15,8 @@
 telemetry T;
 volatile int g_rolling, g_cruise_smooth, g_crawl_on;
 volatile float g_roll_boost_kmh;
+volatile double g_rb_cancel_at = -1e9;
+volatile int g_pcc_on;
 volatile float g_pcc_need_kmh = NAN;
 int g_log_level = 2;
 incident_ctx g_inc = { 0, 0, 0, NAN, NAN };
@@ -513,10 +515,10 @@ int main(int argc, char **argv)
     run("R3 26 t 0.5 pedal from 30, junction at 500 m, WITH route", {26000, 30, 6, 40, 3, 0.5f, 0, -1, -1, r_flat, 1, 500}, c_half);
     run("R4 40 t at 80, pedal released t=10-50 on -0.8% (eco-roll, Normal)", {40000, 80, 12, 70, 3, 0.5f, 0, -1, -1, r_down, 0}, c_release);
     run("R4b same in Power (no roll)", {40000, 80, 12, 70, 1.6667f, 0.5f, 0, -1, -1, r_down, 0}, c_release);
-    g_cruise_smooth = 1;
+    g_cruise_smooth = 1; g_pcc_on = 1;
     run("R5 26 t cruise 80 on hills +-1.5% (roll with cruise, Eco)", {26000, 80, 12, 240, 10, 0.5f, 0, -1, -1, r_hills, 1}, c_cc80);
     run("R5b same, eco-roll off via Power", {26000, 80, 12, 240, 1.6667f, 0.5f, 0, -1, -1, r_hills, 1}, c_cc80);
-    g_cruise_smooth = 0;
+    g_cruise_smooth = 0; g_pcc_on = 0;
     // PCC band (Damien 11-10): a top within reach is taken in this gear (at most -5 km/h), a long climb still downshifts.
     for (float b : std::initializer_list<float>{0.0f, 5.0f}) {
         set_param("crest_band_kmh", b);

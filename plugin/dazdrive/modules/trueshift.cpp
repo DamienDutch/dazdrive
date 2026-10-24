@@ -26,7 +26,7 @@ static float p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, 
     p_max_skip, p_skip_acc, p_skip_wait, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
-    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_cruise, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_stop, p_tones, p_crest_band;
+    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_cruise, p_roll_cruise_min, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_stop, p_tones, p_crest_band;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = TrueShift on, 0 = the game's own automatic" },
@@ -86,7 +86,8 @@ static param g_params[] = {
     { "eco_roll_max_decel_eco", &p_roll_dec_eco, 0.08f, "the same in Eco: a slightly steeper stretch may still be rolled (0.08 = ~6 km/h in 20 s)" },
     { "eco_roll_min_kmh_eco", &p_roll_min_eco, 40, "Eco: the lowest speed that starts an eco-roll (km/h; Normal and Power: 50)" },
     { "eco_roll", &p_roll, 1, "1 = roll in neutral with the pedal released on gentle stretches (Eco, Normal and Power; not in M; never with any brake)" },
-    { "eco_roll_cruise", &p_roll_cruise, 1, "1 = eco-roll also while the cruise control is on (needs SteadyCruise); 0 = only with the cruise off" },
+    { "eco_roll_cruise", &p_roll_cruise, 1, "1 = roll in neutral also while the cruise control is on, even with eco_roll 0. Needs SteadyCruise, predictive cruise (PCC), lookahead and a route; 0 = only with the cruise off" },
+    { "eco_roll_cruise_min_s", &p_roll_cruise_min, 15, "with cruise: when the cruise first has to build the roll boost speed, a roll must be expected to last this long (s); without the boost 10 s" },
     { "tones", &p_tones, 1, "1 = a short tone when the mode changes (Eco low, Normal middle, Power rising, M two short)" },
     { "retarder_downshift", &p_ret_down, 0, "1 = the retarder also makes TrueShift keep the rpm up like the engine brake (a retarder does not need it); 0 = only the engine brake does" },
     { "air_charge_psi", &p_air_psi, 100, "brake air below this (psi): keep the rpm up so the engine-driven compressor refills it; 0 = off" },
@@ -694,9 +695,12 @@ static int roll_exit_gear(float v, int ebrake, float brake)
 static int roll_wanted(float v, float f_res, int ebrake, float brake, double pedal_free_s)
 {
     S.boost_want = 0;
-    if (p_roll <= 0 || (S.mode != MODE_ECO && S.mode != MODE_NORMAL && S.mode != MODE_POWER) || !S.ours) return 0;
     float kmh = v * 3.6f, set = T.cruise * 3.6f;
     int cc = T.cruise > 0.5f;
+    // with cruise only under predictive cruise (Damien 25-10): a roll needs the route to know how long it lasts; the plain
+    // eco_roll switch is not needed for it (eco_roll_cruise is its own option)
+    int cc_ok = cc && p_roll_cruise > 0 && g_cruise_smooth && g_pcc_on && p_lookahead > 0 && route_ok();
+    if ((p_roll <= 0 && !cc_ok) || (S.mode != MODE_ECO && S.mode != MODE_NORMAL && S.mode != MODE_POWER) || !S.ours) return 0;
     // a little gas before the roll (Damien 24-10): with cruise the roll may start up to roll_boost over the set speed, and the
     // cruise control builds that speed first; not in Power, not when the set speed is a speed limit being eased down
     float boost = cc && g_cruise_smooth && S.mode != MODE_POWER && !S.rolling ? p_roll_boost : 0;
@@ -706,7 +710,7 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
         float vs = route_curve_speed(2.5f, 0.3f);
         if (vs == vs && vs * 3.6f < set + boost + 6) boost = 0;
     }
-    if ((cc && (!g_cruise_smooth || p_roll_cruise <= 0)) || brake > 0.02f || ebrake) return 0;
+    if ((cc && !cc_ok) || brake > 0.02f || ebrake) return 0;
     if (S.rolling ? T.in_thr > 0.1f : (T.in_thr > 0.02f || (!cc && T.eff_thr > 0.02f) || pedal_free_s < 1.5)) return 0;
     // Damien: at most 1-2 km/h under the set speed, then back on the gas; leave a little early (re-engaging
     // takes ~1 s) using the current deceleration
@@ -740,7 +744,9 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
         // band made 0.5 s rolls that hunted, sim R5b)
         // (the worse of now and the route's 20 s mean: sim R5b started at -0.03 predicted but -0.14 now and rolled 1.5 s)
         float a_chk = fminf(a_pred, a_n);
-        if (cc && a_chk < 0 && (fmaxf(kmh, set + boost) - (set - under)) / 3.6f / -a_chk < 10) return 0;
+        // 10 s; 15 s (eco_roll_cruise_min_s) when the cruise first has to spend gas on the boost speed
+        float need_s = boost > 0 && kmh < set + boost - 0.5f ? p_roll_cruise_min : 10;
+        if (cc && a_chk < 0 && (fmaxf(kmh, set + boost) - (set - under)) / 3.6f / -a_chk < need_s) return 0;
         if (a_pred > 0.075f || a_pred < -(eco ? p_roll_dec_eco : p_roll_dec)) {
             // over a top: a short climb left and a gentle way down after it
             float crest = rk ? route_crest_m(v * 5) : -1;

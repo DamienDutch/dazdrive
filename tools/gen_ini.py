@@ -52,7 +52,6 @@ STANDARD = {
         "limiter_kmh": 90,       # ON: set speed never above the game's speed limiter (cap 90)
         "acc_calm_cut_in": 1,    # ON: someone cutting in or pulling away does not make the ACC speed up/slow down hard; ridden
         "acc_cycle_up": 1,       # ON: distance key order C -> 1 -> 2 -> 3 (the game: far, middle, close, off); ridden
-        "set_ease_kmh_s": 2,     # ON: a lower set speed is reached by easing down at 2 km/h/s
         "step_tap_kmh": 5,       # ON: tap on + / - = 5 km/h step
         "step_hold_kmh": 1,      # ON: hold on + / - = 1 km/h steps
         "retarder_off_on_set": 1,# ON: retarder lever on is switched off when you press set/resume (the game refuses/cancels cruise)
@@ -257,6 +256,8 @@ SETUP_GROUPS = [
          "keys": [["cruise", "aeb_without_cruise", 1, 0]]},
         {"kind": "toggle", "label": "Distance key goes off, close, middle, far", "help": "The game: far, middle, close.",
          "keys": [["cruise", "acc_cycle_up", 1, 0]]},
+        {"kind": "toggle", "label": "Coast in neutral with cruise on", "help": "On gentle descents, with Cruise looks ahead and a route. The cruise gives a little gas first, and only for a roll of 15 s or more. Works without Eco-roll.",
+         "keys": [["trueshift", "eco_roll_cruise", 1, 0]]},
         {"kind": "toggle", "label": "Pressing Set turns the retarder off", "help": "The game refuses cruise while the retarder lever is on.",
          "keys": [["cruise", "retarder_off_on_set", 1, 0]]}]},
     {"id": "lka", "off_when": ["lane", "mode", "0"], "title": "Lane centering", "section": "lane",
@@ -264,6 +265,7 @@ SETUP_GROUPS = [
                 {"name": "Quiet", "desc": "No tones", "over": {"lane": {"tone": 0}}}],
      "about": ["How lane centering behaves."],
      "knobs": [
+        {"kind": "toggle", "label": "Off at a roundabout", "help": "When the cruise cancels itself for a roundabout, lane centering goes off too, and back on at the next Resume.", "keys": [["lane", "roundabout_off", 1, 0]]},
         {"kind": "toggle", "label": "Tones when it switches on, off or pauses", "help": "Rising for on, falling for off.", "keys": [["lane", "tone", 1, 0]]}]},
     {"id": "crawl", "off_when": ["creep", "enabled", "0"], "title": "Crawl mode", "section": "creep",
      "tuning": [{"name": "Standard", "desc": "5 km/h", "over": {}},
@@ -307,12 +309,12 @@ BUTTONS = []
 # calls it "Standard (as shipped)" while nothing is changed.
 # The _OFF lists name the look-ahead keys too although STANDARD has them off already, so the old years do not depend on it.
 _OFF_1995 = {
-    "trueshift": {"eco_roll": 0, "lookahead": 0, "smooth_stop": 0, "eco_roll_cruise": 0},
+    "trueshift": {"eco_roll": 0, "lookahead": 0, "smooth_stop": 0},
     "cruise": {"curves": 0, "curve_brake": 0, "descent": 0, "emergency_hazards": 0, "acc_calm_cut_in": 0,
                "hill_start": 0, "predictive": 0, "aeb": 0},
 }
 _OFF_2000 = {
-    "trueshift": {"eco_roll": 0, "lookahead": 0, "eco_roll_cruise": 0},
+    "trueshift": {"eco_roll": 0, "lookahead": 0},
     "cruise": {"curves": 0, "curve_brake": 0, "emergency_hazards": 0, "predictive": 0, "aeb": 0},
 }
 # ~2010 is the shipped preset, so it overrides nothing
@@ -350,9 +352,6 @@ FEATURES = [
     {"id": "roll", "group": "Gearbox", "stage": "stable", "since": "2006", "label": "Eco-roll", "desc": "Coasts in neutral on gentle descents to save fuel", "needs": ["ts"],
      "info": "On a gentle descent with the pedal released, the gearbox goes to neutral and the truck coasts. Never with the brake, engine brake or retarder. It shifts back in when you press the pedal or the speed drops too far.",
      "keys": [["trueshift", "eco_roll", 1, 0]]},
-    {"id": "rollc", "group": "Gearbox", "stage": "stable", "since": "2006", "label": "Eco-roll with cruise", "desc": "Also coasts while the cruise is on", "needs": ["roll", "cc"],
-     "info": "With cruise on, the truck coasts on gentle descents and stays close to the set speed: just before a roll the cruise lets the speed come about 2 km/h over, and the roll ends a little under it. Needs SteadyCruise.",
-     "keys": [["trueshift", "eco_roll_cruise", 1, 0]]},
     {"id": "look", "group": "Gearbox", "stage": "stable", "since": "2012", "label": "Gearbox looks ahead", "desc": "Plans gears for climbs and hilltops on your route", "needs": ["ts"],
      "info": "Reads climbs, hilltops and junctions on your navigation route. Holds a gear before a climb instead of shifting halfway up, and rolls over hilltops. Without a route it shifts as normal. Real trucks call this predictive shifting.",
      "keys": [["trueshift", "lookahead", 1, 0]]},
