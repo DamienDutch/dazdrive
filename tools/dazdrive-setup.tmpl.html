@@ -237,7 +237,7 @@ body.explain .tiles{grid-template-columns:1fr}
 <p class="legend"><span><span class="stage stable">Stable</span> tested a lot</span><span><span class="stage beta">Beta</span> light testing</span><span><span class="stage experimental">Experimental</span> not proven</span></p>
 <div class="start go">
 <button class="big" type="button" data-go="s-feat"><b>Check the feature list</b><small>See what is on, switch single features</small></button>
-<button class="big" type="button" data-go="s-save"><b>Continue</b><small>Go on with this year as it is</small></button>
+<button class="big" type="button" data-go="s-tune"><b>Continue</b><small>Go on with this year as it is</small></button>
 </div>
 </section>
 
@@ -246,8 +246,7 @@ body.explain .tiles{grid-template-columns:1fr}
 <p class="mute">Click a name for details.</p>
 <div id="tiles"></div>
 <div class="start go">
-<button class="big" type="button" data-go="s-tune"><b>Fine-tune settings</b><small>Presets and sliders per module</small></button>
-<button class="big" type="button" data-go="s-save"><b>Continue</b><small>Go on with these features</small></button>
+<button class="big" type="button" data-go="s-tune"><b>Continue</b><small>Fine-tune the settings</small></button>
 </div>
 </section>
 
@@ -750,7 +749,7 @@ if (typeof document !== "undefined") (function () {
   } else {
     li("Move it next to this page and <b>overwrite</b> the old one: " + folder);
   }
-  li("Restart the game");
+  li("(Re)start the game");
   function text() { return buildIni(D, era, vals); }
   // the answer to Save / Copy: in the Save card, and as a toast in the fixed bar (the card is below the fold)
   var toastT = 0;
