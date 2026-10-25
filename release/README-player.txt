@@ -145,8 +145,10 @@ TrueShift (gearbox)
   upshift does not pull, skips gears when the box is slow, kickdown, engine brake and retarder
   aware, clutch opens near idle when you brake to a stop (Smooth stop). Modes Eco, Normal (D),
   Power, M (manual: every shift is yours, like Volvo or Mercedes; a warning tone when the wheels
-  push the engine over its limit). Eco-roll puts it in neutral on gentle descents. With "Gearbox looks
-  ahead" it also uses the navigation route to pick gears for climbs and tops.
+  push the engine over its limit). Eco-roll puts it in neutral on gentle descents with the pedal
+  released; with the cruise on it rolls only with "Cruise looks ahead" (the ~2015 year), which knows
+  how long the roll lasts. With "Gearbox looks ahead" it also uses the navigation route to pick gears
+  for climbs and tops.
 
 Cruise
   SteadyCruise: a calm cruise throttle (no bursts after shifts, no hunting). Extras, each with its
