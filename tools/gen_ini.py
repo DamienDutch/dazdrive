@@ -36,7 +36,7 @@ STANDARD = {
         "lookahead": 0,          # off in the shipped preset: the ~2010 year of the setup page; the page turns it on from ~2015
         "no_creep": 1,           # ON: with crawl off the truck never creeps on the clutch at idle (the stock automatic did)
         "smooth_stop": 1,        # ON: clutch opens around idle when braking to a stop (no pushing down to 2 km/h); ridden
-        "dash_letter": 1,        # ON: D/E/P/M on the dashboard instead of A
+        "dash_letter": 1,        # ON: D/E/S/M on the dashboard instead of A
         "tones": 1,              # ON: short tone when the mode changes
         "trace": 1,              # csv traces (need log_level 2): ON in the betas for bug reports, off in the first full release
     },
@@ -225,7 +225,7 @@ SETUP_GROUPS = [
                                                       ["2", "Assisted: like Protected, plus kickdown, a downshift when you brake to a stop, and one gear down when the engine lugs (like a VW DSG)"]]},
         {"kind": "range", "label": "Gear stays in after + or −", "help": "How long a gear you picked stays in, in seconds. 0 = off.",
          "unit": "s", "min": 0, "max": 30, "step": 1, "key": ["trueshift", "hint_hold_s"]},
-        {"kind": "toggle", "label": "Show the mode on the dashboard", "help": "D, E, P or M instead of the game's A.",
+        {"kind": "toggle", "label": "Show the mode on the dashboard", "help": "D, E, S or M instead of the game's A.",
          "keys": [["trueshift", "dash_letter", 1, 0]]},
         {"kind": "toggle", "label": "Tone when the mode changes", "help": "Eco low, Normal middle, Power rising, M two short.",
          "keys": [["trueshift", "tones", 1, 0]]}]},

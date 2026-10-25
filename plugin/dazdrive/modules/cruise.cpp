@@ -1774,7 +1774,7 @@ static void cr_frame()
                 s_isa_last = -1;
                 state_write();  // remembered
                 play_cue(p_isa > 0 ? CUE_ON : CUE_OFF);
-                g_dash_flash = p_isa > 0 ? 'S' : 'X';  // S = following the speed signs, X = off (1.5 s)
+                g_dash_flash = p_isa > 0 ? 'I' : 'X';  // I = ISA, following the speed signs, X = off (1.5 s); S is Power now
                 g_dash_flash_until = wall_s() + 1.5;
                 logline("Cruise: speed limit following %s", p_isa > 0 ? "on" : "off");
             }

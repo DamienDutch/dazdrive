@@ -13,7 +13,7 @@
 //
 // Modes follow the game's adaptive-shift keybind (cvar g_adaptive_shift):
 // Eco (10), Normal (3), Power (1.67) and the game's "off" slot (0) = M, assisted
-// manual. The dashboard's "A" becomes D/E/P/M.
+// manual. The dashboard's "A" becomes D/E/S/M.
 #include "../core/suite.h"
 #include "../core/game.h"
 #include "../core/route.h"
@@ -67,7 +67,7 @@ static param g_params[] = {
     { "ebrake_light_rpm", &p_eb_light, 1100, "rpm the lightest engine brake/retarder stage keeps (the full stage keeps the engine's brake range)" },
     { "m_style", &p_m_style, 0, "M mode: 0 = European (like Volvo, Mercedes): every shift is yours, also at the rev limiter; a warning tone when the engine goes over its limit (the wheels push it, e.g. downhill). 1 = protected (like Eaton): also one gear up at the rev limiter and one down before the engine stalls. 2 = assisted (like a VW DSG): also kickdown, downshifts when braking to a stop and one gear down when lugging" },
     { "m_lug_rpm", &p_m_lug, 1000, "M mode with m_style 2: one gear down below this rpm with a lot of pedal and no pull" },
-    { "dash_letter", &p_letter, 1, "1 = the dashboard shows the mode (D, E, P, M) instead of A" },
+    { "dash_letter", &p_letter, 1, "1 = the dashboard shows the mode (D, E, S, M) instead of A" },
     { "start_gear_fix", &p_start_fix, 1, "1 = lower the game's start gear when the launch would be too slow" },
     { "launch_max_kmh", &p_launch_max, 14, "a start gear above the game's pick is allowed when the clutch would be closed by this speed (km/h at launch_rpm) and the slip time stays within launch_slip_s: on a light or downhill start the truck no longer revs a low gear to the limiter. Not in Power or M. 0 = never above the game's pick (the game picks by a number in the truck definition: 4 solo, 1 with a trailer, whatever the gear ratios are). With this on, a full pedal does not demand a quicker clutch than a normal one" },
     { "launch_slip_s", &p_slip_s, 1.0f, "longest clutch-slip time accepted for a start gear" },
@@ -102,7 +102,7 @@ static param g_params[] = {
 // ---------------------------------------------------------------- state
 
 static const char *const mode_name[] = { "Normal", "Eco", "Power", "M" };
-static const char mode_letter[] = { 'D', 'E', 'P', 'M' };
+static const char mode_letter[] = { 'D', 'E', 'S', 'M' };  // S = Sport (Power); P felt like Park (Damien 25-10)
 
 static window_fn o_window;
 static gear_fn o_choose, o_start;

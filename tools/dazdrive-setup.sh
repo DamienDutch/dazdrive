@@ -31,7 +31,7 @@ fi
 # ---- the questions: section|key|kind|label    kind: b = on/off, n = number, c:a/b/c = choice
 Q='core|log_level|c:0/1/2|How much goes into dazdrive.log (1 is fine; 2 also writes big csv files)
 trueshift|enabled|b|TrueShift: the gearbox logic
-trueshift|dash_letter|b|Show the gearbox mode (D, E, P, M) on the dashboard
+trueshift|dash_letter|b|Show the gearbox mode (D, E, S, M) on the dashboard
 trueshift|eco_roll|b|Eco-roll: neutral on gentle descents (Eco and Normal modes)
 trueshift|smooth_stop|b|Smooth stop: open the clutch around idle when braking to a stop
 trueshift|lookahead|b|Use the navigation route ahead (climbs, tops, junctions)

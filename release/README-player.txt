@@ -203,10 +203,10 @@ The plugin writes a letter on the dashboard's gear indicator and plays short, qu
 tone=0 in [lane] the lane tones).
 
 Letters
-  D / E / P / M   Gearbox mode: Normal / Eco / Power / Manual (A in reverse)
+  D / E / S / M   Gearbox mode: Normal / Eco / Power (Sport) / Manual (A in reverse)
   1 / 2 / 3       ACC distance just chosen: close / medium / far (for 1.5 s).
                   C = plain cruise, ACC off. acc_letter=1 shows A instead
-  S / X           Speed-limit following on / off (1.5 s). X also for crawl and lane off
+  I / X           Speed-limit following (ISA) on / off (1.5 s). X also for crawl and lane off
   L               Lane centering switched on (1.5 s)
   C               Crawl mode is on (steady)
   B               Auto Hold / hill hold is braking (steady)
