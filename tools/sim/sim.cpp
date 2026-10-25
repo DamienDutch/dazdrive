@@ -245,6 +245,7 @@ void telemetry_frame()
 // ---- run statistics
 static int shifts, ups, hunts, last_dir; static double last_shift_t;
 static double up_rpm_sum; static int up_n;
+static double up_rpm_min, rpm_all_sum, rpm_all_t, skip_rpm_min, skip_pull_min; static int skips_up, hunts_ts, shifts_ts;   // RELAX study: landing rpm, mean rpm below 50 km/h, skips, and shifts/hunting above the takeover speed
 static double rpm_sum, rpm_t;   // time-weighted rpm in the second half
 
 static int g_rst_every = 0, g_rst_level = 0;   // robustness runs: inject a session reset every N seconds
@@ -266,7 +267,16 @@ static void tick(double dt, int stats)
     // gearbox
     if (M.state && t_now >= M.shift_end) {
         int dir = M.target > M.gear ? 1 : -1;
-        if (dir > 0 && M.gear > 0) { ups++; up_rpm_sum += rpm_now(); up_n++; }
+        if (dir > 0 && M.gear > 0) { ups++; up_rpm_sum += rpm_now(); up_n++; if (M.target > M.gear + 1) skips_up++;
+            float lr = M.v / RADIUS * RATIO[M.target-1] * DIFF * 9.5493f; if (lr < up_rpm_min && M.v * 3.6f >= 8) up_rpm_min = lr;
+            if (M.target > M.gear + 1 && M.v * 3.6f >= 8) {   // a skip of ours: landing rpm and the pull right after it at the pedal of now
+                engine_info e; gb_engine(0, &e);
+                float F = TORQUE * curve_factor(&e, lr) * fmaxf(M.pedal, M.cc) * RATIO[M.target-1] * DIFF * 0.9f / RADIUS;
+                float Fr = M.mass * 9.81f * (sinf(atanf(M.grade_pct / 100)) + 0.006f) + 0.5f * 1.2f * CDA * M.v * M.v;
+                if (lr < skip_rpm_min) skip_rpm_min = lr;
+                if ((F - Fr) / M.mass < skip_pull_min) skip_pull_min = (F - Fr) / M.mass;
+            } }
+        if (M.v * 3.6f >= 8) { shifts_ts++; if (last_dir && dir != last_dir && t_now - last_shift_t < 5) hunts_ts++; }
         if (last_dir && dir != last_dir && t_now - last_shift_t < 5) hunts++;
         last_dir = dir; last_shift_t = t_now;
         M.gear = M.target; M.state = 0; shifts++;
@@ -310,6 +320,7 @@ static void tick(double dt, int stats)
     if (M.v < 0) M.v = 0;
     M.s += M.v * dt;
     if (stats) { rpm_sum += rpm_now() * dt; rpm_t += dt; }
+    if (M.gear > 0 && !M.state && M.v * 3.6f < 50) { rpm_all_sum += rpm_now() * dt; rpm_all_t += dt; }
 }
 
 struct setup { float mass, v0; int g0; double secs; float cvar = 3, shift_time = 0.5f, mass_seen = 0; int eb_toggle = -1; float eb_level = -1;
@@ -329,6 +340,7 @@ static void run(const char *name, setup su, void (*ctl)(double))
     M.state = 0; M.gear = M.target = su.g0; M.force = 0;
     M.v = su.v0 / 3.6f; shifts = ups = hunts = last_dir = 0; up_rpm_sum = 0; up_n = 0; rpm_sum = rpm_t = 0;
     M.s = 0; rolls = 0; roll_time = 0; min_kmh = 1e9; t_30 = t_50 = t_80 = d_80 = -1;
+    up_rpm_min = skip_rpm_min = skip_pull_min = 1e9; rpm_all_sum = rpm_all_t = 0; skips_up = hunts_ts = shifts_ts = 0;
     int f0 = n_failed;
     double t0 = t_now, next_print = t0;
     while (t_now - t0 < su.secs) {
@@ -373,6 +385,7 @@ static void c_p20(double) { M.pedal = 0.2f; }
 static void c_p30(double) { M.pedal = 0.3f; }
 static void c_p40(double) { M.pedal = 0.4f; }
 static void c_p50(double) { M.pedal = 0.5f; }
+static float g_ped; static void c_ped(double t) { M.pedal = g_ped >= 0 ? g_ped : 0.42f + 0.12f * sinf((float)t * 6.2832f / 5); }   // < 0: a wavering foot, 0.30-0.54 every 5 s
 // Adaptive cruise set to 80 behind a truck doing 50: bursts, then long gaps.
 static void c_acc(double t) { M.cruise_kmh = 80; M.pedal = 0; float e = 50 / 3.6f - M.v; M.cc = e > 0.3f ? 1.0f : e < -0.3f ? 0.0f : 0.3f; }
 static void c_light(double) { M.pedal = 0.4f; }
@@ -495,6 +508,30 @@ int main(int argc, char **argv)
     if (getenv("NOBOOST")) set_param("eco_roll_boost_kmh", 0);
     if (getenv("NOLOAD")) set_param("load_down_from", 1);
 
+    if (getenv("RELAX")) {  // skip_relax_rpm study: pull-away at a fixed pedal from a standstill, 12 and 25 km/h, 12/20/36 t, both of his boxes
+        // CSV: truck, t, pedal (-1 = wavering), from km/h, s to 30/50/80, shifts, ups, skips, hunting pairs, no-pull lessons, incidents,
+        // lowest up-landing rpm (>= 8 km/h), mean rpm below 50 km/h, shifts and hunting pairs >= 8 km/h, lowest skip landing rpm, lowest pull after a skip (m/s2)
+        // env: RELAX_R = skip_relax_rpm (0 = the old floor), RELAX_MS = max_skip, RELAX_IDLE = idle_rpm
+        const char *ks[] = { "skip_relax_rpm", "max_skip", "idle_rpm" }, *es[] = { "RELAX_R", "RELAX_MS", "RELAX_IDLE" };
+        for (int i = 0; i < 3; i++) if (getenv(es[i])) set_param(ks[i], (float)atof(getenv(es[i])));
+        struct Tr { const char *name; void (*use)(); int g0; } trucks[2] = { { "ATO", use_ato, 1 }, { "XT", use_renault, 3 } };
+        for (auto &tr : trucks) {
+            tr.use();
+            for (float mass : { 12000.0f, 20000.0f, 36000.0f })
+                for (float ped : { 0.1f, 0.2f, 0.3f, 0.35f, 0.4f, 0.45f, 0.5f, 0.55f, 0.6f, 0.7f, 1.0f, -1.0f })
+                    for (float v0 : { 1.0f, 12.0f, 25.0f }) {
+                        int g0 = tr.g0;
+                        if (v0 > 5) for (int g = 1; g <= NG; g++) { float r = (v0 / 3.6f) / RADIUS * RATIO[g - 1] * DIFF * 9.5493f; if (r >= 1000) g0 = g; }
+                        g_ped = ped; int i0 = g_n_incidents, f0 = n_failed;
+                        char nm[160]; snprintf(nm, sizeof nm, "RELAX %s %.0f t pedal %.2f from %.0f km/h in %d", tr.name, mass / 1000, ped, v0, g0);
+                        run(nm, {mass, v0, g0, 120}, c_ped);
+                        printf("CSV,%s,%.0f,%.2f,%.0f,%.1f,%.1f,%.1f,%d,%d,%d,%d,%d,%d,%.0f,%.0f,%d,%d,%.0f,%.2f\n", tr.name, mass / 1000, ped, v0, t_30, t_50, t_80,
+                               shifts, ups, skips_up, hunts, n_failed - f0, g_n_incidents - i0, up_rpm_min < 1e8 ? up_rpm_min : 0, rpm_all_t > 0 ? rpm_all_sum / rpm_all_t : 0, shifts_ts, hunts_ts,
+                               skip_rpm_min < 1e8 ? skip_rpm_min : 0, skip_pull_min < 1e8 ? skip_pull_min : 0);
+                    }
+        }
+        return 0;
+    }
     if (getenv("ACCEL0")) {  // pull-away from a standstill at light pedal, on his two boxes: 0 to 30 and 0 to 50 km/h with 0 or 2 skipped gears
         struct Tr { const char *name; void (*use)(); int g0; } trucks[2] = { { "ATO2612F (12, diff 3.08)", use_ato, 1 }, { "Xtended 12+2 (diff 3.40)", use_renault, 3 } };
         void (*ctls[4])(double) = { c_p20, c_p30, c_p40, c_p50 }; const char *cn[4] = { "0.2", "0.3", "0.4", "0.5" };

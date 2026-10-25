@@ -26,7 +26,7 @@ static float p_eco_ceil, p_mode_char, p_enabled, p_takeover, p_on_kmh, p_off_kmh
     p_max_skip, p_skip_acc, p_skip_wait, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
-    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_cruise, p_roll_cruise_min, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_stop, p_tones, p_crest_band;
+    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_cruise, p_roll_cruise_min, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_stop, p_tones, p_crest_band, p_relax;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = TrueShift on, 0 = the game's own automatic" },
@@ -47,6 +47,7 @@ static param g_params[] = {
     { "skip_wait_over_rpm", &p_skip_over, 400, "skip_wait_s: how far over the upshift point the revs may build up while waiting for a skip (rpm; never above 85 % of the limit)" },
     { "kick_dwell_s", &p_kick_dwell, 5, "after a kickdown or lugging downshift no upshift for this long, unless clearly past the upshift point (the rpm path, not the rev limit)" },
     { "skip_wait_s", &p_skip_wait, 6, "pulling lightly: wait up to this long for the revs to build up so a skip can land (0 = shift one gear at once)" },
+    { "skip_relax_rpm", &p_relax, 80, "pulling lightly at low speed: a skip may land up to this much lower (rpm), never under the downshift point plus hysteresis_rpm. Full below pedal 0.30 and 35 km/h, gone by pedal 0.45 or 60 km/h (0 = off)" },
     { "hysteresis_rpm", &p_hyst, 50, "an upshift must land at least this far above the next downshift point" },
     { "kickdown_pedal", &p_kick_pedal, 0.92f, "pedal position for kickdown" },
     { "kickdown_rate", &p_kick_rate, 1.5f, "pedal speed (per second) that makes a full press a kickdown" },
@@ -335,6 +336,22 @@ static lesson learned();
 static float cruise_floor(int g, float under = 0)
 {
     return fmaxf(S.plateau + p_cruise_rpm + mode_rpm() - under, base_dn(g) + p_hyst + 50) + learned().rpm;
+}
+
+static float skip_accel();
+// Lowest landing rpm of an upshift on the rpm path: above the downshift point that applies plus the hysteresis, and at least idle + 350.
+// A skip (2 gears or more) pulling lightly at low speed may go up to skip_relax_rpm under the idle + 350 part (the engine has
+// plenty of torque there), never under the downshift point plus the hysteresis, so it cannot shift straight back down.
+// Gradual, not a switch: full below pedal (demand) 0.30 and 35 km/h, gone at 0.45 or 60 km/h, and only while the skipped-to gear
+// still pulls at least skip_accel at the pedal of now (half of it: no relaxation). Firm pedal and higher speeds keep the strict floor.
+static float skip_relax(float v, float a_now)
+{
+    if (p_relax <= 0) return 0;
+    return p_relax * (1 - smooth(0.30f, 0.45f, S.demand)) * (1 - smooth(35 / 3.6f, 60 / 3.6f, v)) * smooth(0.5f * skip_accel(), skip_accel(), a_now);
+}
+static float land_floor(int h, float a_h, float relax)
+{
+    return fmaxf((a_h < a_power() ? dn_pt(h) : base_dn(h)) + p_hyst, idle_rpm() + 350 - relax);
 }
 
 static int skip_allowed() { return (int)p_max_skip; }
@@ -1193,7 +1210,7 @@ static int decide_gear(void *self, const char **why)
         for (int h = cur + 1; h <= n && h <= maxg; h++) {
             float rh = rpm_at(h, v2u);
             float a_h = (force_at(h, v2u, 0.95f) - f_up) / S.mass;
-            if (rh < fmaxf((a_h < a_power() ? dn_pt(h) : base_dn(h)) + p_hyst, idle_rpm() + 350)) {
+            if (rh < land_floor(h, a_h, h > cur + 1 ? skip_relax(v2u, (force_at(h, v2u, clampf(S.demand, 0.1f, 1.0f)) - f_up) / S.mass) : 0)) {
                 block = "rpm too low after shift";
                 break;
             }
