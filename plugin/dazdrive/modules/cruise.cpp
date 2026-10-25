@@ -79,7 +79,7 @@ static param g_params[] = {
     { "junction_coast_decel", &p_jn_coast, 0.2f, "approaching a junction or roundabout the cruise may still pick up speed while the truck could coast down to the junction speed at this deceleration (m/s2; a loaded truck coasts at about 0.1 to 0.2); no gas above that speed" },
     { "junction_approach_over_kmh", &p_jn_over, 20, "and never faster than the junction speed plus this (km/h) on the approach" },
     { "junction_handover_kmh", &p_jn_hand_kmh, 6, "the cruise is only cancelled for a junction once the speed is down to the junction speed plus the margin plus this (km/h) ..." },
-    { "junction_handover_m", &p_jn_hand_m, 45, "... or when the junction is this close (m), whatever the speed" },
+    { "junction_handover_m", &p_jn_hand_m, 30, "... or when the junction is this close (m), whatever the speed" },
     { "speed_limiter_kmh", &p_own_lim, 0, "our own speed limiter (km/h, 0 = off): the throttle fades out over the last 3 km/h, in every mode and with the pedal curves, and the cruise set speed never goes above it. Switch the game's own limiter off" },
     { "junction_cancel_s", &p_jn_cancel_s, 5, "this many seconds before a junction or roundabout we slowed for, the cruise is cancelled with a sound (the game's Resume brings the set speed back). 0 = never" },
     { "junction_min_deg", &p_junc_deg, 25, "turns smaller than this (degrees) are not slowed for" },
