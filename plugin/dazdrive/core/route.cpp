@@ -22,7 +22,8 @@ static struct R_t {
     char herm[N_SAMPLES];   // the sample lies on a Hermite curve through the node directions (else on a straight line between nodes)
     float junction_m;
     // Junctions ahead whose turn / roundabout limits the speed (see build()).
-    struct Jn { float d_in, d_out, turn, radius, ratio; int curves, round; } jn[4];
+    // 8 slots (was 4): on a road with a small prefab every 100 m, 4 slots did not reach the 400 m the cruise plans over.
+    struct Jn { float d_in, d_out, turn, radius, ratio; int curves, round; } jn[8];
     int njn;
     double at;
     char *task;
@@ -36,12 +37,13 @@ static struct R_t {
 typedef unsigned long long u64;
 
 // Junction look-ahead settings (cruise.cpp sets them from its ini).
-static struct { int on; float lat, rb_ms, min_deg, ratio; int herm; } JC = { 0, 2.0f, 25 / 3.6f, 25, 1.4f, 1 };
+static struct { int on; float lat, rb_ms, min_deg, ratio; int herm, min_curves; } JC = { 0, 2.0f, 25 / 3.6f, 25, 1.4f, 1, 2 };
 void route_hermite(int on) { JC.herm = on; }
-void route_junction_cfg(int on, float lat, float roundabout_kmh, float min_deg, float roundabout_ratio)
+void route_junction_cfg(int on, float lat, float roundabout_kmh, float min_deg, float roundabout_ratio, int roundabout_curves)
 {
     JC.on = on; JC.lat = lat > 0.3f ? lat : 0.3f; JC.rb_ms = roundabout_kmh / 3.6f;
     JC.min_deg = min_deg; JC.ratio = roundabout_ratio;
+    JC.min_curves = roundabout_curves >= 2 ? roundabout_curves : 2;
 }
 
 static int node_pos(const char *items, u64 i, float p[3])
@@ -133,7 +135,7 @@ static void find_junctions(char *task, const char *items, u64 n, u64 seg, float 
     }
     if (lq >= ln) return;
     u64 pi = seg + 1;  // physical index of the last type-0 item seen
-    for (u64 q = lq + 1; q < ln && R.njn < 4; q++) {
+    for (u64 q = lq + 1; q < ln && R.njn < 8; q++) {
         const char *it = litems + q * 0x30;
         unsigned ty;
         const char *ip;
@@ -161,10 +163,12 @@ static void find_junctions(char *task, const char *items, u64 n, u64 seg, float 
         memcpy(&ie, litems + (r + 1) * 0x30 + 8, 8);
         u64 pe = pi, px = pi + 1;
         if (te != 0 || px + 1 >= n || px >= seg + 1 + (u64)nc || pe < 1 || *(char *const *)(items + px * 0x20) != ie) {
-            // a prefab on the route that cannot be read as a junction (Damien 25-10, a roundabout at 46 m the plugin did not know): say why, once per prefab
+            // a prefab on the route that cannot be read as a junction (Damien 25-10, a roundabout at 46 m the plugin did not know): say why, once per prefab.
+            // Not when its exit merely lies beyond the ~1.7 km horizon: that one is read on a later refresh (25-10: all 20 such lines were at 1.7-1.9 km).
             static const char *rej[40]; static int nrej; int kn = 0;
             for (int k = 0; k < nrej; k++) kn |= rej[k] == ip;
-            if (!kn && nrej < 40) {
+            int horizon_only = te == 0 && px < n && px >= seg + 1 + (u64)nc && pe >= 1;
+            if (!kn && !horizon_only && nrej < 40) {
                 rej[nrej++] = ip;
                 logline("prefab not read as a junction: %.0f m ahead, %d items before its exit, exit type %u, %s%s%s%s", cum[pe > seg ? pe - (seg + 1) : 0], (int)(r - q + 1), te,
                         px + 1 >= n ? "route ends " : "", px >= seg + 1 + (u64)nc ? "exit beyond the horizon " : "", pe < 1 ? "no entry node " : "",
@@ -220,21 +224,46 @@ static void find_junctions(char *task, const char *items, u64 n, u64 seg, float 
         if (j.radius < 8) j.radius = 8;
         j.ratio = ratio;
         j.curves = (int)(r - q + 1);
-        // Roundabout [I]: 3+ navigation curves through one prefab (entry, ring parts, exit), or 2 curves with a longer
-        // path (>= 1.2 x chord), or any prefab whose path is >= JC.ratio x chord and not tiny.
-        j.round = j.curves >= 3 || (j.curves >= 2 && ratio >= 1.2f) || (ratio >= JC.ratio && chord >= 15);
-        // First sight of a prefab: log its head words so a roundabout flag can be found later.
-        static const char *seen[40];
+        // Roundabout [I, no flag known]: JC.min_curves (default 2) or more navigation curves through one prefab, whatever the path
+        // ratio, or any prefab whose path is >= JC.ratio x chord and not tiny. The ratio rule alone (2 curves and >= 1.2 x chord)
+        // missed a roundabout driven straight through: 2 curves, turn 1 deg, chord 72 m, path x1.07 (25-10 ride 4, 407 s: lane
+        // runaway and rollover guard inside it); a second one of the same shape (0 deg, x1.08, chord 72) at 1749 s ended in a
+        // stop inside the ring. In two days of logs every prefab with 2+ curves on the route was a roundabout (4 of 4 with
+        // evidence); a 1-curve path through a roundabout cannot be told from a plain prefab this way.
+        j.round = j.curves >= JC.min_curves || (ratio >= JC.ratio && chord >= 15);
+        // First sight of a prefab: log what we know of it, so a straight-through roundabout can be told apart next time.
+        // Ring of 64 (the old 40-entry cap was full after ~40 min, 25-10: the prefabs of 1749 s were never logged).
+        static const char *seen[64];
         static int nseen;
         int known = 0;
-        for (int k = 0; k < nseen; k++) known |= seen[k] == ip;
-        if (!known && nseen < 40 && mem_readable(ip, 0x80)) {
-            seen[nseen++] = ip;
+        for (int k = 0; k < 64; k++) known |= seen[k] == ip;
+        if (!known && mem_readable(ip, 0x80)) {
+            seen[nseen++ & 63] = ip;
             u64 w[12];
             memcpy(w, ip, sizeof w);
-            logline("junction ahead %.0f m: %d curve(s), turn %.0f deg, chord %.0f m, path x%.2f (scale %.1f, %d samples)%s; prefab item %p: "
-                    "%llx %llx %llx %llx %llx %llx %llx %llx %llx %llx %llx %llx",
-                    j.d_in, j.curves, turn * 57.2958f, chord, ratio, lscale, nl, j.round ? " ROUNDABOUT" : "", (const void *)ip,
+            // Words +12..+52 as floats look like two boxes: (x, y, z) min/max at +12/+32 (y spans the prefab's height) and an (x, z)
+            // pair at +24/+44 in another frame; sizes seen 25-10: 90x104 / 56x59 m for the straight-through roundabout, 84x102 / 66x64
+            // for a ROUNDABOUT, 42x45 / 29x29 for a small 90-degree junction. Unverified: logged as "box" for the next rides.
+            float fw[11];
+            memcpy(fw, ip + 12, sizeof fw);
+            // GPS length of each navigation curve (entry node -> curve 1 -> ... -> exit node), in meters when the scale is known
+            char cl[120]; int o = 0; float prev = ge;
+            cl[0] = 0;
+            for (u64 c2 = q; c2 <= r && o < (int)sizeof cl - 24; c2++) {
+                float de;
+                memcpy(&de, litems + c2 * 0x30 + 0x24, 4);
+                unsigned cid;
+                memcpy(&cid, litems + c2 * 0x30 + 4, 4);
+                int w = snprintf(cl + o, sizeof cl - o, "%s#%u:%.0f", c2 > q ? " " : "", cid, lscale > 0 ? (prev - de) / lscale : prev - de);
+                if (w < 0 || w >= (int)sizeof cl - o) break;
+                o += w;
+                prev = de;
+            }
+            if (o < (int)sizeof cl - 24) snprintf(cl + o, sizeof cl - o, " exit:%.0f%s", lscale > 0 ? (prev - gx) / lscale : prev - gx, lscale > 0 ? "" : " (gps units)");
+            logline("junction ahead %.0f m: %d curve(s), turn %.0f deg, chord %.0f m, path x%.2f (scale %.1f, %d samples)%s; curves [%s]; "
+                    "box %.0fx%.0f m (h %.0f..%.0f), box2 %.0fx%.0f m; uid %llx; prefab item %p: %llx %llx %llx %llx %llx %llx %llx %llx %llx %llx %llx %llx",
+                    j.d_in, j.curves, turn * 57.2958f, chord, ratio, lscale, nl, j.round ? " ROUNDABOUT" : "", cl,
+                    fabsf(fw[5] - fw[0]), fabsf(fw[7] - fw[2]), fw[1], fw[6], fabsf(fw[8] - fw[3]), fabsf(fw[9] - fw[4]), w[8], (const void *)ip,
                     w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9], w[10], w[11]);
         }
         q = r;
@@ -498,13 +527,23 @@ void route_probe_limit(float limit_kmh)
 }
 
 float route_junction_m() { return R.ok ? R.junction_m : -1; }
-// What the junction reading holds right now, for a log line: distance to the entry, turn, curves, roundabout flag, path ratio
+// Is the prefab whose EXIT is dist m ahead (route_junction_m: the prefab's GPS distance equals its exit node's, 25-10 logs: every
+// "not a known junction" line was the exit of the first known junction, d_in + chord) one of the junctions read? 0 = not read.
+// -1 = we are inside it (its entry lies behind the truck, so find_junctions no longer lists it).
+int route_junction_known(float dist)
+{
+    if (!R.ok) return 0;
+    for (int i = 0; i < R.njn; i++)
+        if (dist >= R.jn[i].d_in - 10 && dist <= R.jn[i].d_out + 10) return 1;
+    return R.njn == 0 || dist < R.jn[0].d_in ? -1 : 0;   // closer than the first entry ahead = a prefab we are in (its entry is behind us)
+}
+// What the junction reading holds right now, for a log line: distance to the entry and the exit, turn, curves, roundabout flag, path ratio
 void route_junction_dump(char *buf, size_t n)
 {
     int k = 0;
     buf[0] = 0;
-    for (int i = 0; i < R.njn && k < (int)n - 60; i++)
-        k += snprintf(buf + k, n - k, "%s[%.0f m, %.0f deg, %d curves, %s, x%.2f]", i ? " " : "", R.jn[i].d_in, fabsf(R.jn[i].turn) * 57.2958f, R.jn[i].curves,
+    for (int i = 0; i < R.njn && k < (int)n - 70; i++)
+        k += snprintf(buf + k, n - k, "%s[%.0f-%.0f m, %.0f deg, %d curves, %s, x%.2f]", i ? " " : "", R.jn[i].d_in, R.jn[i].d_out, fabsf(R.jn[i].turn) * 57.2958f, R.jn[i].curves,
                       R.jn[i].round ? "roundabout" : "junction", R.jn[i].ratio);
     if (!k) snprintf(buf, n, "none");
 }

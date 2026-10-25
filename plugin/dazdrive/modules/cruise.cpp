@@ -28,6 +28,7 @@
 
 static float p_herm;
 static float p_sg_rearm, p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
+static float p_rb_curves;  // roundabout_curves
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
 static param g_params[] = {
@@ -87,7 +88,8 @@ static param g_params[] = {
     { "junction_cancel_s", &p_jn_cancel_s, 5, "this many seconds before a junction or roundabout we slowed for, the cruise is cancelled with a sound (the game's Resume brings the set speed back). 0 = never" },
     { "junction_min_deg", &p_junc_deg, 25, "turns smaller than this (degrees) are not slowed for" },
     { "roundabout_kmh", &p_rb_kmh, 25, "speed at the entry of a roundabout, also when going straight through" },
-    { "roundabout_ratio", &p_rb_ratio, 1.4f, "a prefab with 2+ route curves counts as a roundabout when the path through it is this many times its entry-exit chord (lower = more prefabs count)" },
+    { "roundabout_ratio", &p_rb_ratio, 1.4f, "a prefab counts as a roundabout when the path through it is this many times its entry-exit chord (lower = more prefabs count)" },
+    { "roundabout_curves", &p_rb_curves, 2, "a prefab the route crosses in this many navigation curves or more counts as a roundabout, also straight through (2 = every roundabout seen so far; 3 = only those where the route uses the ring; 9 = off, the path ratio alone decides)" },
     { "descent_overspeed_kmh", &p_desc_kmh, 2, "on a descent (descent = 1) the engine brake / retarder hold the set speed plus this (km/h; 0 = exactly the set speed) (Written for a set speed of 70 km/h; it scales with the set speed.)" },
     { "smart_overspeed_kmh", &p_smart_kmh, 3, "cruise downhill: how far over the set speed the truck may run before the engine brake / retarder hold it (the game's 'smart' cruise option, km/h); -1 = keep the game's setting (at 0 the retarder comes in the moment the truck is over the set speed). On a descent of 2 % or more descent_overspeed_kmh applies instead; never less than the predictive cruise (PCC) momentum asks for (Written for a set speed of 70 km/h; it scales with the set speed.)" },
     { "acc_ignore_crossing", &p_acc_cross, 1, "own ACC: a vehicle crossing in front (on a roundabout, at a junction) is passed, not followed: no braking or stopping for it, only no speeding up. Seen as a lead that drives (> 11 km/h) while the gap closes as if it stood still" },
@@ -766,14 +768,16 @@ static float cruise_body(void *ga, float dt, float pedal)
         // set speed stays and Resume brings it back.
         float jn_orig_kmh = ji.limit_ms * 3.6f;
         // A prefab (junction, crossing, roundabout) close ahead that the route reading does not know (Damien 25-10, 1007 s: 49 km/h at 46 m of
-        // a prefab, while the plugin only knew a roundabout 190 m further): say so, so the next ride shows what kind of prefab it is
+        // a prefab, while the plugin only knew a roundabout 190 m further): say so, so the next ride shows what kind of prefab it is.
+        // route_junction_m is the distance to the prefab's EXIT (25-10, 78 lines in two logs: all were the exit of a junction already read,
+        // or a prefab we were already inside), so ask route.cpp whether the reading covers it instead of comparing it with an entry.
         {
             float jm = route_junction_m();
             static double said_u;
-            if (jm >= 0 && jm < 150 && kmh > 35 && (!(vj == vj) || ji.dist_m - jm > 60) && wall_s() - said_u > 10) {
+            if (jm >= 0 && jm < 150 && kmh > 35 && route_junction_known(jm) == 0 && wall_s() - said_u > 10) {
                 said_u = wall_s();
-                char jd[240]; route_junction_dump(jd, sizeof jd);
-                logv(1, "Cruise: a prefab %.0f m ahead is not a known junction or roundabout (known: %s)", jm, jd);
+                char jd[400]; route_junction_dump(jd, sizeof jd);
+                logv(1, "Cruise: the prefab ending %.0f m ahead is not a known junction or roundabout (known: %s)", jm, jd);
             }
         }
         if (vj == vj && ji.limit_ms > 0 && p_jn_margin > 0) {
@@ -1867,7 +1871,7 @@ static void cr_frame()
         static double flushed;
         if (g_csv && wall_s() - flushed > 2) { flushed = wall_s(); fflush(g_csv); csv_cap(&g_csv, "cruise.csv"); }
     }
-    route_junction_cfg(junc_on(), p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio);
+    route_junction_cfg(junc_on(), p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, (int)(p_rb_curves + 0.5f));
     route_hermite(p_herm > 0);
     if (g_keys_ok) keys_tick(game_actor_safe());
     emergency_hazards();
