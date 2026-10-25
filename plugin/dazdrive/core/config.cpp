@@ -52,7 +52,7 @@ static const struct { const char *sec, *key; float lo, hi; } k_bounds[] = {
     { "cruise", "aeb_max_decel", 2, 9 }, { "cruise", "aeb_min_kmh", 5, 60 },
     { "lane", "offset_gain", 0, 0.1f }, { "lane", "heading_gain", 0, 3 }, { "lane", "assist_feedback", 0, 200 },
     { "lane", "bend_assist", 0, 10 }, { "lane", "i_gain", 0, 0.05f }, { "lane", "i_max", 0, 0.05f },
-    { "lane", "wheel_gain_ref", 0.2f, 5 }, { "lane", "bend_lead_s", 0, 2 }, { "lane", "bend_hold", 0, 1 },
+    { "lane", "wheel_gain_ref", 0.2f, 5 }, { "lane", "bend_lead_s", 0, 2 }, { "lane", "bend_max_lat", 0, 8 }, { "lane", "bend_hold", 0, 1 },
     { "lane", "soft_start", 0, 1 }, { "lane", "rate2", 0.5f, 100 }, { "lane", "sway_cut", 0.4f, 1 },
     { "lane", "learn_rate", 0, 1 }, { "lane", "learn_min", 0.2f, 1 }, { "lane", "learn_max", 1, 5 },
     { "lane", "assist_max", 0.01f, 1 }, { "lane", "assist_leak", 0, 0.5f }, { "lane", "gain", 0, 1.5f },

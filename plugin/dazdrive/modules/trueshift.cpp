@@ -347,7 +347,9 @@ static float skip_accel();
 static float skip_relax(float v, float a_now)
 {
     if (p_relax <= 0) return 0;
-    return p_relax * (1 - smooth(0.30f, 0.45f, S.demand)) * (1 - smooth(35 / 3.6f, 60 / 3.6f, v)) * smooth(0.5f * skip_accel(), skip_accel(), a_now);
+    // (25-10, Damien: skips more, also gently under 50 km/h and even at full pedal under 20 km/h; fewer shifts is calmer)
+    float dk = fmaxf(1 - smooth(0.40f, 0.65f, S.demand), 1 - smooth(20 / 3.6f, 28 / 3.6f, v));
+    return p_relax * dk * (1 - smooth(45 / 3.6f, 75 / 3.6f, v)) * smooth(0.5f * skip_accel(), skip_accel(), a_now);
 }
 static float land_floor(int h, float a_h, float relax)
 {
@@ -1219,20 +1221,21 @@ static int decide_gear(void *self, const char **why)
                 rpm < S.up_pt + 150) { block = "no pull here before"; break; }
             if (h > cur + 1) {
                 // At high demand only when the skipped-to gear still pulls hard (light truck).
-                float a_skip = skip_accel() * (S.demand > 0.75f ? 2.0f : 1.0f);
+                bool pull_away = v2u < 20 / 3.6f;   // (25-10, Damien: under 20 km/h a skip is fine even at full pedal)
+                float a_skip = skip_accel() * (S.demand > 0.75f && !pull_away ? 2.0f : 1.0f);
                 if (coast || grade > 0.02f || (force_at(h, v2u, 0.85f) - f_up) / S.mass < a_skip) {
                     block = coast ? "skip: coasting" : grade > 0.02f ? "skip: climbing" : "skip: too little pull in the skipped-to gear";
                     break;
                 }
                 // and keeps most of the pull of the next gear (a car must not jump 2 -> 5 at full throttle)
-                if (S.demand > 0.75f &&
+                if (S.demand > 0.75f && !pull_away &&
                     force_at(h, v2u, 1.0f) - f_up < 0.7f * (force_at(cur + 1, v2u, 1.0f) - f_up)) { block = "skip: loses too much pull at high demand"; break; }
             }
             best = h;
         }
         if (best > cur) {
             // why was this a single step when a skip was allowed (Damien 25-10: it skips too little when driving gently)? one line per 5 s
-            if (best == cur + 1 && maxg > cur + 1 && cur + 2 <= n && T.in_thr < 0.3f && now - S.skip_log_at > 5) {
+            if (best == cur + 1 && maxg > cur + 1 && cur + 2 <= n && (T.in_thr < 0.3f || v < 25 / 3.6f) && now - S.skip_log_at > 5) {
                 S.skip_log_at = now;
                 logv(2, "single up %d->%d, no skip: %s (%.0f km/h, %.0f rpm, pedal %.2f, demand %.2f, grade %.1f%%, %.1f t)", cur, best,
                      block[0] ? block : "the next gear above was not tried", v * 3.6f, rpm, T.in_thr, S.demand, grade_pct(), S.mass / 1000);

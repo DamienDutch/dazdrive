@@ -30,7 +30,7 @@ static float p_needs_cc, p_rb_off, p_umax, p_ind_pause, p_ind_resume, p_ind_off,
 static float p_sway, p_sw_cut, p_sw_rec, p_sw_amp;
 static float p_learn, p_l_rate, p_l_min, p_l_max, p_l_update, p_l_save;
 static float p_head_ref, p_k_off, p_k_head, p_k_afb, p_bend_a, p_edge_boost, p_rate2, p_i2, p_i2max;
-static float p_wref, p_bend_hold, p_unwind_s, p_bend_lead, p_soft;
+static float p_wref, p_bend_hold, p_unwind_s, p_bend_lead, p_soft, p_bend_lat;
 
 static param g_params[] = {
     { "mode", &p_mode, 2, "lane assist: 0 = the game's own law (the plugin only measures it, in lane.csv), 2 = model-based law fitted on real rides: offset + heading + bend feed-forward + assist feedback (1 is treated as 2)" },
@@ -42,6 +42,7 @@ static param g_params[] = {
     { "i_gain", &p_i2, 0.0010f, "mode 2: slow correction: assist offset A per meter of offset per second (steady offset, also in long bends)" },
     { "i_max", &p_i2max, 0.004f, "mode 2: the slow correction never gets bigger than this assist offset A" },
     { "wheel_gain_ref", &p_wref, 1.3f, "mode 2: how far the wheel turns per unit of assist offset A that the gains are tuned for (typically 1.2-1.5). The wheel's real answer is measured live (it can be up to 3x in a sharp bend) and every A term is scaled down by this / the live value (never up, never below 0.35)" },
+    { "bend_max_lat", &p_bend_lat, 2.5f, "mode 2: the bend feed-forward never asks for more than a bend of this sideways acceleration (m/s2) at the speed you drive: a road does not bend sharper than that at highway speed, so a lane term that jumps there is a shifting or splitting lane, not a bend (24-10: o3 -0.0076 to +0.0049 within a second at 94 km/h on a straight, the truck swung 1.5 m). 0 = off" },
     { "bend_lead_s", &p_bend_lead, 0.35f, "mode 2: the bend feed-forward looks this many seconds further ahead than the game's lane term (it sees ~0.25 s ahead, the wheel follows ~0.45 s late): o3 + this x its rate of change, so the wheel is not left short in a sharp bend that comes on quickly. 0 = off" },
     { "bend_hold", &p_bend_hold, 0.5f, "mode 2: in a bend the assist always keeps at least this share of the bend feed-forward, and it does not unwind while the wheel is under this share of what the bend needs (so the wheel does not unwind to 0 in a sharp bend). 0 = off" },
     { "unwind_s", &p_unwind_s, 0.8f, "mode 2: in a bend the wanted assist offset unwinds (towards the outside) at most this fast: seconds from the full bend feed-forward to 0. 0 = no limit" },
@@ -713,6 +714,7 @@ static float lane_step(float u, float o1, float o2, float o3, float dt, float wh
         g_o3_prev = o3; g_have_o3 = 1;
         float lead = clampf(p_bend_lead * g_do3, -(0.5f * fabsf(o3) + 0.002f), 0.5f * fabsf(o3) + 0.002f);
         float o3f = o3 + lead;
+        if (p_bend_lat > 0) { float v = fmaxf(kmh / 3.6f, 3.0f); o3f = clampf(o3f, -p_bend_lat / (v * v), p_bend_lat / (v * v)); }   // a lane term that jumps beyond any real bend: not a bend
         // (+25% x (1 - lf): the centering band makes the ratio read high exactly where the bend needs most; sim of ts5b: 76% of the
         // need instead of 82%, the truck 0.3-0.9 m wide, with it 0.4)
         float ff = -p_bend_a * (p_wref > 0 ? lf * (1 + 0.25f * (1 - lf)) : ls) * o3f;
