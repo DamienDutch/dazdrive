@@ -40,7 +40,7 @@ static param g_params[] = {
     { "eco_cruise_throttle_cap", &p_eco_cap, 1.0f, "Eco with the cruise on: the cruise never asks for more than this throttle (0..1; 1 = no cap) while the speed is within 4 km/h of the target; further under it the cap is lifted (a climb, a resume)" },
     { "pedal_curve_eco", &p_pc_eco, 1.35f, "Eco: the throttle the engine gets is the pedal to this power (1 = linear; 1.35: half pedal = 39 % throttle, flat pedal still 100 %). Not with the cruise on, not while crawling or below pedal_curve_from_kmh" },
     { "pedal_curve_power", &p_pc_pw, 1.6f, "Power: the pedal is front-loaded, throttle = 1 - (1 - pedal) to this power (1 = linear; 1.6: 60 % pedal = 77 % throttle). Same limits as pedal_curve_eco" },
-    { "pedal_curve_switch_travel", &p_pc_travel, 1.0f, "after a mode change the pedal curve stays the old one until you have moved the pedal this much in total (1 = a full stroke), then it blends into the new one over the next 75 % of that travel. A held pedal never changes. 0 = at once" },
+    { "pedal_curve_switch_travel", &p_pc_travel, 1.0f, "after a mode change the pedal curve stays the old one until you have moved the pedal this much in total (1 = a full stroke), then it blends into the new one: unchanged over the first quarter of that travel, fully the new curve at the end of it. A held pedal never changes. 0 = at once" },
     { "pedal_curve_from_kmh", &p_pc_from, 8, "the Eco and Power pedal curves work from this speed (km/h), so parking and maneuvering stay linear" },
     { "rollover_guard", &g_rsc_mode, 3, "rollover guard (a growing sideways swing, two opposite lateral peaks within 2.5 s, also when you drive by hand): 0 = off, 1 = a tone only, 2 = also no throttle, 3 = also a soft or firm brake" },
     { "rollover_bend", &g_rsc_bend, 0, "rollover guard also for one bend taken too fast without a swing (lateral 3.5 m/s2 = tone, 4.5 = no throttle, 6 = soft brake, 8.5 = firm): 0 = off, 1 = on. Off by default: the limits depend on the physics (mods), so they fire in ordinary bends on some trucks" },
@@ -81,10 +81,10 @@ static param g_params[] = {
     { "junction_lat", &p_junc_lat, 2.5f, "sideways acceleration (m/s2) allowed in a junction turn (v = sqrt(this x turn radius), at least 15 km/h)" },
     { "junction_margin_kmh", &p_jn_margin, 10, "junctions and roundabouts: brake only down to the junction's speed plus this (km/h); the rest is yours. 0 = down to the junction speed itself" },
     { "junction_coast_decel", &p_jn_coast, 0.2f, "approaching a junction or roundabout the cruise may still pick up speed while the truck could coast down to the junction speed at this deceleration (m/s2; a loaded truck coasts at about 0.1 to 0.2); no gas above that speed" },
-    { "junction_approach_over_kmh", &p_jn_over, 20, "and never faster than the junction speed plus this (km/h) on the approach" },
+    { "junction_approach_over_kmh", &p_jn_over, 20, "and never faster than the junction speed plus junction_margin_kmh plus this (km/h) on the approach" },
     { "junction_handover_kmh", &p_jn_hand_kmh, 6, "the cruise is only cancelled for a junction once the speed is down to the junction speed plus the margin plus this (km/h) ..." },
     { "junction_handover_m", &p_jn_hand_m, 30, "... or when the junction is this close (m), whatever the speed" },
-    { "speed_limiter_kmh", &p_own_lim, 0, "our own speed limiter (km/h, 0 = off): the throttle fades out only when the speed is about to pass the limit (where it will be in 1.5 s), so a climb at 92 keeps its full throttle; in every mode and with the pedal curves, and the cruise set speed never goes above it. Switch the game's own limiter off" },
+    { "speed_limiter_kmh", &p_own_lim, 0, "our own speed limiter (km/h, 0 = off): the throttle fades out only when the speed is about to pass the limit (where it will be in 1 s, over the last 1.5 km/h), so a climb at 92 keeps its full throttle; in every mode and with the pedal curves, and the cruise set speed never goes above it. Switch the game's own limiter off" },
     { "junction_signal_deg", &p_jn_signal, 50, "a junction on the route that turns less than this (degrees, not a roundabout) is only slowed for when you use an indicator: the route is not where you are going, and a crossing you drive straight over needs no braking. 0 = always slow for it" },
     { "junction_cancel_s", &p_jn_cancel_s, 5, "this many seconds before a junction or roundabout we slowed for, the cruise is cancelled with a sound (the game's Resume brings the set speed back). 0 = never" },
     { "junction_min_deg", &p_junc_deg, 25, "turns smaller than this (degrees) are not slowed for" },
@@ -386,6 +386,7 @@ static float ah_need()
 enum { GA_PARK_FLAG = 0x15c, GA_PARK_VAL = 0x160 };
 static double s_res_press_at = -10;      // last resume press (on or off): cruise coming on by resume follows ISA, by set not
 static double s_rearm_at; static float s_rearm_set; static int s_rearm_active;
+static float s_dstar_sm = NAN;   // own ACC: the slewed wanted gap (reset whenever following stops)
 static double s_ah_hold_since, s_park_at; static int s_park_on, s_park_ok, s_park_bad; static unsigned char s_park_sv; static float s_park_svf;
 static void park_release(char *g, const char *why)
 {
@@ -418,7 +419,7 @@ static void auto_hold(char *g, float dt)
         if (s_park_on && (T.in_thr > 0.05f || now - s_res_press_at < 0.4 || kmh > 1.0f || AH.st != AH_HOLD || T.gear < 0 || T.dgear < 0 || !T.engine_on)) {
             park_release(g, T.in_thr > 0.05f ? "gas" : now - s_res_press_at < 0.4 ? "resume" : "no longer held");
             if (T.in_thr > 0.05f || now - s_res_press_at < 0.4) { AH.st = AH_LAUNCH; AH.launch_t = 0; AH.grab_until = 0; AH.r = h; AH.released = 0; }
-        } else if (s_park_on && s_park_ok) AH.r = fmaxf(0.0f, AH.r - 0.5f * dt);   // the service brake lets go slowly: the parking brake holds
+        }
     }
     switch (AH.st) {
     case AH_OFF:
@@ -431,7 +432,9 @@ static void auto_hold(char *g, float dt)
         break;
     case AH_HOLD:
         ah_refresh();
-        AH.r = fminf(h, AH.r + 3 * dt);                  // on within ~0.2 s, while the driver still has the pedal
+        // on within ~0.2 s, while the driver still has the pedal; once the parking brake is confirmed the service brake lets go slowly
+        // (it was decayed above and then pulled back to h here every frame, so both brakes stayed on)
+        AH.r = s_park_on && s_park_ok ? fmaxf(0.0f, AH.r - 0.5f * dt) : fminf(h, AH.r + 3 * dt);
         if (T.in_thr > 0.05f) { AH.st = AH_LAUNCH; AH.launch_t = 0; AH.grab_until = 0; logv(2, "Auto Hold: launch, pedal %.2f, grade %.1f%%, hold %.2f", T.in_thr, grade, AH.r); }
         else if (kmh > 1.5f) { AH.st = AH_OFF; logv(2, "Auto Hold: truck moves without gas (%.1f km/h), off", kmh); }
         else if (p_ah_park > 0 && !s_park_on && !s_park_bad && g_low_ok && now - s_ah_hold_since > p_ah_park && kmh < 0.5f && T.in_thr < 0.03f && !T.parking_brake) {
@@ -705,6 +708,7 @@ static float cruise_body(void *ga, float dt, float pedal)
         s_cb_was_on = 0;
         g_sg_hold = 0;
         g_feed = 0;
+        s_sg_wait = 0;   // no 'B' on the dash from a wait that the cruise drop ended
         return stock;
     }
     float set = *(float *)(g + GA_SET), acc = *(float *)(g + GA_ACC_TARGET);
@@ -737,9 +741,11 @@ static float cruise_body(void *ga, float dt, float pedal)
         // the coast deceleration the plan counts on depends on the slope (Damien 25-10: 83 -> 38 km/h without gas up a 2-4 % hill, 1217-1243 s):
         // gravity adds 0.098 m/s2 per % uphill and takes it away downhill
         float coast_a = fminf(1.0f, fmaxf(0.1f, p_cv_coast + 0.0981f * pitch_grade()));
-        float vb = route_curve_speed(a_lat, coast_a, coast_a);
+        // bends only: junctions reach the throttle and the brake through vj below, after the gas-pedal, turn-signal and margin filters
+        // (25-10: "braked without reason" at 2437 s was a 90-degree junction 600 m ahead planned here as a "bend", unfiltered)
+        float vb = route_bend_speed(a_lat, coast_a);
         s_bend_coast_kmh = vb * 3.6f;
-        float vb_brake = route_curve_speed(a_lat, p_cv_brake, p_jn_dec);
+        float vb_brake = route_bend_speed(a_lat, p_cv_brake);
         static double said;
         if (vb == vb && vb * 3.6f < target - 5 && wall_s() - said > 10) {
             said = wall_s();
@@ -886,10 +892,15 @@ static float cruise_body(void *ga, float dt, float pedal)
         s_want_curve = fmaxf(s_want_curve, fminf(0.45f, 0.2f + 0.12f * (jn_need - jn_thr)));
     // a descent the retarder and the engine brake cannot hold (1678-1692 s, -9 %: set 63, 70 km/h; Damien 25-10: the service brake may help):
     // over the set speed plus the descent allowance and not slowing: a gentle brake request that grows with the overspeed
-    if (s_down_now && T.cruise > 0.5f) {
-        float allow = fmaxf(0.0f, p_desc_kmh) * band_scale(T.cruise) + 2.0f, over = kmh - (set + allow);
-        if (over > 0 && T.accel > -0.05f) s_want_curve = fmaxf(s_want_curve, fminf(0.4f, 0.06f * over));
-    }
+    // over what the cruise itself grants (set, or a higher target from a dip, momentum or a roll boost), with hysteresis: it starts when
+    // the truck is not slowing and holds until it is clearly slowing or back inside the allowance, so its own braking does not switch
+    // it off every second (pulsing). Not while rolling in neutral (the roll ends on a brake).
+    static int desc_braking;
+    if (s_down_now && T.cruise > 0.5f && !g_rolling) {
+        float allow = fmaxf(0.0f, p_desc_kmh) * band_scale(T.cruise) + 2.0f, over = kmh - (fmaxf(set, target) + allow);
+        desc_braking = desc_braking ? (over > -1.0f && T.accel > -0.15f) : (over > 0 && T.accel > -0.05f);
+        if (desc_braking) s_want_curve = fmaxf(s_want_curve, fminf(0.4f, 0.06f * fmaxf(over, 0.5f)));
+    } else desc_braking = 0;
     float kp = 0.25f, ki = 0.08f, rate = 0.6f;               // Normal / M (per km/h, per km/h·s, per s)
     if (md == MODE_ECO) { kp = 0.18f; ki = 0.05f; rate = 0.4f; }        // Eco: gentle, lets it sag a bit
     else if (md == MODE_POWER) { kp = 0.35f; ki = 0.12f; rate = 1.0f; }  // Power: keen
@@ -1112,15 +1123,14 @@ static void own_acc(char *g, float dt)
     s_dstar = NAN;
     float lead = *(float *)(g + GA_LEAD_M), lv = lead_speed(g);
     s_lead_v = lv;
-    if (p_own_acc <= 0 || !*(unsigned char *)(g + GA_ON) || g_level < 0 || !(lv == lv) || !(dt > 0 && dt < 0.5f)) { OA.on = 0; s_want_acc = 0; s_lv_prev = NAN; s_a_lead = 0; return; }
+    if (p_own_acc <= 0 || !*(unsigned char *)(g + GA_ON) || g_level < 0 || !(lv == lv) || !(dt > 0 && dt < 0.5f)) { OA.on = 0; s_want_acc = 0; s_lv_prev = NAN; s_a_lead = 0; s_dstar_sm = NAN; return; }
     float set = *(float *)(g + GA_SET), v = fabsf(T.speed), kmh = v * 3.6f;
     // the wanted gap moves by at most 1.5 m/s when it grows and 3 m/s when it shrinks: a change of the distance stand (1 -> 2) is no reason to brake
-    // at once (Damien 25-10), the gap grows into it
-    static float dstar_sm = NAN;
+    // at once (Damien 25-10), the gap grows into it. Starts fresh whenever following starts (a stale small gap made a late approach).
     float dstar_raw = desired_gap(v);
-    if (!(dstar_sm == dstar_sm) || fabsf(dstar_raw - dstar_sm) > 60) dstar_sm = dstar_raw;
-    else dstar_sm += fmaxf(-3.0f * dt, fminf(1.5f * dt, dstar_raw - dstar_sm));
-    float dstar = dstar_sm;
+    if (!(s_dstar_sm == s_dstar_sm) || fabsf(dstar_raw - s_dstar_sm) > 60) s_dstar_sm = dstar_raw;
+    else s_dstar_sm += fmaxf(-3.0f * dt, fminf(1.5f * dt, dstar_raw - s_dstar_sm));
+    float dstar = s_dstar_sm;
     float stopm = stop_gap(v);
     s_dstar = dstar;
     // Heavier = slower to stop (Damien: "start braking earlier at 60 t"): from 30 t up the planned deceleration shrinks
@@ -1674,7 +1684,9 @@ static void aeb(char *g, float dt)
         float jm = route_junction_m();
         if (jm >= 0 && jm < 60 && AE.vl > 2) { p_s = fminf(p_s, 1.5f); f_s = fminf(f_s, 1.0f); }
         // the driver brakes enough by himself
-        if ((T.in_brake > 0.05f && -T.accel >= 0.9f * a_need) || (T.in_brake > 0.3f && ttc > 1.5f)) { cap_st = AEB_OFF; cap = "driver brakes"; }  // a firm brake pedal ends the warning (Damien 25-10)
+        // a firm brake pedal ends the warning (Damien 25-10), but only while it does at least half of what is needed: a moderate press
+        // against a stopped queue must not switch the AEB off until ttc 1.5 s
+        if ((T.in_brake > 0.05f && -T.accel >= 0.9f * a_need) || (T.in_brake > 0.3f && ttc > 1.5f && -T.accel >= 0.5f * a_need)) { cap_st = AEB_OFF; cap = "driver brakes"; }
         // the ACC (cruise on) already brakes enough and there is time: leave it to the ACC (Damien 12-10: the AEB went off with
         // the ACC on and braking, and he thought the ACC did fine). The AEB is back as soon as that stops being true.
         else if (on && T.in_brake < 0.05f && ttc > 3.0f && -T.accel >= 0.65f * a_need) { cap_st = AEB_OFF; cap = "ACC brakes"; }
@@ -1836,7 +1848,7 @@ static void cr_frame()
             if (s_rearm_active) {
                 float kmh_r = fabsf(T.speed) * 3.6f;
                 if (T.cruise > 0.5f || kmh_r > 5 || T.parking_brake || T.in_brake > 0.3f || wall_s() - s_rearm_at > p_sg_rearm || T.gear < 0) s_rearm_active = 0;
-                else if (lga && T.in_thr > 0.05f && s_rearm_set > 5) {   // the first tap on the gas: the cruise is back on with the old set speed
+                else if (lga && T.in_thr > 0.05f && s_rearm_set > 5 && ld > 0.5f && ld < 60) {   // the first tap on the gas with the vehicle still ahead: the cruise is back on with the old set speed (no lead: you drive off yourself)
                     *(float *)(lga + GA_SET) = s_rearm_set;
                     *(unsigned char *)(lga + GA_ON) = 1;
                     s_rearm_active = 0;
@@ -2114,6 +2126,9 @@ static void cr_reset(int level, const char *why)
     s_br_at = 0;
     s_thr_pass = 0;
     s_sg_wait = 0;
+    s_rearm_active = 0; s_dstar_sm = NAN;
+    if (s_park_on && ga) park_release(ga, "reset");   // a parking brake we set does not outlive a teleport, truck change or load
+    s_park_on = s_park_ok = 0; s_ah_hold_since = 0;
     if (g_dash_status == 'B') g_dash_status = 0;
     if (s_req_ours > 0 && ga) {
         float *req = (float *)(ga + GA_BRAKE_REQ);

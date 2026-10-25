@@ -27,16 +27,17 @@ void rsc_step(float dt)
     float v = fabsf(T.speed), kmh = v * 3.6f;
     // Log for calibrating the single-bend threshold (Damien 25-10): 10 rows per second above 10 km/h, also by hand, only at log level 2
     {
-        static FILE *csv; static double csv_at; static int tried;
-        if (!tried && g_log_level >= 2) { tried = 1; csv = open_out("rsc.csv", "w"); if (csv) fputs("t,kmh,a_lat,lat_lp,lat_slow,yaw_dps,roll_deg,pitch_deg,steer,gear,level\n", csv); }
+        static FILE *csv; static double csv_at, flushed; static int tried;
+        if (!tried && g_log_level >= 2 && g_rsc_mode > 0.5f) { tried = 1; csv = open_out("rsc.csv", "w"); if (csv) fputs("t,kmh,a_lat,lat_lp,lat_slow,yaw_dps,roll_deg,pitch_deg,steer,gear,level\n", csv); }
         if (csv && !T.paused && kmh > 10 && now - csv_at >= 0.1) {
             csv_at = now;
             fprintf(csv, "%.2f,%.1f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.3f,%d,%d\n", now, kmh, v * T.yaw * 6.2831853f, lp, lps, T.yaw * 360.0f,
                     (float)T.place.orientation.roll * 360.0f, (float)T.place.orientation.pitch * 360.0f, T.in_steer, T.gear, (int)g_rsc_level);
-            fflush(csv);
         }
+        if (csv && now - flushed > 2) { flushed = now; fflush(csv); csv_cap(&csv, "rsc.csv"); }   // the same size cap as the other traces
     }
-    if (g_rsc_mode < 0.5f || T.paused || !(dt > 0 && dt < 0.5f) || T.gear <= 0 || kmh < 40) {   // not forward, paused, a hitch, too slow: nothing to watch
+    // not forward (reverse), paused, a hitch, too slow: nothing to watch. Neutral counts (an eco-roll at 85 km/h can sway like any gear)
+    if (g_rsc_mode < 0.5f || T.paused || !(dt > 0 && dt < 0.5f) || T.gear < 0 || kmh < 40) {
         level = 0; cur = prev = prev2 = lobe(); lp = lps = 0; calm_since = high_since = warn_since = 0;
         g_rsc_level = 0; g_rsc_brake = 0; g_rsc_thr_cap = 1;
         return;

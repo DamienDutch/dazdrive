@@ -551,7 +551,7 @@ void route_junction_dump(char *buf, size_t n)
 // Bends: the radius at each sample from the heading change over 50 m (three
 // points 25 m apart). The speed allowed now so that, braking gently (a_dec),
 // every bend ahead is taken with at most a_lat sideways. NAN if unknown.
-static float route_bend_speed(float a_lat, float a_dec);
+float route_bend_speed(float a_lat, float a_dec);
 float route_junction_speed(float a_dec, route_junction_t *info)
 {
     if (!R.ok || !JC.on) return NAN;
@@ -597,7 +597,7 @@ static float lat_scale(float v_ms)
     return r > 4.0f / 3.25f ? 4.0f / 3.25f : r;
 }
 
-static float route_bend_speed(float a_lat, float a_dec)
+float route_bend_speed(float a_lat, float a_dec)
 {
     if (!R.ok || R.n < 5) return NAN;
     float best = NAN;

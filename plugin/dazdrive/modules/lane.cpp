@@ -42,7 +42,7 @@ static param g_params[] = {
     { "i_gain", &p_i2, 0.0010f, "mode 2: slow correction: assist offset A per meter of offset per second (steady offset, also in long bends)" },
     { "i_max", &p_i2max, 0.004f, "mode 2: the slow correction never gets bigger than this assist offset A" },
     { "wheel_gain_ref", &p_wref, 1.3f, "mode 2: how far the wheel turns per unit of assist offset A that the gains are tuned for (typically 1.2-1.5). The wheel's real answer is measured live (it can be up to 3x in a sharp bend) and every A term is scaled down by this / the live value (never up, never below 0.35)" },
-    { "bend_max_lat", &p_bend_lat, 2.5f, "mode 2: the bend feed-forward never asks for more than a bend of this sideways acceleration (m/s2) at the speed you drive: a road does not bend sharper than that at highway speed, so a lane term that jumps there is a shifting or splitting lane, not a bend (24-10: o3 -0.0076 to +0.0049 within a second at 94 km/h on a straight, the truck swung 1.5 m). 0 = off" },
+    { "bend_max_lat", &p_bend_lat, 2.5f, "mode 2: the bend feed-forward never asks for more than a bend of this sideways acceleration (m/s2) at the speed you drive: a road does not bend sharper than that at highway speed, so a lane term that jumps there is a shifting or splitting lane, not a bend (seen at 94 km/h on a straight: the lane term flipped sign within a second and the truck swung 1.5 m). 0 = off" },
     { "bend_lead_s", &p_bend_lead, 0.35f, "mode 2: the bend feed-forward looks this many seconds further ahead than the game's lane term (it sees ~0.25 s ahead, the wheel follows ~0.45 s late): o3 + this x its rate of change, so the wheel is not left short in a sharp bend that comes on quickly. 0 = off" },
     { "bend_hold", &p_bend_hold, 0.5f, "mode 2: in a bend the assist always keeps at least this share of the bend feed-forward, and it does not unwind while the wheel is under this share of what the bend needs (so the wheel does not unwind to 0 in a sharp bend). 0 = off" },
     { "unwind_s", &p_unwind_s, 0.8f, "mode 2: in a bend the wanted assist offset unwinds (towards the outside) at most this fast: seconds from the full bend feed-forward to 0. 0 = no limit" },
@@ -97,7 +97,7 @@ static param g_params[] = {
     { "indicator_off", &p_ind_off, 1, "with indicator_pause: the indicator also switches the game's lane keeping itself off (silently), and it is switched on again after the lane change. Not when you switch it back on yourself meanwhile" },
     { "needs_cruise", &p_needs_cc, 1, "1 = lane centering steers only while the cruise control is on, and switching the cruise on switches lane keeping on (like a travel assist); without the cruise only the game's warning stays. 0 = also without the cruise" },
     { "roundabout_off", &p_rb_off, 1, "1 = when the cruise control cancels itself for a roundabout, lane keeping goes off with it (a roundabout is yours to steer), and comes back on when the cruise is resumed (within 90 s). Junctions: use your indicator" },
-    { "indicator_resume", &p_ind_resume, 0, "with indicator_pause: lane keeping that went off during the lane change (above min_kmh) is switched on again afterwards (sets the game's lane-keeping flag). Off by default: the game does not switch it off for an indicator, and with keep_on not for speed, so it would mostly undo your own key press (tools/sim run_lane.sh: Indicator + key)" },
+    { "indicator_resume", &p_ind_resume, 0, "with indicator_pause: lane keeping that went off during the lane change (above min_kmh) is switched on again afterwards (sets the game's lane-keeping flag). Off by default: the game does not switch it off for an indicator, and with keep_on not for speed, so it would mostly undo your own key press" },
     { "non_ffb_mode", &p_nonffb, 0, "without a force-feedback wheel (keyboard, gamepad, mouse steering: the game adds the assist to the steering angle instead of turning the wheel; recognized from the steering data in ~1 s): 0 = the game's own law (mode 2 is fitted on FFB wheels), 2 = mode 2 anyway (not tuned)" },
     { "tone", &p_tone, 1, "1 = a rising tone when lane keeping is switched on, a falling one when it goes off" },
 };
@@ -1115,10 +1115,11 @@ static void cruise_lane_on()
     prev_cc = cc;
     static double done_at = -1;
     if (p_needs_cc > 0 && cc && cc_on_at > 0 && now - cc_on_at > 0.3 && done_at < cc_on_at && !g_pause) {
-        done_at = now;
         char *ga = game_actor_safe();
         float kmh = fabsf(T.speed) * 3.6f;
-        if (ga && !(*(unsigned char *)(ga + 0x1d1) & 0x20) && kmh > fmaxf(p_min_kmh, 5) + 2) {
+        if (!ga || kmh <= fmaxf(p_min_kmh, 5) + 2) return;   // too slow yet (a Resume in a jam): try again when the speed is there
+        done_at = now;
+        if (!(*(unsigned char *)(ga + 0x1d1) & 0x20)) {
             lka_set(ga, 1);
             if (p_tone > 0) play_cue(CUE_LANE_RESUME);
             logline("Lane: cruise on, lane keeping on (%.0f km/h)", kmh);
@@ -1136,7 +1137,7 @@ static void ln_frame()
         else if (kmh < p_min_kmh) latched = 0;
         *g_minp = p_keep_on > 0 ? 0.0f : latched ? p_min_kmh : fmaxf(p_on_kmh, p_min_kmh);
     }
-    if (o_law) { roundabout_off(); cruise_lane_on(); }
+    if (o_law && p_mode >= 1) { roundabout_off(); cruise_lane_on(); }   // mode 0 leaves the game's own assist alone, also its switch
     if (p_ind_pause > 0 && p_mode >= 1 && o_law) indicator_pause();  // first: it may undo a key press (see there)
     // Lane keeping switched on/off by its key: game_actor+0x1d1 bit 0x20 (docs/lka-roll-re.md A2).
     static int was = -1, slow_off;

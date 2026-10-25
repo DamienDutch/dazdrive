@@ -256,9 +256,11 @@ static float launch_aim(float thr, float idle, int heavy)
 
 static float lcx_aim() { return fminf(fmaxf(T.rpm_limit, 1900.0f) * 0.82f, 1700.0f); }
 
+static void lcx_off() { g_lcx = 0; g_lcx_cap = 1; }   // launch control off and its throttle cap released (every path that drops g_ln)
+
 static void launch_end(const char *why, int normal)
 {
-    g_lcx = 0; g_lcx_cap = 1;
+    lcx_off();
     if (!g_ln) return;
     logv(1, "Smooth start: over (%s) after %.1f s, clutch %.2f", why, g_ln_t, g_lc);
     g_ln = 0; g_ln_done = normal; g_ln_why = why;
@@ -297,6 +299,7 @@ static void launch_tick(const launch_in &in)
         g_lc = 1.0f;
         float aim = lcx_aim();
         g_lcx_cap = clampv(g_lcx_cap + (aim - in.rpm) / 100 * 0.4f * in.dt, 0.08f, 1.0f);
+        g_ln_rpm0 = in.rpm;   // keep the rate estimate's reference fresh: a stale one made the first "go" frame see thousands of rpm/s and slam the clutch
         if (in.blocked || in.gear <= 0 || in.thr < 0.5f || g_ln_t > 25 || vk > 2.0f) { launch_end("launch control cancelled", 0); return; }
         if (in.brake < 0.15f) {  // brake released: launch with the held revs as the aim
             g_lcx = 2; g_lcx_cap = 1; g_ln_t = 0; g_ln_up = 0; g_lc = p_l_bite; g_ln_ra = aim; g_ln_rate = 0;
@@ -485,7 +488,7 @@ static void ck_reset(int level, const char *why)
     if (level >= RESET_HARD) {
         g_on = 0;
         g_hold = 0;
-        g_ln = 0; g_ln_done = 0; g_clutch_ours = NAN;
+        g_ln = 0; g_ln_done = 0; g_clutch_ours = NAN; lcx_off();
         g_f = g_cthr = g_cbrake = g_vt = 0;
         g_armed = 0;
         g_last_dir = 1;
@@ -510,7 +513,7 @@ static void ck_frame()
     char *inner = self ? gb_inner(self) : NULL;
     g_self = self;
     g_cf.inner = NULL;  // set below only while crawling: our clutch value then replaces the game's
-    if (!inner) { g_cf.floor = 0; g_f = 0; g_cthr = 0; g_creep_thr = 0; g_creep_brake = 0; g_cbrake = 0; g_on = 0; g_hold = 0; g_ln = 0; g_clutch_ours = NAN; return; }
+    if (!inner) { g_cf.floor = 0; g_f = 0; g_cthr = 0; g_creep_thr = 0; g_creep_brake = 0; g_cbrake = 0; g_on = 0; g_hold = 0; g_ln = 0; g_clutch_ours = NAN; lcx_off(); return; }
     if (dt > 0.5f) ck_reset(RESET_SOFT, "long frame");
     if (dt <= 0 || dt > 0.5f) return;  // paused or a long hitch: no time step
 
@@ -630,7 +633,7 @@ static void ck_start()
 static void ck_stop()
 {
     g_cf.floor = 0;  // give everything back
-    g_ln = 0; g_clutch_ours = NAN;
+    g_ln = 0; g_clutch_ours = NAN; lcx_off();
     g_creep_thr = 0;
     g_creep_brake = 0;
     g_hold = 0;

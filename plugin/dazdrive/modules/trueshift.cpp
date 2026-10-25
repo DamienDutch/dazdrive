@@ -35,7 +35,7 @@ static param g_params[] = {
     { "takeover_rpm", &p_on_rpm, 1000, "TrueShift takes over as soon as the engine has reached this rpm with the clutch closed in any gear (the clutch is locked then, so the rpm is real); 0 = by speed only (takeover_kmh)" },
     { "handback_kmh", &p_off_kmh, 4, "and hands back below this speed (starting, stopping, maneuvering)" },
     { "eco_rev_ceiling_rpm", &p_eco_ceil, 200, "Eco: an upshift never waits for revs above the top of the efficient range plus this (rpm), also with the pedal down; a kickdown lifts it. 0 = off. Saves fuel on long pulls" },
-    { "mode_character", &p_mode_char, 1, "1 = Eco and Power differ from Normal in the small drivetrain details too (kickdown, how long a gear is held, hint hold, engine brake, pedal filter); 0 = only the main differences" },
+    { "mode_character", &p_mode_char, 1, "1 = Eco and Power differ from Normal in the small drivetrain details too, with their own fixed values: kickdown only at a floored pedal in Eco (0.97) and easier in Power (0.85) instead of kickdown_pedal; Power holds a gear 4 s after a downshift and 8 s after a kickdown, Eco 3 s, instead of dwell_down_up_s and kick_dwell_s; a roll must last Eco 12 / Normal 15 / Power 20 s; hint hold, engine brake and pedal filter per mode. 0 = only the main differences, the ini values for all" },
     { "hint_hold_s", &p_hint_hold, 10, "seconds a gear chosen with the shift-hint buttons is held (0 = off)" },
     { "min_gap_s", &p_min_gap, 0.5f, "minimum time between two shifts" },
     { "dwell_up_down_s", &p_dwell_ud, 3.0f, "after an upshift, no downshift for this long (unless kickdown or lugging)" },
@@ -47,7 +47,7 @@ static param g_params[] = {
     { "skip_wait_over_rpm", &p_skip_over, 400, "skip_wait_s: how far over the upshift point the revs may build up while waiting for a skip (rpm; never above 85 % of the limit)" },
     { "kick_dwell_s", &p_kick_dwell, 5, "after a kickdown or lugging downshift no upshift for this long, unless clearly past the upshift point (the rpm path, not the rev limit)" },
     { "skip_wait_s", &p_skip_wait, 6, "pulling lightly: wait up to this long for the revs to build up so a skip can land (0 = shift one gear at once)" },
-    { "skip_relax_rpm", &p_relax, 80, "pulling lightly at low speed: a skip may land up to this much lower (rpm), never under the downshift point plus hysteresis_rpm. Full below pedal 0.30 and 35 km/h, gone by pedal 0.45 or 60 km/h (0 = off)" },
+    { "skip_relax_rpm", &p_relax, 80, "pulling lightly at low speed: a skip may land up to this much lower (rpm), never under the downshift point plus hysteresis_rpm. Full below pedal 0.40 or under 20 km/h at any pedal, fading out by pedal 0.65 and from 45 to 75 km/h (0 = off)" },
     { "hysteresis_rpm", &p_hyst, 50, "an upshift must land at least this far above the next downshift point" },
     { "kickdown_pedal", &p_kick_pedal, 0.92f, "pedal position for kickdown" },
     { "kickdown_rate", &p_kick_rate, 1.5f, "pedal speed (per second) that makes a full press a kickdown" },
@@ -342,7 +342,7 @@ static float skip_accel();
 // Lowest landing rpm of an upshift on the rpm path: above the downshift point that applies plus the hysteresis, and at least idle + 350.
 // A skip (2 gears or more) pulling lightly at low speed may go up to skip_relax_rpm under the idle + 350 part (the engine has
 // plenty of torque there), never under the downshift point plus the hysteresis, so it cannot shift straight back down.
-// Gradual, not a switch: full below pedal (demand) 0.30 and 35 km/h, gone at 0.45 or 60 km/h, and only while the skipped-to gear
+// Gradual, not a switch: full below pedal (demand) 0.40, or under 20 km/h at any pedal; gone at 0.65 and from 45 to 75 km/h, and only while the skipped-to gear
 // still pulls at least skip_accel at the pedal of now (half of it: no relaxation). Firm pedal and higher speeds keep the strict floor.
 static float skip_relax(float v, float a_now)
 {
@@ -491,6 +491,8 @@ static void ts_reset(int level, const char *why)
         S.strain = 0;
     }
     if (level >= RESET_HARD) {
+        S.calm_k = 0; S.calm_since = 0;     // Power starts with its own shift points again
+        S.pedal_on_at = none; S.skip_log_at = 0; S.kd_at = none;
         memset(g_learn, 0, sizeof g_learn);
         g_learn_mass = 0;
         S.self = NULL;                      // refresh() starts over from the gearbox it sees next
@@ -723,7 +725,7 @@ static int roll_exit_gear(float v, int ebrake, float brake)
 }
 
 // Neutral on gentle stretches with the pedal released (deliberately: 1.5 s),
-// Eco and Normal only, never with the brake, engine brake or retarder. Ends
+// Eco, Normal and Power (Power only with a route that confirms the roll), never with the brake, engine brake or retarder. Ends
 // with real pedal (> 10 %), any brake, or when the speed leaves its band:
 // without cruise the start speed +6/-12 km/h, with cruise the set speed +3/-5.
 // The route (if any) vetoes rolling into a steep descent. With cruise only
@@ -1067,13 +1069,13 @@ static int decide_gear(void *self, const char **why)
     // A gear that can still just hold the speed on a climb (needs 75-100 % of its full-throttle force) while the speed falls under real
     // throttle: the downshift point rises smoothly to the torque plateau, so the revs do not sag first (Damien 24-10: "subtieler, zonder bog
     // down"). No kickdown behavior: it needs the load, not a burst of throttle; over 100 % the lugging rule above takes over.
-    float load = fmax > 1 ? f_res / fmax : 0;
+    float load = fmax > 1 ? f_res / fmax : 0, dn_base = dn_eff;
     if (p_load_from < 1 && thr > 0.25f && T.accel < -0.1f && load > p_load_from) dn_eff = fmaxf(dn_eff, lerpf(dn_eff, S.plateau + 50, smooth(p_load_from, 1.0f, load)));
     if (cur > 1 && (rpm < dn_eff || lug)) {
         // maneuvering (Damien 24-10, 3856-3877 s: 6>4>5>3>4>5>6>7>8>9 in 21 s between 6 and 25 km/h): at a gentle pedal and a low speed only
         // a near-stall or lugging takes a gear off, not the demand-based downshift point
         if (p_calm > 0 && S.mass > 6000 && v * 3.6f < p_calm && !lug && !kick && thr < 0.6f && rpm > idle_rpm() + 230) { *why = "low-speed hold"; return cur; }
-        int deep = rpm < dn_eff - 100 || rpm < idle_rpm() + 250;
+        int deep = rpm < dn_base - 100 || rpm < idle_rpm() + 250;   // the load-raised point does not skip the anti-hunt dwell
         if (S.shift_dir > 0 && since < p_dwell_ud && !deep && !lug) { *why = "anti-hunt (down)"; return cur; }
         // Almost over the top: hold on, it gets easier in a moment.
         if (top_near && rpm > idle_rpm() + 300) { *why = "top ahead"; return cur; }
@@ -1146,7 +1148,8 @@ static int decide_gear(void *self, const char **why)
         if (a == a && b == b) g_ahead = fmaxf(a, b - 0.5f);
         climbing = 0;
     }
-    if (steady && cur < n && S.demand < p_power_from && !(S.shift_dir < 0 && since < p_dwell_du) && !climbing) {
+    // (not within the kickdown/lugging dwell either: the early path took 9 -> 10 two seconds after a lugging 10 -> 9 on a 2.3 % climb)
+    if (steady && cur < n && S.demand < p_power_from && !(S.shift_dir < 0 && since < p_dwell_du) && !(now - S.kd_at < by_mode(3, p_kick_dwell, 8)) && !climbing) {
         float need = fmaxf(S.f_need, f_res), k = mode_reserve() + learned().res;
         if (g_ahead == g_ahead) {
             need = fmaxf(need, resist_grade(v, g_ahead));
@@ -1158,6 +1161,8 @@ static int decide_gear(void *self, const char **why)
             if (h == cur + 1) S.floor_rpm = fl;
             if (rpm_at(h, v2) < fl) break;
             if (force_at(h, v2, 1.0f) < k * need) break;
+            // on a climb not into a gear the load rule (load_down_from) would take off again as soon as the speed dips
+            if (p_load_from < 1 && grade > 0.01f && need > p_load_from * force_at(h, v2, 1.0f)) break;
             if (h > cur + 1 && (grade > 0.02f || (force_at(h, v2, 0.85f) - f_res) / S.mass < 0)) break;
             best = h;
         }
@@ -1219,14 +1224,16 @@ static int decide_gear(void *self, const char **why)
                 break;
             }
             if (!coast && (force_at(h, v2u, 0.95f) - f_up) / S.mass < a_req) { block = "not enough pull"; break; }
+            // on a climb the new gear must carry the load under load_down_from, or the load rule shifts straight back (10 > 9 > 10 > 8, 25-10)
+            if (!coast && p_load_from < 1 && g_up > 1.0f && f_up > p_load_from * force_at(h, v2u, 1.0f)) { block = "too much load after shift"; break; }
             if (!coast && learned().res > 0 && rh < fmaxf(dn_pt(h) + p_hyst, idle_rpm() + 350) + learned().rpm &&
                 rpm < S.up_pt + 150) { block = "no pull here before"; break; }
             if (h > cur + 1) {
                 // At high demand only when the skipped-to gear still pulls hard (light truck).
                 bool pull_away = v2u < 20 / 3.6f;   // (25-10, Damien: under 20 km/h a skip is fine even at full pedal)
                 float a_skip = skip_accel() * (S.demand > 0.75f && !pull_away ? 2.0f : 1.0f);
-                if (coast || grade > 0.02f || (force_at(h, v2u, 0.85f) - f_up) / S.mass < a_skip) {
-                    block = coast ? "skip: coasting" : grade > 0.02f ? "skip: climbing" : "skip: too little pull in the skipped-to gear";
+                if (grade > 0.02f || (force_at(h, v2u, 0.85f) - f_up) / S.mass < a_skip) {   // (coasting never gets here: maxg)
+                    block = grade > 0.02f ? "skip: climbing" : "skip: too little pull in the skipped-to gear";
                     break;
                 }
                 // and keeps most of the pull of the next gear (a car must not jump 2 -> 5 at full throttle)
@@ -1568,7 +1575,7 @@ static void ts_start()
         if (!tail) {
             logline("%s: %s", p_roll > 0 ? "eco-roll and neutral watchdog off" : "neutral watchdog off",
                     engage ? "update tail not found" : "gearbox engage code not found");
-            p_roll = 0;
+            p_roll = 0; p_roll_cruise = 0;   // neutral needs this hook: no roll of any kind without it
         } else logline("%s hook in place", p_roll > 0 ? "eco-roll and neutral watchdog" : "neutral watchdog (eco-roll off)");
     }
     logline("TrueShift %s: %d/%d call sites hooked%s", g_active ? "active" : "NOT active", done, want,

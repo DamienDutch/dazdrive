@@ -89,6 +89,7 @@ float route_crest_m(float max_d) { if (!route_ok() || route_grade(0, 50) < 0.5f)
 float route_valley_m(float) { return -1; }
 static float g_bend_ms = NAN;
 float route_curve_speed(float, float, float) { return route_ok() ? g_bend_ms : NAN; }
+float route_bend_speed(float, float) { return route_ok() ? g_bend_ms : NAN; }   // the scenario's bend is a road bend, not a junction
 float route_junction_m() { return -1; }
 int route_junction_known(float) { return 0; }
 void route_junction_dump(char *b, size_t n) { snprintf(b, n, "none"); }

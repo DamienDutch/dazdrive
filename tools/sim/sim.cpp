@@ -155,6 +155,7 @@ float route_curve_speed(float, float a_dec, float)
     return sqrtf(vj * vj + 2 * a_dec * d);
 }
 float route_junction_m() { return route_ok() && M.junction_s > M.s ? (float)(M.junction_s - M.s) : -1; }
+float route_bend_speed(float, float) { return NAN; }   // the scenarios have no road bends, only the junction above
 static void *SELF = (void *)&M;
 static char letter = 'A';
 
