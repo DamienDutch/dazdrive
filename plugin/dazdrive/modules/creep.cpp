@@ -1,4 +1,4 @@
-// Creep: crawl and maneuver mode for the game's automatic (0.3 concept, docs/creep-re.md, docs/lowspeed.md).
+// Creep: crawl and maneuver mode for the game's automatic (0.3 concept, creep-re notes, lowspeed notes).
 //
 // Like a Volvo/Eaton/ZF AMT: in gears 1, 2 and R, below ~5 km/h and with little throttle, the clutch
 // slips at idle and the truck crawls along by itself; the brake takes the crawl away, the throttle asks

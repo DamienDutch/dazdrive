@@ -283,7 +283,7 @@ static void tick(double dt, int stats)
         M.gear = M.target; M.state = 0; shifts++;
     }
     // The game's update: in gear the decide site + chooser; in neutral (game,
-    // docs/lka-roll-re.md B) re-engage on throttle via the start-gear fn; then
+    // lka-roll-re notes B) re-engage on throttle via the start-gear fn; then
     // the tail (our eco-roll hook) right before the gearbox.
     if (!M.state) {
         M.target = M.gear;
@@ -299,7 +299,7 @@ static void tick(double dt, int stats)
         M.engaged = 0;
         if (s_tail) s_tail(SELF);
         // The generic gearbox parks in its gap state with gear 0 and a target
-        // until there is throttle (docs/neutral-exit-re.md § 1); gb_engage leaves it.
+        // until there is throttle (neutral-exit-re notes § 1); gb_engage leaves it.
         if (M.gear == 0 && !(M.pedal > 0.01f) && !M.engaged) { M.parked = M.target > 0; M.target = 0; }
         else M.parked = 0;
         if (M.target != M.gear) { M.state = 1; M.shift_end = t_now + M.shift_time; }

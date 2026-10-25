@@ -1,6 +1,6 @@
 // TrueShift: makes the game's automatic shift like a real truck AMT.
 //
-// How it hooks in (ETS2 1.60, see docs/trueshift.md):
+// How it hooks in (ETS2 1.60, see trueshift notes):
 //  - decide: the window call in the automatic's update, right before the game
 //    decides whether to look for another gear. We run our own decision there;
 //    if we want another gear we set the update's force flag, so the game calls
@@ -1435,14 +1435,14 @@ static float stop_threshold(float idle, float thr, float brake)
 
 // Runs at the very end of every automatic update (also in neutral), right
 // before the generic gearbox acts on the target gear: eco-roll goes in and
-// out here (docs/lka-roll-re.md part B).
+// out here (lka-roll-re notes part B).
 static void tail_pre(void *self)
 {
     if (!g_active || !takeover() || self != S.self) return;
     int g = gb_gear(self), st = gb_state(self);
     // After a roll: our exit gear as the target; the generic gearbox then
     // parks in its gap state (clutch open, gear 0) until there is throttle
-    // (ts3a-c, docs/neutral-exit-re.md § 1). There we do its own engage step.
+    // (ts3a-c, neutral-exit-re notes § 1). There we do its own engage step.
     if (S.roll_exit > 0) {
         if (g != 0 || sim_s() - S.roll_exit_at > 3 || fabsf(T.speed) * 3.6f < p_off_kmh) {
             if (g == 0) {

@@ -34,7 +34,7 @@ static const layout g_layouts[] = {
       "49 8B E3 41 5E 5F 5E 5B E9 ?? ?? ?? ??",
       "F3 0F 59 3D ?? ?? ?? ?? 45 85 F6 0F 84",
       0x1b8 },
-    // 1.61: ATS 1.61 (2026-10), ported offline 11-10 (docs/ats-161.md): the gearbox gained a float at
+    // 1.61: ATS 1.61 (2026-10), ported offline 11-10 (ats-161 notes): the gearbox gained a float at
     // self+0x68 (target 0x70, force 0x121), inner fields +0x68, handles +0x50, engine def +8/+0x10.
     // a_gearbox, i_tx_alt/x_tx_alt and the gps offset are inferred; tail and stop patterns unchecked
     // (optional: a miss only switches eco-roll / smooth stop off). Not run in game yet.
@@ -285,11 +285,11 @@ static const char *discover_with()
     }
 
     // optional: the update's tail jump into the generic gearbox (rcx = self),
-    // the last point before the gearbox acts on self+0x68 (docs/lka-roll-re.md B)
+    // the last point before the gearbox acts on self+0x68 (lka-roll-re notes B)
     if (pat_scan(L->pat_tail, G.update_lo, G.update_hi, hits, 8) == 1 && *(const unsigned char *)(hits[0] + 8) == 0xE9)
         G.tail_site = hits[0] + 8;
 
-    // optional: the stop threshold (mulss xmm7,[0.8] = 0.8 x idle) in the update (docs/lka-roll-re.md C)
+    // optional: the stop threshold (mulss xmm7,[0.8] = 0.8 x idle) in the update (lka-roll-re notes C)
     if (pat_scan(L->pat_stop, G.update_lo, G.update_hi, hits, 8) == 1) G.stop_site = hits[0];
 
     // optional: gps_manager offset in game_ctrl (route look-ahead), all hits must agree
@@ -407,7 +407,7 @@ int game_patch_tail(uintptr_t site, void *pre)
 
 // Replace the 8-byte "mulss xmm7,[rip+x]" at site by a call to a thunk that
 // sets xmm7 = fn(xmm7 = idle rpm, xmm10 = throttle, xmm12 = brake) and keeps
-// every other register (docs/lka-roll-re.md C).
+// every other register (lka-roll-re notes C).
 int game_patch_stop(uintptr_t site, float (*fn)(float, float, float))
 {
     const unsigned char *s = (const unsigned char *)site;
@@ -459,7 +459,7 @@ int game_patch_stop(uintptr_t site, float (*fn)(float, float, float))
 
 // Replace a 9-byte "movss [reg+disp32], xmm8" store by a call to a thunk that
 // sets xmm8 = fn(xmm8) (all volatile registers kept) and then does the
-// original store. Used for the LKA assist state A (docs/lka-roll-re.md A4).
+// original store. Used for the LKA assist state A (lka-roll-re notes A4).
 int game_patch_store_xmm8(uintptr_t site, float (*fn)(float))
 {
     const unsigned char *s = (const unsigned char *)site;
@@ -641,7 +641,7 @@ int game_patch_call(uintptr_t site, void *stub)
 }
 
 // The drivetrain copies the vehicle's clutch (inner+0x142c) to drive+0x330, which all torque coupling and
-// engine-speed code reads (docs/creep-re.md). At the copy (12 bytes, 8B 83 2C 14 00 00 89 86 30 03 00 00):
+// engine-speed code reads (creep-re notes). At the copy (12 bytes, 8B 83 2C 14 00 00 89 86 30 03 00 00):
 // for the vehicle cf->inner only, the copy is max(clutch, cf->floor); every other vehicle is left alone.
 // The vehicle's own clutch state (gearbox sequencer, stop rule) stays as the game has it.
 int game_patch_clutch_floor(uintptr_t site, clutch_floor *cf)
@@ -710,8 +710,8 @@ int gb_state(void *self) { return *(int32_t *)((char *)self + L->s_state); }
 void gb_force(void *self) { *((volatile unsigned char *)self + L->s_force) = 1; }
 void gb_set_target(void *self, int g) { *(volatile int32_t *)((char *)self + L->s_target) = g; }
 
-// The generic gearbox's own engage step from its gap state (0x140601c7c, docs/
-// neutral-exit-re.md § 2): with gear 0 it waits there for throttle; this does
+// The generic gearbox's own engage step from its gap state (0x140601c7c, neutral-exit-re notes
+// § 2): with gear 0 it waits there for throttle; this does
 // what throttle would: vfunc +0x70(self, gear), state 3 (closing), +0x2c = 1.
 // Only when the gap-state code matches 1.60 exactly.
 static int g_engage_ok;
@@ -945,7 +945,7 @@ char *game_ctrl()
 // ---------------------------------------------------------------- cvars by name
 
 // Settings cvars are static objects: vtable pointer, then the name inline at
-// +8 (docs/acc.md). Find one by scanning the image outside .text.
+// +8 (acc notes). Find one by scanning the image outside .text.
 void *game_cvar(const char *name)
 {
     size_t len = strlen(name) + 1;

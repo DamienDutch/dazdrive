@@ -31,14 +31,14 @@ struct layout {
     // dashboard letter: string_dyn auto_mode_name in the transmission (manual_mode_name 0x20 later),
     // transmission = resolve(inner+i_trans) or [inner+i_tx_alt]+x_tx_alt (probe run 2 path)
     unsigned t_auto_name, i_tx_alt, x_tx_alt;
-    // engine brake (docs/engine-brake-re.md): inner flag (brake-range window on) and demand, engine def
+    // engine brake (engine-brake-re notes): inner flag (brake-range window on) and demand, engine def
     // engine_brake_downshift and stage count, game_actor brake fraction
     unsigned i_eb_flag, i_eb_demand, e_eb_downshift, e_eb_cap, a_eb_frac;
     unsigned a_gearbox;  // game_actor -> the automatic gearbox object (probe run 2)
     const char *pat_gps; // gps_manager offset in game_ctrl at +3 (ets2la_plugin)
     const char *pat_tail;// the update's tail jump into the generic gearbox (E9 at +8)
     const char *pat_stop;// mulss xmm7,[0.8]: the automatic's stop threshold (0.8 x idle)
-    unsigned e_type;     // engine def: 64-bit type id; ELECTRIC_ENGINE_ID = an electric motor (docs/engine-brake-re.md). 1.61: inferred (+8)
+    unsigned e_type;     // engine def: 64-bit type id; ELECTRIC_ENGINE_ID = an electric motor (engine-brake-re notes). 1.61: inferred (+8)
 };
 enum : unsigned long long { ELECTRIC_ENGINE_ID = 0x16829f66307ULL };
 
@@ -72,7 +72,7 @@ int game_patch_skip_if(uintptr_t site, int len, const unsigned char *skip);  // 
 int game_patch_zero_xmm_if(uintptr_t site, int len, int reg, const unsigned char *flag);  // after the load: xmm<reg> = 0 while *flag
 int game_patch_store_xmm8(uintptr_t site, float (*fn)(float));
 int game_patch_stop(uintptr_t site, float (*fn)(float idle, float thr, float brake));
-// Clutch floor for one vehicle at the drivetrain's clutch copy (0x1408c82cf, docs/creep-re.md): the drivetrain
+// Clutch floor for one vehicle at the drivetrain's clutch copy (0x1408c82cf, creep-re notes): the drivetrain
 // sees max(clutch, floor) for the vehicle `inner` (0 = closed .. 1 = open). The plugin sets inner and floor.
 struct clutch_floor { void *inner; float floor; };
 int game_patch_clutch_floor(uintptr_t site, clutch_floor *cf);

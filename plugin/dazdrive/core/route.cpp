@@ -1,6 +1,6 @@
 // Route look-ahead from the navigation route in memory. Layouts from
 // ets2la_plugin (gitlab.com/ETS2LA/ets2la_plugin, MIT), verified on 1.60 in
-// probe run 2 (docs/research.md § Probe run 2):
+// probe run 2 (research notes § Probe run 2):
 //   gps_manager = game_ctrl + G.gps_off; route_task* at +0x28
 //   route_task: physical items data +0x58, count +0x60 (stride 0x20: node* +0, dist_end +0x14)
 //               logical items  data +0x80, count +0x88 (stride 0x30: type +0 (1 = prefab), dist_end +0x24)
@@ -479,7 +479,7 @@ float route_valley_m(float max_d)
     return -1;
 }
 
-// Speed limit ahead (docs/speedlimit-ahead-re.md): NO reliable source found statically, so this
+// Speed limit ahead (speedlimit-ahead-re notes): NO reliable source found statically, so this
 // reports "unknown" (NAN) for now. The probe below collects what a test ride needs to settle it.
 float route_limit_ahead(float max_m, float *dist_m)
 {

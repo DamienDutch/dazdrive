@@ -1,7 +1,7 @@
 // Cruise: the cruise control management module (0.3 concept).
 //
 // Step 1 (built): the adaptive cruise gap as a time. The game's ACC keeps
-// D(v) = max(4, g_acc * (0.25 + v/30)) meters (v in m/s, docs/cruise-re.md),
+// D(v) = max(4, g_acc * (0.25 + v/30)) meters (v in m/s, cruise-re notes),
 // so g_acc is the gap at ~81 km/h and the gap in seconds shrinks at speed
 // (17.5 -> 0.8 s at 80). This module sets g_acc so that D = time gap x speed.
 // The options menu's three distances (20 / 30 / 40) stay the player's choice:
@@ -11,7 +11,7 @@
 // own value is put back when the game closes.
 //
 // Step 2 (built, untested in game): our own smooth speed controller. The
-// game's cruise throttle fn 0x140991c90 (one caller, docs/cruise-re.md) is an
+// game's cruise throttle fn 0x140991c90 (one caller, cruise-re notes) is an
 // incremental PI that keeps integrating while the clutch is open during a
 // shift, so it comes out of every shift with a full-throttle burst. We still
 // call it (limiter and its own state), then replace its output: PI on the
@@ -168,10 +168,10 @@ static double s_haz_hard_at, s_haz_go_at;
 static double s_gacc_at;                                // g_acc poll clock
 static float s_gacc_seen = NAN;
 
-// Fields of game_actor (1.60, docs/cruise-re.md § 4).
+// Fields of game_actor (1.60, cruise-re notes § 4).
 enum { GA_ON = 0x199, GA_SET = 0x19c, GA_ACC_TARGET = 0x1a0, GA_LEAD_M = 0x1a8, GA_BRAKE_REQ = 0x17c };
 
-// Stop&Go (docs/cruise-re.md § 4): at a standstill the automatic goes to
+// Stop&Go (cruise-re notes § 4): at a standstill the automatic goes to
 // neutral (it is fed the driver's pedals, not the cruise throttle) and that
 // cancels cruise. While we hold a stop, two cancel stores are skipped
 // (neutral idle, auto box not in drive), and to drive off the automatic gets
@@ -251,7 +251,7 @@ static float band_up()
 // moving. Runs every tick (the cruise fn is called with cruise off too).
 // The brake request is never cleared by the game when its emergency brake
 // option is off: what we write stays (ts3c: brakes on, hazards forced on,
-// throttle dead, docs/neutral-exit-re.md § 3). So all our wishes meet here,
+// throttle dead, neutral-exit-re notes § 3). So all our wishes meet here,
 // once per tick, and what we wrote goes back to 0 when we no longer want it.
 static int s_sg_wait;  // Stop&Go: standing longer than stop_go_auto_s, the driver has to press Resume or the pedal: the dash shows B
 static float s_want_hill, s_want_hold, s_want_curve, s_want_acc, s_want_aeb, s_req_ours;
@@ -327,12 +327,12 @@ static void hill_start(char *g)
 }
 
 
-// ---------------------------------------------------------------- Auto Hold (docs/autohold-acc.md)
+// ---------------------------------------------------------------- Auto Hold (autohold-acc notes)
 // After a stop with the brake (speed < 0.5 km/h, pedal > 0.1) the truck stays held through the same brake
 // request as hill start (game_actor+0x17c, one writer: brake_request()), at any grade and without a timer,
 // until the driver gives gas. Real cars (Damien: VW Crafter, Lynk & Co 01) struggle to let go when you pull
 // away hard: the hold drops at a fixed moment and the car lurches or rolls. Here the release follows the drive:
-//  - the game zeroes the merged throttle while 0x17c > 0 (docs/neutral-exit-re.md § 3.1); a patch of that
+//  - the game zeroes the merged throttle while 0x17c > 0 (neutral-exit-re notes § 3.1); a patch of that
 //    one compare (s_thr_pass) lets the driver's gas through while only we hold, so the engine builds torque
 //    against the brake and the box engages as usual;
 //  - the request falls with the drive force: r = hold x (1 - F_drive / F_needed), F_needed = the grade force plus
@@ -518,7 +518,7 @@ static void resume_to_limit(char *ga)
     logv(1, "Cruise: resume while on: set speed %.0f (limit %d)", v, lim);
 }
 
-// ---------------------------------------------------------------- cruise keys (docs/cruise-keys-re.md)
+// ---------------------------------------------------------------- cruise keys (cruise-keys-re notes)
 // The key handler 0x14099b660 consumes one action object per key (toggle,
 // inc, dec, resume at game_actor+0x1e710/20/30/40; +0xf8 == 2 = pressed) with
 // `call 0x1401ed460`. We wrap those four calls: one hook sees every press.
@@ -576,7 +576,7 @@ static void consume_stub(void *act)
 }
 
 // New set speed for one step in direction dir (+1 / -1) on the grid `step`: the game's own
-// formula (docs/cruise-re.md § 4) with unit 1: inc = (floor((s+0.5)/g)+1)*g, dec = floor((s-0.5)/g)*g.
+// formula (cruise-re notes § 4) with unit 1: inc = (floor((s+0.5)/g)+1)*g, dec = floor((s-0.5)/g)*g.
 static float key_step(float base, int dir, float step)
 {
     if (!(step >= 1)) step = 1;  // 0 or garbage from the ini would give a NaN set speed (audit 11-10)
@@ -1055,7 +1055,7 @@ static float gap_s(float v_ms)
     return t;
 }
 
-// ---------------------------------------------------------------- lead speed and own ACC (docs/autohold-acc.md)
+// ---------------------------------------------------------------- lead speed and own ACC (autohold-acc notes)
 // The game's ACC fn 0x1409958b0 asks the radar fn 0x140998ce0(game_actor, out) every tick; out = {gap m, lead speed m/s,
 // FLT_MAX, 0, 0}. The call site is wrapped: we copy the first two floats. The lead is only valid while the game itself
 // accepts it (+0x1a8 > 0.5, gap < 100 m, no indicator) and its gap matches ours.
@@ -1287,7 +1287,7 @@ static void cr_start()
     }
     if (p_enabled <= 0) { logline("Cruise disabled in the ini"); return; }
     // Cruise from min_kmh instead of 30: the minimum is only checked in the key
-    // handlers (docs/cruise-re.md § 4), against a pooled 30.0 constant; point
+    // handlers (cruise-re notes § 4), against a pooled 30.0 constant; point
     // those two loads (activate compare, handler's xmm7 for dec/resume) at our own.
     // The same two code sites also prove the 1.60 game_actor layout that g_low_ok stands for (hazards, hill start, Auto
     // Hold, ISA, easing, limiter): found → g_low_ok, whatever min_kmh is (audit 11-10: with the player preset's 30 all of
@@ -1306,7 +1306,7 @@ static void cr_start()
                 else logline("Cruise: minimum speed patch failed, stays 30 km/h");
             }
             // The handler's xmm7 is also the ACC distance key's first threshold
-            // (docs/neutral-exit-re.md § 4): give that compare its own 30.0, and
+            // (neutral-exit-re notes § 4): give that compare its own 30.0, and
             // let a press step from the player's distance, not from our value.
             uintptr_t ak = game_scan("48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 0F 2F C7 76 ?? 48 8D 0D ?? ?? ?? ?? E8");
             if (ak) o_acc_read = (cvar_read_fn)(ak + 12 + *(const int32_t *)(ak + 8));
@@ -1316,7 +1316,7 @@ static void cr_start()
         }
     }
 
-    // Cruise keys: retarder off on a press, tap / hold steps (docs/cruise-keys-re.md). Four wrapped consume calls.
+    // Cruise keys: retarder off on a press, tap / hold steps (cruise-keys-re notes). Four wrapped consume calls.
     if (p_step_tap > 0 || p_ret_off > 0) {
         static const char *pat_tog = "48 85 C9 74 12 83 B9 F8 00 00 00 02 75 09 E8 ?? ?? ?? ?? B1 01 EB 02 32 C9 84 C9 74 1A 80 BF 99 01 00 00 00 75 0A";
         static const char *pat_k[3] = {
@@ -1356,7 +1356,7 @@ static void cr_start()
         } else logline("Cruise: cruise throttle call not found, the game's cruise stays");
     }
     // Our brake request (bends, hill start) is > 0 for a while; the game's
-    // auto-hazard rule (docs/neutral-exit-re.md § 3) would switch the hazards
+    // auto-hazard rule (neutral-exit-re notes § 3) would switch the hazards
     // on every time (ts3d). Its compare is skipped while only we ask.
     if (g_cruise_smooth && (p_curve_brake > 0 || p_hill > 0 || p_ah > 0)) {
         uintptr_t hz = game_scan("85 C0 74 17 F6 87 D0 01 00 00 10 75 0E 44 0F 2F 8F 7C 01 00 00 73 04 B2 01");
@@ -1364,7 +1364,7 @@ static void cr_start()
         else logline("Cruise: hazard rule not found: braking for bends / hill start may switch the hazards on");
     }
     // Auto Hold: the game zeroes the merged throttle while the brake request is > 0. Skip that one compare while only
-    // Auto Hold holds, so the pedal builds torque against the brake and the release can follow it (docs/autohold-acc.md).
+    // Auto Hold holds, so the pedal builds torque against the brake and the release can follow it (autohold-acc notes).
     if (p_ah > 0 && g_cruise_smooth && g_low_ok) {
         uintptr_t gt = game_scan("0F 2F CF 76 ?? 83 BB 50 01 00 00 02 75 ?? 0F 2F BB 7C 01 00 00 72 0A F3 0F 11 81 24 14");
         if (gt && game_patch_cf0_if(gt + 14, 7, &s_thr_pass)) {
@@ -1383,7 +1383,7 @@ static void cr_start()
                 logline("Cruise: lead speed hook in at %p (radar fn %p): own ACC %s", (void *)rs, (void *)o_radar, p_own_acc > 0 ? "on" : "off (hook only feeds the trace and the cut-in test)");
             } else logline("Cruise: lead speed hook failed: ACC target and cut-in test stay the game's / d(gap)/dt");
         } else logline("Cruise: radar call in the ACC fn not found: ACC target and cut-in test stay the game's / d(gap)/dt");
-        // Own AEB (docs/aeb.md): the ACC's emergency part sees no lead (its gap load becomes 0) and the game's AEB stores of
+        // Own AEB (aeb notes): the ACC's emergency part sees no lead (its gap load becomes 0) and the game's AEB stores of
         // 1.0 into +0x17c are skipped while ours runs. Needs our cruise fn hook (that is where the AEB runs) and the radar.
         if (p_aeb > 0 && g_radar_ok && g_cruise_smooth && g_low_ok) {
             uintptr_t ae = game_scan("80 BE 99 01 00 00 00 0F 84 ?? ?? ?? ?? 48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 0F 2F C6 0F 86 ?? ?? ?? ?? 0F 2F 3D ?? ?? ?? ?? 0F 87 ?? ?? ?? ?? 48 8B 46 18 F3 0F 10 BE A8 01 00 00");
@@ -1441,8 +1441,8 @@ static void cr_start()
             p_gap_m, p_gap_l, g_acc_player, level_name[g_level + 1]);
 }
 
-// Hazards on/off the way the game's hazard key does it (0x14099d633, docs/
-// neutral-exit-re.md § 3): bit 0x10 of game_actor+0x1d0, flasher +0x340,
+// Hazards on/off the way the game's hazard key does it (0x14099d633, neutral-exit-re notes
+// § 3): bit 0x10 of game_actor+0x1d0, flasher +0x340,
 // blink phase +0x1e0 when no indicator runs. 1.60 offsets (g_low_ok).
 enum { GA_LIGHTS = 0x1d0, GA_HAZ_FLASH = 0x340, GA_BLINK_T = 0x1e0 };
 static int hazards_on(char *ga) { return (*(unsigned char *)(ga + GA_LIGHTS) & 0x10) != 0; }
@@ -1511,7 +1511,7 @@ static void emergency_hazards()
     }
 }
 
-// ---------------------------------------------------------------- AEB (docs/aeb.md)
+// ---------------------------------------------------------------- AEB (aeb notes)
 // The game's emergency braking comes in two kinds, both a step to (near) full brake that empties the air:
 //  - the ACC's emergency part (cruise on, gap < half its D(v)): service brake (D/2 - gap) / (D/2), straight to the brakes
 //    every tick (0x1409937ea); with the game's AEB option off (Damien's profile) this is what dumped the air in ts4o / ts4p /
@@ -1960,7 +1960,7 @@ static void cr_frame()
                 logv(1, "Cruise: speed limit %d km/h: set speed %.0f", lim, set);
             }
         }
-        // Probe for the test ride: every change of the SDK limit dumps the route nodes (docs/speedlimit-ahead-re.md).
+        // Probe for the test ride: every change of the SDK limit dumps the route nodes (speedlimit-ahead-re notes).
         {
             static int probe_last = -1;
             int pl = T.speed_limit > 1 ? (int)roundf(T.speed_limit * 3.6f) : 0;

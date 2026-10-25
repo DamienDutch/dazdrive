@@ -26,7 +26,7 @@ void route_junction_cfg(int on, float lat, float roundabout_kmh, float min_deg, 
 void route_hermite(int on);   // 1 (default) = the route between two nodes is a curve through their directions, not a straight line
 float route_junction_speed(float a_dec, route_junction_t *info);  // m/s allowed now for the junctions ahead; NAN if none
 
-// Speed limit ahead (docs/speedlimit-ahead-re.md): the next LOWER limit (km/h) within max_m and the
+// Speed limit ahead (speedlimit-ahead-re notes): the next LOWER limit (km/h) within max_m and the
 // distance (m) to where it starts; NAN if none or unknown (currently always unknown: no source found).
 float route_limit_ahead(float max_m, float *dist_m);
 void route_probe_limit(float limit_kmh);  // test-ride probe: dumps the route nodes at a limit change

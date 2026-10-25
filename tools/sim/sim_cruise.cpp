@@ -102,7 +102,7 @@ void route_probe_limit(float) {}
 #include "modules/cruise.cpp"
 #include "core/rsc.cpp"
 
-// ---- the game's cruise (incremental PI, see docs/cruise-re.md § 1)
+// ---- the game's cruise (incremental PI, see cruise-re notes § 1)
 static float stock_thr;
 static float stock_cruise(void *ga, float dt, float pedal)
 {
@@ -159,7 +159,7 @@ static result run(const char *name, int ours, float set_kmh, double secs, void (
         *(float *)(GA + GA_BRAKE_REQ) = 0;  // the game rewrites it every tick (stock ACC: 0 unless emergency)
         float u = ours ? stub_cruise(GA, 1 / 60.0f, 0) : stock_cruise(GA, 1 / 60.0f, 0);
         float brake = *(float *)(GA + GA_BRAKE_REQ);
-        if (M.lead) {  // the game's ACC brakes itself when closing in (docs/cruise-re.md § 2)
+        if (M.lead) {  // the game's ACC brakes itself when closing in (cruise-re notes § 2)
             float gap = M.lead_x - (float)g_s, want = fmaxf(4, 2.0f * M.v);
             if (gap < want) brake = fmaxf(brake, fminf(1, (want - gap) / want * 1.5f));
         }
@@ -369,7 +369,7 @@ static void keys_test()
 // ======================================================================= Auto Hold
 // Truck stops with the brake, the driver lets go, waits, then launches (gentle / hard). Signed speed, static brake,
 // engine with a clutch that bites 0.15 s after the pedal (box engages when the throttle gate lets the pedal through)
-// and then closes in 0.35 s. The game's gate (docs/neutral-exit-re.md): merged throttle 0 while the brake request > 0,
+// and then closes in 0.35 s. The game's gate (neutral-exit-re notes): merged throttle 0 while the brake request > 0,
 // unless our patch passes it (s_thr_pass). Brake request slews +-5/s like the game.
 static float g_true_k = 1.0f;   // the engine really delivers this fraction of what the module thinks (model error)
 struct ahres { float roll_m, jerk, max_a, req_end, t_move, req_max_after, t_jerk; int held_ok; };
@@ -456,7 +456,7 @@ static ahres ah_run(const char *name, float grade_pct, int hard, int gate, float
 
 
 // ======================================================================= ACC with a lead (own ACC vs the game's target)
-// A lead vehicle with a scripted speed; the game's ACC fn writes +0x1a8 (gap) and +0x1a0 (its exp target, docs/cruise-re.md § 3)
+// A lead vehicle with a scripted speed; the game's ACC fn writes +0x1a8 (gap) and +0x1a0 (its exp target, cruise-re notes § 3)
 // each tick before the cruise fn, the radar call is wrapped (radar_stub) so we see the lead's speed. Braking as in the pedal
 // fn: retarder demand clamp(v - A, 0, 1) (A = target + 0.25) = 0.7 m/s2 at most, service 0.15 max = 0.6 m/s2, and the ACC's
 // emergency part (gap < D/2: brake (D/2 - gap)/(D/2), up to 6 m/s2).
@@ -562,7 +562,7 @@ static accres acc_run(const char *name, int own, int scen)
 }
 
 
-// ======================================================================= own AEB (docs/aeb.md), cruise off unless said
+// ======================================================================= own AEB (aeb notes), cruise off unless said
 // Brakes: the game slews +0x17c at 5/s; request r gives 0.4 + 10 r / (mass / 30 t) m/s2 (ts4* logs, 26-30 t); the driver's
 // brake pedal 8 m/s2 at 1.0; throttle 20 kN at 1.0 (zeroed while the request is > 0). Air: every rise of the applied brake
 // costs 60 psi per unit, the compressor gives 4 psi/s (rough; only for "one ramp vs pulses").

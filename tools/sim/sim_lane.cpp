@@ -1,5 +1,5 @@
 // Offline test of the Lane module (modules/lane.cpp is included, so lane_step and filter_a are
-// the real ones). Plant = the model FITTED ON REAL RIDES (docs/lka-sysid.md), not an assumed wheel:
+// the real ones). Plant = the model FITTED ON REAL RIDES (lka-sysid notes), not an assumed wheel:
 //   A'  = -(al-0.3) A + be u          (be, al speed dependent; filter_a adds the other 0.3/s of leak)
 //   w'  = (-w + gA A + w_driver)/tau  (FFB wheel follows the assist offset, plus whatever the hands do)
 //   o2' = -c v w - d v o3 + wind      (heading error; o3 = lane curvature term, w_bend = -(d/c) o3 = -4.4 o3)
@@ -305,7 +305,7 @@ static int sbend_tests()
     return 0;
 }
 
-// ---- learner / anti-sway tests (docs/lka-learn.md)
+// ---- learner / anti-sway tests (lka-learn notes)
 struct lres { double rms_all, rms_tail, zc_tail, maxe, usable; float s, df, cap, gA, dl, c; int upd, sw, rolled; double win[12]; double first_sw; };
 // hands off on a wandering road for T s; drvmode 3 = the driver weaves (hand on the wheel) from T*0.45 for 120 s
 static lres runL(const pp &m, int learn, int sway, float kmh, float T, int drvmode = 0, float start_o1 = 0.5f, int bends = 0)

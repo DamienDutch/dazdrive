@@ -1,13 +1,13 @@
 // Lane: a calmer lane keeping assist (0.3 concept).
 //
-// Why the stock LKA sways with a force-feedback wheel (docs/lka-roll-re.md A):
+// Why the stock LKA sways with a force-feedback wheel (lka-roll-re notes A):
 // the control law 0x140995f80 writes u (game_actor+0x1d5c) from the lane
 // offsets o1..o3; with FFB the assist is not added to the steering angle but
 // becomes a position target for the wheel motor (wheel + A, A = a leaky
 // integrator of u in the vehicle). Chain of integrators under a P law = the
 // oscillation. Gains are fixed floats (2.78x higher with FFB).
 //
-// Mode 2 (11-10, docs/lka-sysid.md): law designed on a model fitted to the real rides (offset + heading + bend feed-forward
+// Mode 2 (11-10, lka-sysid notes): law designed on a model fitted to the real rides (offset + heading + bend feed-forward
 // + feedback on A). Modes 0/1 below are older.
 // Built: a call-site hook on the control law. mode 0 = measure only: lane.csv
 // with o1..o3, u, A, steering and wheel at 20 Hz while LKA is active, so a
@@ -168,13 +168,13 @@ static void driver_activity(float wheel, float A, float dt)
     g_scale = 1 - g_act * (1 - clampf(p_backoff, 0, 1));
 }
 
-// Actuator model fitted on runs/ts3*, ts4* (docs/lka-sysid.md): A' = -al*A + be*u.
+// Actuator model fitted on runs/ts3*, ts4* (lka-sysid notes): A' = -al*A + be*u.
 static float model_be(float kmh) { return 0.235f - 0.0010f * clampf(kmh, 30, 100); }
 static float model_al(float kmh) { return 2.6f + 0.016f * clampf(kmh, 30, 100); }
 
 
 // ---------------------------------------------------------------------------------------------------------------
-// Self-learning steering profile (docs/lka-learn.md). Identifies the wheel loop online on usable stretches only
+// Self-learning steering profile (lka-learn notes). Identifies the wheel loop online on usable stretches only
 // (hands off, fast enough, near-straight, steady) and scales the mode-2 gains to keep the loop gain at the hand-tuned
 // ts4n value: wheel = gA x A(t - delay), heading rate = -c v wheel. The reference (REF_*) is what THIS estimator reads when it replays
 // the ts4n hands-free ride (gA 0.98, delay 0.35 s, c 0.168: the calm small-signal values, lower than the 1.34/0.2/0.155 large-signal fit
@@ -368,7 +368,7 @@ static void learn_block()
 }
 
 static int g_ind;   // an indicator is set (lane change on purpose): not a time to learn
-// Steering profile, recognized from the data (docs/lka-roll-re.md A1): with an FFB wheel the assist only moves the wheel
+// Steering profile, recognized from the data (lka-roll-re notes A1): with an FFB wheel the assist only moves the wheel
 // (steer == wheel, ts4w: |steer - wheel| 2e-5 while |A| 0.011); without one the game adds it: steer == wheel + A.
 static int g_ffb = -1;              // -1 not known yet, 1 FFB wheel (mode 2), 0 assist added to the steering angle
 static double F_n, F_sw, F_swa, F_a;
@@ -561,7 +561,7 @@ static void lane_reset()
     learn_flush();
 }
 
-// Live wheel gain (ts5b crash, docs/lane.md): hands off the wheel follows the assist offset as wheel = G A(t - 0.33 s) minus a
+// Live wheel gain (ts5b crash, lane notes): hands off the wheel follows the assist offset as wheel = G A(t - 0.33 s) minus a
 // centering band (crash fit G 2.95, band 0.010; ts4w G ~1.5): on a straight with small A that is ~1.2x, in a sharp bend 2-3x, so the
 // loop gain triples exactly where the bend asks most. A short least-squares ratio (1.5 s memory, a prior at wheel_gain_ref) follows it.
 static const float W_DELAY = 0.33f;
@@ -685,7 +685,7 @@ static float lane_step(float u, float o1, float o2, float o3, float dt, float wh
     g_ci *= expf(-dt * (0.1f + 1.5f * g_act));
     g_ci = clampf(g_ci, -ci_max, ci_max);
     {
-        // Model-based law (docs/lka-sysid.md). Request per physical effect:
+        // Model-based law (lka-sysid notes). Request per physical effect:
         //  - offset: stiffer towards the line (edge_boost), slow integral for a steady offset
         //  - heading o2: the damping; do1/dt = -0.88 v o2, so it is the lead the 0.5 s actuator lag needs
         //  - bend feed-forward: the bend needs wheel -4.4 o3 (fitted); the game only adds -0.5 v o3, ~1/4 of that
@@ -874,7 +874,7 @@ static void stub_law(void *ga, float o1, float o2, float o3, float dt)
     if (p_mode >= 1) ffb_detect(A, steer, wheel);
     // the law ran: it wrote a new u. Saturated it writes exactly +-1, the same as our clamped output, so u == before then too
     // (ts5b 387.4 s: skipped while saturated -> filter_a took the law for off and released the wheel in the bend). It leaves u
-    // unchanged for |o1| > 1.95 (docs/lka-roll-re.md A2) and, presumably, when lane keeping is not active: so only with the
+    // unchanged for |o1| > 1.95 (lka-roll-re notes A2) and, presumably, when lane keeping is not active: so only with the
     // lane-keeping bit on and our law running a moment ago (never keep a stale +-1 going after it went off).
     int ran = u != before || (fabsf(u) >= 0.999f && fabsf(o1) <= 1.95f && (*(unsigned char *)(g + 0x1d1) & 0x20) && wall_s() - g_law_at < 0.15);
     if (law2() && ran) {
@@ -885,7 +885,7 @@ static void stub_law(void *ga, float o1, float o2, float o3, float dt)
         }
         out = lane_step(u, o1, o2, o3, dt, wheel, A, fabsf(T.speed) * 3.6f);
         if (g_soft_at >= 0) { out *= soft_share(o1, o2, fabsf(T.speed) * 3.6f, wall_s()); g_u = out; }
-        // Indicator set (the game's own clamp, docs/lka-roll-re.md A2): the assist may not steer back against a lane change.
+        // Indicator set (the game's own clamp, lka-roll-re notes A2): the assist may not steer back against a lane change.
         // Mode 2 is much firmer than the game's law, so it must keep this rule too.
         unsigned char fl = *(unsigned char *)(g + 0x1d0);
         if (p_mode >= 2) { if (fl & 4) out = fmaxf(out, 0); if (fl & 8) out = fminf(out, 0); }
@@ -989,7 +989,7 @@ static void ln_stop()
 
 // Indicator pause: one indicator on = a lane change on purpose -> our assist lets
 // go of the wheel; indicator off -> back once a lane is found near its center (or after 4 s), ramped in. Lane keeping
-// that went off meanwhile (above min_kmh) is switched on again: game_actor+0x1d1 bit 0x20 (docs/lka-roll-re.md A2).
+// that went off meanwhile (above min_kmh) is switched on again: game_actor+0x1d1 bit 0x20 (lka-roll-re notes A2).
 static void lka_set(char *ga, int on)
 {
     g_lka_expect = on;
@@ -1139,7 +1139,7 @@ static void ln_frame()
     }
     if (o_law && p_mode >= 1) { roundabout_off(); cruise_lane_on(); }   // mode 0 leaves the game's own assist alone, also its switch
     if (p_ind_pause > 0 && p_mode >= 1 && o_law) indicator_pause();  // first: it may undo a key press (see there)
-    // Lane keeping switched on/off by its key: game_actor+0x1d1 bit 0x20 (docs/lka-roll-re.md A2).
+    // Lane keeping switched on/off by its key: game_actor+0x1d1 bit 0x20 (lka-roll-re notes A2).
     static int was = -1, slow_off;
     static double at;
     static float prev_k;
