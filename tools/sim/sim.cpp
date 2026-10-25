@@ -81,6 +81,18 @@ static void use_renault()  // Renault T, Optidriver Xtended AT02614F (12+2), DE1
     T.fwd_gears = 14; T.diff = DIFF;
     for (int i = 0; i < 16; i++) T.ratio[i] = RATIO[i];
 }
+static void use_ato()  // Renault T, Optidriver ATO2612F R (12 speeds, no crawl gears), the same DE13 TC 480, diff 3.08 (25-10)
+{
+    float r[16];
+    for (int k = 0; k < 12; k++) r[k] = 11.73f * powf(0.79f / 11.73f, k / 11.0f);
+    float c[8][2] = { {0,0},{700,0.60f},{900,0.97f},{1250,1},{1500,0.9f},{1700,0.72f},{1900,0.45f},{2100,0} };
+    memcpy(RATIO, r, sizeof r); memcpy(CURVE, c, sizeof c);
+    float g[4][2] = { {1500,1900},{750,1450},{900,1250},{1200,1600} };
+    memcpy(RANGES, g, sizeof g);
+    TORQUE = 2700; CDA = 6; LIMIT = 1900; DIFF = 3.08f; RADIUS = 0.538f; NG = 12;
+    T.fwd_gears = 12; T.diff = DIFF;
+    for (int i = 0; i < 16; i++) T.ratio[i] = RATIO[i];
+}
 static void use_car()  // a pickup-like car: 6 speeds, 450 Nm
 {
     float r[16] = { 4.17f, 2.34f, 1.52f, 1.14f, 0.87f, 0.69f };
@@ -480,15 +492,20 @@ int main(int argc, char **argv)
     if (getenv("NOBOOST")) set_param("eco_roll_boost_kmh", 0);
     if (getenv("NOLOAD")) set_param("load_down_from", 1);
 
-    if (getenv("ACCEL")) {  // acceleration study: how fast is a pull-away with 0, 1 or 2 skipped gears (no fuel in it)
-        for (int ms = 0; ms <= 2; ms++) {
-            set_param("max_skip", (float)ms);
-            char nm[120];
-            snprintf(nm, sizeof nm, "ACCEL max_skip %d, 40 t, pedal 1.0, box 0.5 s", ms); run(nm, {40000, 12, 3, 70}, c_full);
-            snprintf(nm, sizeof nm, "ACCEL max_skip %d, 40 t, pedal 0.7, box 0.5 s", ms); run(nm, {40000, 12, 3, 70}, c_p70);
-            snprintf(nm, sizeof nm, "ACCEL max_skip %d, 40 t, pedal 0.5, box 0.5 s", ms); run(nm, {40000, 12, 3, 70}, c_p50);
-            snprintf(nm, sizeof nm, "ACCEL max_skip %d, 40 t, pedal 0.7, slow box 1.2 s", ms); run(nm, {40000, 12, 3, 70, 3, 1.2f}, c_p70);
-            snprintf(nm, sizeof nm, "ACCEL max_skip %d, 20 t, pedal 0.7, box 0.5 s", ms); run(nm, {20000, 12, 3, 70}, c_p70);
+    if (getenv("ACCEL")) {  // acceleration study: how fast is a pull-away with 0, 1 or 2 skipped gears (no fuel in it), on his two boxes
+        struct Tr { const char *name; void (*use)(); int ng; } trucks[2] = { { "ATO2612F 12 speeds, diff 3.08", use_ato, 12 }, { "Xtended 12+2, diff 3.40", use_renault, 14 } };
+        for (auto &tr : trucks) {
+            tr.use();
+            // the start gear at 12 km/h: the highest gear that still gives >= 1000 rpm there
+            int g0 = 1; for (int g = 1; g <= tr.ng; g++) { float r = (12 / 3.6f) / RADIUS * RATIO[g - 1] * DIFF * 9.5493f; if (r >= 1000) g0 = g; }
+            for (int ms = 0; ms <= 2; ms += 1) {
+                set_param("max_skip", (float)ms);
+                char nm[160];
+                snprintf(nm, sizeof nm, "ACCEL %s, max_skip %d, 36 t, pedal 1.0, from 12 km/h in %d", tr.name, ms, g0); run(nm, {36000, 12, g0, 80}, c_full);
+                snprintf(nm, sizeof nm, "ACCEL %s, max_skip %d, 36 t, pedal 0.7", tr.name, ms); run(nm, {36000, 12, g0, 80}, c_p70);
+                snprintf(nm, sizeof nm, "ACCEL %s, max_skip %d, 36 t, pedal 0.5", tr.name, ms); run(nm, {36000, 12, g0, 80}, c_p50);
+                snprintf(nm, sizeof nm, "ACCEL %s, max_skip %d, 20 t, pedal 0.7", tr.name, ms); run(nm, {20000, 12, g0, 80}, c_p70);
+            }
         }
         return 0;
     }
