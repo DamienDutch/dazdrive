@@ -7,6 +7,7 @@
 #include <math.h>
 #include <stdio.h>
 
+float g_rsc_mode = 3;
 volatile int g_rsc_level;
 volatile float g_rsc_brake, g_rsc_thr_cap = 1;
 
@@ -33,7 +34,7 @@ void rsc_step(float dt)
             fflush(csv);
         }
     }
-    if (T.paused || !(dt > 0 && dt < 0.5f) || T.gear <= 0 || kmh < 40) {   // not forward, paused, a hitch, too slow: nothing to watch
+    if (g_rsc_mode < 0.5f || T.paused || !(dt > 0 && dt < 0.5f) || T.gear <= 0 || kmh < 40) {   // not forward, paused, a hitch, too slow: nothing to watch
         level = 0; cur = prev = prev2 = lobe(); lp = lps = 0; calm_since = high_since = warn_since = 0;
         g_rsc_level = 0; g_rsc_brake = 0; g_rsc_thr_cap = 1;
         return;
@@ -77,9 +78,9 @@ void rsc_step(float dt)
     if (level > 0 && calm_since && now - calm_since > 1.0 && now - lvl_at > 1.5) { level = 0; logline("Rollover guard: calm again, released"); }
     if (level >= 2 && now - l2_at > 4.0) level = 1;                       // the brake lasts at most 4 s
     g_rsc_level = level;
-    float tgt = level >= 3 ? 0.35f : level == 2 ? 0.2f : 0.0f;
+    float tgt = g_rsc_mode < 2.5f ? 0.0f : level >= 3 ? 0.35f : level == 2 ? 0.2f : 0.0f;
     float up = level >= 3 ? 2.0f : 1.0f, down = 0.6f;
     g_rsc_brake = clampf_(tgt, g_rsc_brake - down * dt, g_rsc_brake + up * dt);
-    float cap_tgt = level >= 1 ? 0.0f : 1.0f;
+    float cap_tgt = level >= 1 && g_rsc_mode >= 1.5f ? 0.0f : 1.0f;
     g_rsc_thr_cap = clampf_(cap_tgt, g_rsc_thr_cap - 4.0f * dt, g_rsc_thr_cap + 1.0f * dt);
 }

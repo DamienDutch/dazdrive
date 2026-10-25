@@ -1519,7 +1519,9 @@ static int stub_start(void *self)
     if (takeover() && S.eng_ok && v * 3.6f > p_off_kmh && wheel_radius() > 0.1f) {
         S.rolling = 0;
         S.roll_at = sim_s();
-        int g = pick_for_speed(v, lerpf(cruise_floor(n_gears()) + 100, pw_mid(), pw_k()));
+        // the demand filter lags a pedal that goes down hard right at the engage (25-10, 2397 s: full pedal at a junction, demand 0.02, gear 10
+        // at 877 rpm on a 2.3% climb, then 10->8 two seconds later): the pedal itself counts
+        int g = pick_for_speed(v, lerpf(cruise_floor(n_gears()) + 100, pw_mid(), smooth(p_power_from, p_power_full, fmaxf(S.demand, clampf(T.in_thr, 0, 1)))));
         logv(1, "engage at %.0f km/h: gear %d (game %d)", v * 3.6f, g, stock);
         S.commanded = g;
         S.cmd_why = "engage";

@@ -41,6 +41,7 @@ static param g_params[] = {
     { "pedal_curve_power", &p_pc_pw, 1.6f, "Power: the pedal is front-loaded, throttle = 1 - (1 - pedal) to this power (1 = linear; 1.6: 60 % pedal = 77 % throttle). Same limits as pedal_curve_eco" },
     { "pedal_curve_switch_travel", &p_pc_travel, 1.0f, "after a mode change the pedal curve stays the old one until you have moved the pedal this much in total (1 = a full stroke), then it blends into the new one over the next 75 % of that travel. A held pedal never changes. 0 = at once" },
     { "pedal_curve_from_kmh", &p_pc_from, 8, "the Eco and Power pedal curves work from this speed (km/h), so parking and maneuvering stay linear" },
+    { "rollover_guard", &g_rsc_mode, 3, "rollover guard (lateral acceleration, also when you drive by hand): 0 = off, 1 = a tone only, 2 = also no throttle, 3 = also a soft or firm brake. The limits are guesses from the 24-10 rollover, not measured on the game's trucks" },
     { "overspeed_cap_kmh", &p_os_cap, 5, "the extra speed we grant over the set speed (hills, descents, coasting boost, smart overspeed) stops this far over the speed limit (km/h; 0 = no cap). Only while the limit is known" },
     { "acc_fast_from_kmh", &p_acc_fast_from, 75, "ACC: from this speed (km/h) the time gap shrinks toward acc_fast_factor, so it follows closer on a motorway (country roads keep the full gap)" },
     { "acc_fast_full_kmh", &p_acc_fast_full, 95, "ACC: from this speed (km/h) the time gap is acc_fast_factor times the set gap; in between it changes smoothly" },
@@ -1851,7 +1852,7 @@ static void cr_frame()
             }
             // dropped at a standstill behind a vehicle with nobody having touched a key or the brake (the game cancels the cruise in neutral): keep
             // the old set speed for the first gas tap (Damien 25-10)
-            if (p_sg_rearm > 0 && fabsf(T.speed) * 3.6f < 3 && lead_seen_at > 0 && off_at - lead_seen_at < 3 && off_at - s_key_at > 0.5 && off_at - brake_at > 0.5 &&
+            if (p_sg_rearm > 0 && p_sg > 0 && fabsf(T.speed) * 3.6f < 3 && lead_seen_at > 0 && off_at - lead_seen_at < 3 && off_at - s_key_at > 0.5 && off_at - brake_at > 0.5 &&
                 !T.parking_brake && AE.st == AEB_OFF) {
                 s_rearm_at = off_at; s_rearm_set = set_kmh; s_rearm_active = 1;
                 logline("Cruise: dropped at a standstill behind a vehicle: a tap on the gas or Resume puts it back on at %.0f km/h", set_kmh);
