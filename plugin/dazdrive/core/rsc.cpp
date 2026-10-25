@@ -19,7 +19,7 @@ void rsc_step(float dt)
     static float lp, lps;
     static lobe cur, prev, prev2;
     static int level;
-    static double lvl_at, l2_at, calm_since, high_since;
+    static double lvl_at, l2_at, calm_since, high_since, warn_since, warn_at;
     double now = wall_s();
     float v = fabsf(T.speed), kmh = v * 3.6f;
     // Log for calibrating the single-bend threshold (Damien 25-10): 10 rows per second above 10 km/h, also by hand, only at log level 2
@@ -34,7 +34,7 @@ void rsc_step(float dt)
         }
     }
     if (T.paused || !(dt > 0 && dt < 0.5f) || T.gear <= 0 || kmh < 40) {   // not forward, paused, a hitch, too slow: nothing to watch
-        level = 0; cur = prev = prev2 = lobe(); lp = lps = 0; calm_since = high_since = 0;
+        level = 0; cur = prev = prev2 = lobe(); lp = lps = 0; calm_since = high_since = warn_since = 0;
         g_rsc_level = 0; g_rsc_brake = 0; g_rsc_thr_cap = 1;
         return;
     }
@@ -55,9 +55,14 @@ void rsc_step(float dt)
         if (want == 2 && prev2.s && now - prev2.t < 4.0 && cur.peak > prev.peak && prev.peak >= 3.5f && prev2.peak >= 3.5f) want = 3;
     }
     // one bend taken too fast, no swing: a guess from the research (real trucks roll at 2.5-4.9 m/s2, the game's trucks survived 7.7 and
-    // held 5 for 3 s): 5.5 m/s2 held for 0.5 s = throttle off and a tone, 7 = the soft brake, 8.5 = the firm one
-    if (fabsf(lps) >= 5.5f && kmh >= 40) { if (!high_since) high_since = now; if (now - high_since > 0.5) want = want > 1 ? want : 1; } else high_since = 0;
-    if (fabsf(lps) >= 7.0f) want = want > 2 ? want : 2;
+    // held 5 for 3 s): 3.5 m/s2 held for 1 s = a tone only (a warning, like a real system), 4.5 held for 0.5 s = throttle off and a tone,
+    // 6 = the soft brake, 8.5 = the firm one
+    if (fabsf(lps) >= 3.5f && kmh >= 40) {
+        if (!warn_since) warn_since = now;
+        if (now - warn_since > 1.0 && now - warn_at > 4.0 && level == 0) { warn_at = now; play_cue(CUE_AEB_WARN); logline("Rollover guard: warning, lateral %.1f m/s2 at %.0f km/h", lps, kmh); }
+    } else warn_since = 0;
+    if (fabsf(lps) >= 4.5f && kmh >= 40) { if (!high_since) high_since = now; if (now - high_since > 0.5) want = want > 1 ? want : 1; } else high_since = 0;
+    if (fabsf(lps) >= 6.0f) want = want > 2 ? want : 2;
     if (fabsf(lps) >= 8.5f) want = 3;
     if (want > level) {
         if (level == 0) {

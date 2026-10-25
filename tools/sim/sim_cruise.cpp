@@ -338,10 +338,10 @@ static void keys_test()
         run_rsc(1.0f, 1.0f, 0.0f, 6, 85, &l2b, &bmb, &lmb);
         int calm_ok = lmb == 0 && bmb == 0;
         float lvl_normal = 0; { double q; float w; int m; run_rsc(3.0f, 3.0f, 0.05f, 10, 40, &q, &w, &m); lvl_normal = (float)m; }   // a roundabout at 40 km/h
-        double q1; float w1; int m1; run_rsc(6.0f, 6.0f, 0.0f, 3, 70, &q1, &w1, &m1);    // one bend held at 6 m/s2: throttle off, no brake
+        double q1; float w1; int m1; run_rsc(5.0f, 5.0f, 0.0f, 3, 70, &q1, &w1, &m1);    // one bend held at 5 m/s2: throttle off, no brake
         T.yaw = 0; run_rsc(0.0f, 0.0f, 0.0f, 3, 70, &q1, &w1, &m1);
-        double q2; float w2; int m2; run_rsc(7.4f, 7.4f, 0.0f, 3, 70, &q2, &w2, &m2);     // 7.4 held: the soft brake
-        printf("one bend: 6 m/s2 held level %d, 7.4 m/s2 held level %d (brake %.2f)\n", m1, m2, w2);
+        double q2; float w2; int m2; run_rsc(6.5f, 6.5f, 0.0f, 3, 70, &q2, &w2, &m2);     // 6.5 held: the soft brake
+        printf("one bend: 5 m/s2 held level %d, 6.5 m/s2 held level %d (brake %.2f)\n", m1, m2, w2);
         bad |= !(m1 == 1 && m2 >= 2 && w2 > 0.1f);
         printf("rollover guard: growing sway level %d, soft brake from %.1f s (brake %.2f), lane changes level %d, roundabout level %.0f\n", lm, l2, bm, lmb, lvl_normal);
         bad |= !(sway_ok && calm_ok && lvl_normal == 0);
