@@ -752,6 +752,16 @@ static float cruise_body(void *ga, float dt, float pedal)
         // junction cancel the cruise (sound) so the rest is the driver's. Like the game's own cancels only the on flag drops; the
         // set speed stays and Resume brings it back.
         float jn_orig_kmh = ji.limit_ms * 3.6f;
+        // A prefab (junction, crossing, roundabout) close ahead that the route reading does not know (Damien 25-10, 1007 s: 49 km/h at 46 m of
+        // a prefab, while the plugin only knew a roundabout 190 m further): say so, so the next ride shows what kind of prefab it is
+        {
+            float jm = route_junction_m();
+            static double said_u;
+            if (jm >= 0 && jm < 150 && kmh > 35 && (!(vj == vj) || ji.dist_m - jm > 60) && wall_s() - said_u > 10) {
+                said_u = wall_s();
+                logv(1, "Cruise: a prefab %.0f m ahead is not a known junction or roundabout (known: %s)", jm, vj == vj ? (ji.roundabout ? "a roundabout further on" : "a junction further on") : "none");
+            }
+        }
         if (vj == vj && ji.limit_ms > 0 && p_jn_margin > 0) {
             float lo = ji.limit_ms, m = p_jn_margin / 3.6f;
             vj = sqrtf(fmaxf(0.0f, vj * vj - lo * lo) + (lo + m) * (lo + m));
