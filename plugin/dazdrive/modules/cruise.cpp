@@ -27,7 +27,7 @@
 #include <string.h>
 
 static float p_herm;
-static float p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
+static float p_sg_rearm, p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
 static param g_params[] = {
@@ -60,6 +60,7 @@ static param g_params[] = {
     { "hill_start_pct", &p_hill_pct, 3, "from this grade (%)" },
     { "hill_start_s", &p_hill_s, 3, "at most this long (s)" },
     { "stop_go", &p_sg, 1, "1 = adaptive cruise keeps going in a jam: stays on at a standstill behind a vehicle and drives off with it" },
+    { "stop_go_rearm_s", &p_sg_rearm, 60, "Stop&Go: when the cruise drops by itself at a standstill behind a vehicle, the first tap on the gas pedal within this many seconds (also Resume) puts it back on with the old set speed, and B stays on the dashboard until then. 0 = off" },
     { "stop_go_auto_s", &p_sg_auto, 0, "after standing longer than this (s), driving off needs resume or the pedal; 0 = always drives off by itself (real trucks, MAN/Detroit: 2)" },
     { "descent", &p_descent, 1, "1 = on a descent of 2 % or more (a navigation route lets it start earlier) brake gently ahead (engine brake / retarder) so the set speed holds instead of overshooting" },
     { "curves", &p_curve, 1, "1 = with navigation: slow down gently before sharp bends and exits" },
@@ -380,6 +381,7 @@ static float ah_need()
 // are written and the SDK's parking_brake channel has to confirm it within 0.8 s, else everything is put back and it stays off this session.
 enum { GA_PARK_FLAG = 0x15c, GA_PARK_VAL = 0x160 };
 static double s_res_press_at = -10;      // last resume press (on or off): cruise coming on by resume follows ISA, by set not
+static double s_rearm_at; static float s_rearm_set; static int s_rearm_active;
 static double s_ah_hold_since, s_park_at; static int s_park_on, s_park_ok, s_park_bad; static unsigned char s_park_sv; static float s_park_svf;
 static void park_release(char *g, const char *why)
 {
@@ -475,7 +477,7 @@ static void auto_hold(char *g, float dt)
         break; }
     }
     s_want_hold = AH.r;
-    if (AH.r > 0 || s_sg_wait) g_dash_status = 'B';
+    if (AH.r > 0 || s_sg_wait || s_rearm_active) g_dash_status = 'B';
     else if (g_dash_status == 'B') g_dash_status = 0;
 }
 
@@ -728,7 +730,10 @@ static float cruise_body(void *ga, float dt, float pedal)
         float a_lat = p_curve_lat;  // same in every mode (Damien 11-10)
         // Like a human (Damien 11-10, first 0.6 ride: "braked oddly before a junction and very early before a ramp; later and
         // harder"): the throttle comes off early on a gentle plan (coast), the brakes only on a firm plan (bend_kmh below)
-        float vb = route_curve_speed(a_lat, p_cv_coast, p_cv_coast);
+        // the coast deceleration the plan counts on depends on the slope (Damien 25-10: 83 -> 38 km/h without gas up a 2-4 % hill, 1217-1243 s):
+        // gravity adds 0.098 m/s2 per % uphill and takes it away downhill
+        float coast_a = fminf(1.0f, fmaxf(0.1f, p_cv_coast + 0.0981f * pitch_grade()));
+        float vb = route_curve_speed(a_lat, coast_a, coast_a);
         s_bend_coast_kmh = vb * 3.6f;
         float vb_brake = route_curve_speed(a_lat, p_cv_brake, p_jn_dec);
         static double said;
@@ -737,7 +742,7 @@ static float cruise_body(void *ga, float dt, float pedal)
             logv(2, "Cruise: bend ahead: %.0f km/h (target %.0f, now %.0f)", vb * 3.6f, target, kmh);
         }
         route_junction_t ji = {};
-        float vj = junc_on() ? route_junction_speed(p_cv_coast, &ji) : NAN;
+        float vj = junc_on() ? route_junction_speed(coast_a, &ji) : NAN;
         // You step on the gas for a junction we are slowing for: you go another way than the route (Damien 12-10: a petrol station with
         // 3-4 side entrances, the route turned there, he drove straight on and we braked to 20 for each). Leave junctions and roundabouts alone
         // for 6 s (Damien 12-10: first 12); the bends of the road itself still count.
@@ -824,7 +829,8 @@ static float cruise_body(void *ga, float dt, float pedal)
         if (vj == vj && ji.limit_ms > 0 && kmh > ji.limit_ms * 3.6f + 1 && ji.dist_m < fmaxf(400.0f, 30 * kmh / 3.6f)) {
             // Gas only while the truck can still coast down to the junction speed (not a blanket no-gas from 400 m: 25-10, two roundabouts
             // close together on a 70 road: 30 km/h all the way) and never faster than the junction speed + junction_approach_over_kmh
-            float v_env = sqrtf(ji.limit_ms * ji.limit_ms + 2 * p_jn_coast * fmaxf(ji.dist_m - (ji.roundabout ? 15 : 8), 0.0f)) * 3.6f;
+            float jn_coast = fminf(0.8f, fmaxf(0.05f, p_jn_coast + 0.0981f * pitch_grade()));
+            float v_env = sqrtf(ji.limit_ms * ji.limit_ms + 2 * jn_coast * fmaxf(ji.dist_m - (ji.roundabout ? 15 : 8), 0.0f)) * 3.6f;
             float v_ok = fminf(v_env, ji.limit_ms * 3.6f + p_jn_over);
             target = fminf(target, kmh >= v_ok - 2 ? kmh : v_ok);
         }
@@ -872,6 +878,12 @@ static float cruise_body(void *ga, float dt, float pedal)
     float jn_thr = p_jn_dec - 0.05f;
     if (p_curve_brake > 0 && jn_need > jn_thr && kmh > jn_kmh + 3)
         s_want_curve = fmaxf(s_want_curve, fminf(0.45f, 0.2f + 0.12f * (jn_need - jn_thr)));
+    // a descent the retarder and the engine brake cannot hold (1678-1692 s, -9 %: set 63, 70 km/h; Damien 25-10: the service brake may help):
+    // over the set speed plus the descent allowance and not slowing: a gentle brake request that grows with the overspeed
+    if (s_down_now && T.cruise > 0.5f) {
+        float allow = fmaxf(0.0f, p_desc_kmh) * band_scale(T.cruise) + 2.0f, over = kmh - (set + allow);
+        if (over > 0 && T.accel > -0.05f) s_want_curve = fmaxf(s_want_curve, fminf(0.4f, 0.06f * over));
+    }
     float kp = 0.25f, ki = 0.08f, rate = 0.6f;               // Normal / M (per km/h, per km/h·s, per s)
     if (md == MODE_ECO) { kp = 0.18f; ki = 0.05f; rate = 0.4f; }        // Eco: gentle, lets it sag a bit
     else if (md == MODE_POWER) { kp = 0.35f; ki = 0.12f; rate = 1.0f; }  // Power: keen
@@ -1810,7 +1822,22 @@ static void cr_frame()
     DEV_NOTE(cruise(T.cruise > 0.5f, T.cruise * 3.6f, g_acc ? g_level : -1, g_radar_ok ? s_radar.gap : NAN, s_radar.v,
                     s_radar.at, p_isa > 0, AE.st, AH.st, s_dip));
     if (!T.paused) {  // say when cruise drops and why it might have, and when it is back (a driver who pressed nothing wants to know)
-        static int was_on; static double off_at, brake_at; static float set_kmh;
+        static int was_on; static double off_at, brake_at, lead_seen_at; static float set_kmh;
+        {
+            char *lga = game_actor_safe();
+            float ld = lga ? *(float *)(lga + GA_LEAD_M) : 0;
+            if (ld > 0.5f && ld < 60) lead_seen_at = wall_s();
+            if (s_rearm_active) {
+                float kmh_r = fabsf(T.speed) * 3.6f;
+                if (T.cruise > 0.5f || kmh_r > 5 || T.parking_brake || T.in_brake > 0.3f || wall_s() - s_rearm_at > p_sg_rearm || T.gear < 0) s_rearm_active = 0;
+                else if (lga && T.in_thr > 0.05f && s_rearm_set > 5) {   // the first tap on the gas: the cruise is back on with the old set speed
+                    *(float *)(lga + GA_SET) = s_rearm_set;
+                    *(unsigned char *)(lga + GA_ON) = 1;
+                    s_rearm_active = 0;
+                    logline("Cruise: back on by a tap on the gas at a standstill (set %.0f km/h)", s_rearm_set);
+                }
+            }
+        }
         int is_on = T.cruise > 0.5f;
         if (is_on) set_kmh = T.cruise * 3.6f;
         if (T.in_brake > 0.05f || T.parking_brake) brake_at = wall_s();
@@ -1821,6 +1848,13 @@ static void cr_frame()
             if (g_keys_ok && off_at - s_key_at > 0.5 && off_at - brake_at > 0.5 && off_at - s_jn_cancel_at > 0.5 && AE.st == AEB_OFF) {
                 play_cue(CUE_CRUISE_DROP);
                 logv(1, "Cruise: dropped without brake or key: sound");
+            }
+            // dropped at a standstill behind a vehicle with nobody having touched a key or the brake (the game cancels the cruise in neutral): keep
+            // the old set speed for the first gas tap (Damien 25-10)
+            if (p_sg_rearm > 0 && fabsf(T.speed) * 3.6f < 3 && lead_seen_at > 0 && off_at - lead_seen_at < 3 && off_at - s_key_at > 0.5 && off_at - brake_at > 0.5 &&
+                !T.parking_brake && AE.st == AEB_OFF) {
+                s_rearm_at = off_at; s_rearm_set = set_kmh; s_rearm_active = 1;
+                logline("Cruise: dropped at a standstill behind a vehicle: a tap on the gas or Resume puts it back on at %.0f km/h", set_kmh);
             }
             logline("Cruise: off at %.0f km/h (was set to %.0f): brake %.2f, throttle %.2f, gear %d, eco-roll %s, AEB %s, parking brake %s, air %.0f psi",
                     fabsf(T.speed) * 3.6f, set_kmh, T.in_brake, T.in_thr, T.gear, g_rolling ? "yes" : "no", aeb_name[AE.st], T.parking_brake ? "on" : "off", T.air_psi);
