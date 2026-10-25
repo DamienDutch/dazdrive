@@ -43,6 +43,7 @@ STANDARD = {
     "cruise": {
         "smart_overspeed_kmh": -1,  # players: the game's own overspeed setting
         "descent_overspeed_kmh": 0, # players: descents held at the set speed, as before
+        "auto_hold_park_s": 0,   # off in the shipped preset: the parking brake after a long Auto Hold writes game fields that are not confirmed in the game yet
         "smooth": 1,             # ON: own cruise throttle, no bursts after shifts: part of what TrueShift is for
         "curves": 0,             # off in the shipped preset: the ~2010 year of the setup page; the page turns it on from ~2020
         "curve_brake": 0,        # off in the shipped preset: the ~2010 year of the setup page; the page turns it on from ~2020

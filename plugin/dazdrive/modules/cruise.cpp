@@ -27,7 +27,7 @@
 #include <string.h>
 
 static float p_herm;
-static float p_pc_travel, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
+static float p_ah_park, p_pc_travel, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
 static param g_params[] = {
@@ -36,7 +36,7 @@ static param g_params[] = {
     { "acc_middle_s", &p_gap_m, 1.25f, "... the middle distance (30)" },
     { "acc_long_s", &p_gap_l, 1.5f, "... the long distance (40)" },
     { "crest_heavy_factor", &p_crest_heavy, 1.6f, "predictive cruise: the ease-off before a top with a descent after it is this many times larger at a gross weight of 40 t or more (linear from 20 t; Scania allows -8 %). 1 = same at every weight" },
-    { "eco_cruise_throttle_cap", &p_eco_cap, 0.9f, "Eco with the cruise on: the cruise never asks for more than this throttle (0..1; 1 = no cap) while the speed is within 4 km/h of the target; further under it the cap is lifted (a climb, a resume)" },
+    { "eco_cruise_throttle_cap", &p_eco_cap, 1.0f, "Eco with the cruise on: the cruise never asks for more than this throttle (0..1; 1 = no cap) while the speed is within 4 km/h of the target; further under it the cap is lifted (a climb, a resume)" },
     { "pedal_curve_eco", &p_pc_eco, 1.35f, "Eco: the throttle the engine gets is the pedal to this power (1 = linear; 1.35: half pedal = 39 % throttle, flat pedal still 100 %). Not with the cruise on, not while crawling or below pedal_curve_from_kmh" },
     { "pedal_curve_power", &p_pc_pw, 1.6f, "Power: the pedal is front-loaded, throttle = 1 - (1 - pedal) to this power (1 = linear; 1.6: 60 % pedal = 77 % throttle). Same limits as pedal_curve_eco" },
     { "pedal_curve_switch_travel", &p_pc_travel, 1.0f, "after a mode change the pedal curve stays the old one until you have moved the pedal this much in total (1 = a full stroke), then it blends into the new one over the next 75 % of that travel. A held pedal never changes. 0 = at once" },
@@ -54,6 +54,7 @@ static param g_params[] = {
     { "auto_hold_request", &p_ah_req, 0.6f, "how hard the hold brakes (brake request 0..1)" },
     { "auto_hold_gentle_s", &p_ah_gentle, 0.5f, "letting go after a gentle launch (light pedal) takes about this long (s)" },
     { "auto_hold_hard_s", &p_ah_hard, 0.15f, "after a hard launch (pedal 0.8+) about this long (s), still ramped" },
+    { "auto_hold_park_s", &p_ah_park, 60, "Auto Hold: after standing held this long (s) the parking brake goes on and the service brake lets go (no air spent, like a real truck); gas or Resume releases it, with the hold taken over for the pull-away. The plugin checks that the game really shows the parking brake and switches this off for the session if not. 0 = off" },
     { "auto_hold_max_s", &p_ah_max, 2.5f, "the hold never fights the pedal longer than this (s); then it is released at the hard rate" },
     { "hill_start", &p_hill, 1, "1 = (only with auto_hold 0) after stopping on a slope the brake holds for a moment when you release it, until you give gas" },
     { "hill_start_pct", &p_hill_pct, 3, "from this grade (%)" },
@@ -374,6 +375,19 @@ static float ah_need()
     return need < m * 0.12f ? m * 0.12f : need;
 }
 
+// Parking brake after a long Auto Hold (Damien 25-10): the game_actor's parking brake flag and value (cruise-re.md, the cancel hub, inferred)
+// are written and the SDK's parking_brake channel has to confirm it within 0.8 s, else everything is put back and it stays off this session.
+enum { GA_PARK_FLAG = 0x15c, GA_PARK_VAL = 0x160 };
+static double s_res_press_at = -10;      // last resume press (on or off): cruise coming on by resume follows ISA, by set not
+static double s_ah_hold_since, s_park_at; static int s_park_on, s_park_ok, s_park_bad; static unsigned char s_park_sv; static float s_park_svf;
+static void park_release(char *g, const char *why)
+{
+    if (!s_park_on) return;
+    *(unsigned char *)(g + GA_PARK_FLAG) = s_park_ok ? 0 : s_park_sv;
+    *(float *)(g + GA_PARK_VAL) = s_park_ok ? 0.0f : s_park_svf;
+    logv(1, "Auto Hold: parking brake released (%s)", why);
+    s_park_on = s_park_ok = 0;
+}
 static void auto_hold(char *g, float dt)
 {
     s_want_hill = 0;
@@ -382,12 +396,23 @@ static void auto_hold(char *g, float dt)
     double now = wall_s();
     if (!(dt > 0 && dt < 0.5f)) { s_want_hold = AH.r; return; }  // paused / hitch: keep what is set
     float kmh = fabsf(T.speed) * 3.6f;
-    int blocked = !g_low_ok || !T.engine_on || T.parking_brake || T.gear < 0 || T.dgear < 0 || g_crawl_on || g_sg_hold;
+    int blocked = !g_low_ok || !T.engine_on || (T.parking_brake && !s_park_on) || T.gear < 0 || T.dgear < 0 || g_crawl_on || g_sg_hold;
     if (blocked) {                         // crawl owns the standstill, parking brake / reverse / Stop&Go: hand over quickly
         if (AH.st != AH_OFF) logv(1, "Auto Hold: off (%s)", !T.engine_on ? "engine off" : T.parking_brake ? "parking brake" : T.gear < 0 || T.dgear < 0 ? "reverse" : g_crawl_on ? "crawl on" : "Stop&Go holds");
         AH.st = AH_OFF;
     }
     float grade = pitch_grade();
+    if (AH.st == AH_HOLD) { if (!s_ah_hold_since) s_ah_hold_since = now; } else s_ah_hold_since = 0;
+    if (s_park_on) {
+        if (!s_park_ok && now - s_park_at > 0.8) {
+            if (T.parking_brake) { s_park_ok = 1; logv(1, "Auto Hold: parking brake on (the game confirms it)"); }
+            else { park_release(g, "the game does not show it: off for this session"); s_park_bad = 1; }
+        }
+        if (s_park_on && (T.in_thr > 0.05f || now - s_res_press_at < 0.4 || kmh > 1.0f || AH.st != AH_HOLD || T.gear < 0 || T.dgear < 0 || !T.engine_on)) {
+            park_release(g, T.in_thr > 0.05f ? "gas" : now - s_res_press_at < 0.4 ? "resume" : "no longer held");
+            if (T.in_thr > 0.05f || now - s_res_press_at < 0.4) { AH.st = AH_LAUNCH; AH.launch_t = 0; AH.grab_until = 0; AH.r = h; AH.released = 0; }
+        } else if (s_park_on && s_park_ok) AH.r = fmaxf(0.0f, AH.r - 0.5f * dt);   // the service brake lets go slowly: the parking brake holds
+    }
     switch (AH.st) {
     case AH_OFF:
         AH.r = AH.r > 0 ? fmaxf(0, AH.r - 3 * dt) : 0;   // fade out, ~0.2 s
@@ -402,6 +427,12 @@ static void auto_hold(char *g, float dt)
         AH.r = fminf(h, AH.r + 3 * dt);                  // on within ~0.2 s, while the driver still has the pedal
         if (T.in_thr > 0.05f) { AH.st = AH_LAUNCH; AH.launch_t = 0; AH.grab_until = 0; logv(2, "Auto Hold: launch, pedal %.2f, grade %.1f%%, hold %.2f", T.in_thr, grade, AH.r); }
         else if (kmh > 1.5f) { AH.st = AH_OFF; logv(2, "Auto Hold: truck moves without gas (%.1f km/h), off", kmh); }
+        else if (p_ah_park > 0 && !s_park_on && !s_park_bad && g_low_ok && now - s_ah_hold_since > p_ah_park && kmh < 0.5f && T.in_thr < 0.03f && !T.parking_brake) {
+            s_park_sv = *(unsigned char *)(g + GA_PARK_FLAG); s_park_svf = *(float *)(g + GA_PARK_VAL);
+            *(unsigned char *)(g + GA_PARK_FLAG) = 1; *(float *)(g + GA_PARK_VAL) = 1.0f;
+            s_park_on = 1; s_park_ok = 0; s_park_at = now;
+            logv(1, "Auto Hold: held %.0f s, parking brake requested", p_ah_park);
+        }
         break;
     case AH_LAUNCH: {
         AH.launch_t += dt;
@@ -451,7 +482,6 @@ static void auto_hold(char *g, float dt)
 
 // ---------------------------------------------------------------- ISA state (limit following, resume to limit)
 static int s_res_ev;                     // resume pressed while cruise was on (handled in keys_tick)
-static double s_res_press_at = -10;      // last resume press (on or off): cruise coming on by resume follows ISA, by set not
 static float s_res_before;
 
 // The game's speed limiter (g_use_speed_limiter) on? Cached, read once a second.
@@ -639,6 +669,7 @@ static float stub_cruise(void *ga, float dt, float pedal)
     }
     float c = g_creep_thr;  // Creep (heavy loads): a little throttle on top, also with cruise off (stored in inner+0x1424)
     if (c > 0 && c < 0.3f && c > r) r = c;
+    if (g_lcx_cap < 1) r = fminf(r, g_lcx_cap);  // launch control holds the revs with a throttle cap
     // our own speed limiter (the game's is switched off): the throttle fades out over the last 3 km/h
     if (p_own_lim > 0) {
         float kl = fabsf(T.speed) * 3.6f;
@@ -1720,18 +1751,26 @@ static void aeb(char *g, float dt)
 
 static void cr_frame()
 {
-    // Trace for a bug report (Damien 25-10: "gas and retarder at once"): the throttle the engine gets with the retarder or the engine brake on
+    // Trace for a bug report (Damien 25-10: "gas and retarder at once", then "log every kind of braking"): the throttle the engine gets
+    // while anything brakes: the retarder, the engine brake, the service brake (pedal or our own request), Auto Hold, the AEB, the parking brake
     {
         static double gr_since, gr_log;
-        if (!T.paused && T.eff_thr > 0.1f && (T.retarder > 0 || T.motor_brake)) {
+        char *gga = game_actor_safe();
+        float brk = fmaxf(T.in_brake, T.eff_brake);
+        int src = (T.retarder > 0 ? 1 : 0) | (T.motor_brake ? 2 : 0) | (brk > 0.05f ? 4 : 0) | (s_req_ours > 0.05f ? 8 : 0) |
+                  (AH.r > 0.05f ? 16 : 0) | (AE.st > 0 ? 32 : 0) | (T.parking_brake ? 64 : 0);
+        if (!T.paused && T.eff_thr > 0.1f && src && fabsf(T.speed) * 3.6f > 1.0f) {
             if (!gr_since) gr_since = wall_s();
             if (wall_s() - gr_since > 0.8 && wall_s() - gr_log > 5) {
                 gr_log = wall_s();
-                logv(2, "gas and retarder together: %.0f km/h, engine throttle %.2f (pedal %.2f), retarder %d, engine brake %d, cruise %s set %.0f, smart %.1f, grade %.1f%%, mode %d",
-                     fabsf(T.speed) * 3.6f, T.eff_thr, T.in_thr, (int)T.retarder, (int)T.motor_brake, T.cruise > 0.5f ? "on" : "off", T.cruise * 3.6f,
-                     g_smart_ours == g_smart_ours ? g_smart_ours : -1.0f, pitch_grade(), mode_of(game_adaptive()));
+                logv(2, "gas together with braking [%s%s%s%s%s%s%s]: %.0f km/h, engine throttle %.2f (pedal %.2f), brake %.2f, own request %.2f, retarder %d, cruise %s set %.0f, smart %.1f, grade %.1f%%, mode %d",
+                     src & 1 ? "retarder " : "", src & 2 ? "engine-brake " : "", src & 4 ? "service-brake " : "", src & 8 ? "our-brake-request " : "",
+                     src & 16 ? "auto-hold " : "", src & 32 ? "aeb " : "", src & 64 ? "parking-brake" : "", fabsf(T.speed) * 3.6f, T.eff_thr, T.in_thr, brk,
+                     s_req_ours, (int)T.retarder, T.cruise > 0.5f ? "on" : "off", T.cruise * 3.6f, g_smart_ours == g_smart_ours ? g_smart_ours : -1.0f,
+                     pitch_grade(), mode_of(game_adaptive()));
             }
         } else gr_since = 0;
+        (void)gga;
     }
     g_inc.gap_m = g_radar_ok && wall_s() - s_radar.at < 0.3 && s_radar.gap > 0.3f ? s_radar.gap : NAN;
     g_inc.flags = (g_inc.flags & ~(INC_AEB | INC_ISA)) | (AE.st != AEB_OFF ? INC_AEB : 0) | (p_isa > 0 ? INC_ISA : 0);

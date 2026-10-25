@@ -19,6 +19,8 @@ volatile float g_roll_boost_kmh;
 volatile double g_rb_cancel_at = -1e9;
 volatile int g_pcc_on;
 volatile int g_pedal_mapped;
+volatile int g_lcx;
+volatile float g_lcx_cap = 1;
 volatile float g_overspeed_cap = 5;
 volatile float g_pcc_need_kmh = NAN;
 int g_log_level = 2;
@@ -277,5 +279,25 @@ int main(int argc, char **argv)
     run_launch("LAUNCH 30 t uphill 4%, pedal 0.7 (k 2.0)", 0.7f, 30000, 4, 2.0f);
     run_launch("LAUNCH 13 t flat, pedal 0.5 (k 2.0)", 0.5f, 13000, 0, 2.0f);
     run_launch("LAUNCH 13 t flat, pedal 0.15 (k 2.0)", 0.15f, 13000, 0, 2.0f);
+    {   // launch control (hidden): arms after 0.7 s of brake + flat pedal at a standstill, holds the revs, launches when the brake is released
+        printf("== LAUNCH CONTROL state machine\n");
+        memset(&T, 0, sizeof T); T.fwd_gears = 12; T.diff = DIFF; T.rpm_limit = 1900;
+        for (int i = 0; i < 12; i++) T.ratio[i] = RATIO[i];
+        g_ln = 0; g_ln_done = 0; g_lcx = 0; g_lcx_cap = 1; p_launch = 1;
+        double t = 0; int armed_at = -1, go_at = -1; float cap_min = 1; int bad2 = 0;
+        for (int n = 0; n < 60 * 6; n++, t += 1.0 / 60) {
+            launch_in li = {};
+            li.dt = 1.0f / 60; li.speed = 0; li.thr = 1.0f; li.brake = t < 3.0 ? 0.8f : 0.0f; li.rpm = t < 1.5 ? 1200.0f : 1700.0f;
+            li.idle = IDLE; li.rpm_per_ms = RATIO[2] * DIFF / RW * 9.5493f; li.gear = 3; li.handover = -1;
+            t_now = t; launch_tick(li);
+            if (g_lcx == 1 && armed_at < 0) armed_at = n;
+            if (g_lcx == 2 && go_at < 0) go_at = n;
+            if (g_lcx == 1) cap_min = fminf(cap_min, g_lcx_cap);
+        }
+        bad2 |= !(armed_at > 40 && armed_at < 50) || go_at < 170 || go_at > 190 || cap_min > 0.45f || g_lcx_cap != 1;
+        printf("   armed at frame %d (expect ~42), go at frame %d (expect ~180), cap fell to %.2f, cap after go %.2f, launch control %s\n", armed_at, go_at, cap_min, g_lcx_cap, bad2 ? "FAIL" : "ok");
+        if (bad2) exit(1);
+        g_ln = 0; g_lcx = 0; g_lcx_cap = 1;
+    }
     return 0;
 }

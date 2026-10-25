@@ -175,6 +175,8 @@ static inline float overspeed_room(float set_ms)
     float r = T.speed_limit * 3.6f + g_overspeed_cap - set_ms * 3.6f;
     return r > 0 ? r : 0;
 }
+extern volatile int g_lcx;               // Creep: launch control phase, 0 off, 1 armed (brake + flat pedal at a standstill), 2 launching
+extern volatile float g_lcx_cap;       // Creep asks Cruise to cap the engine's throttle at this while launch control holds the revs (1 = no cap)
 extern volatile int g_pedal_mapped;     // Cruise: the throttle the engine gets is the pedal through the Eco / Power curve this frame
 extern volatile int g_pcc_on;         // Cruise: predictive cruise (PCC) is switched on
 extern volatile int g_cruise_smooth;  // the Cruise module drives the cruise throttle itself

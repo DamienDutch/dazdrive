@@ -1315,11 +1315,14 @@ static int launch_pick(int stock, float thr);
 static bool takeover_launch_ok(float) { return p_takeover > 0; }
 static void launch_correct(void *self)
 {
-    static int done;
+    static int done, prev_lcx;
     double now = sim_s();
     float kmh = fabsf(T.speed) * 3.6f;
+    bool lcx = g_lcx == 1;
+    if (lcx && !prev_lcx) done = 0;  // launch control just armed: pick the start gear again, with the brake held
+    prev_lcx = lcx;
     if (kmh > 6) { done = 0; return; }
-    if (done || kmh > 2.5f || !g_active || p_launch_fix <= 0 || p_start_fix <= 0 || p_launch_max <= 0 || T.parking_brake || T.in_brake > 0.3f || !S.eng_ok || S.mode == MODE_M || S.mode == MODE_POWER) return;
+    if (done || kmh > 2.5f || !g_active || p_launch_fix <= 0 || p_start_fix <= 0 || p_launch_max <= 0 || T.parking_brake || (T.in_brake > 0.3f && !lcx) || !S.eng_ok || (!lcx && (S.mode == MODE_M || S.mode == MODE_POWER))) return;
     int cur = gb_gear(self);
     if (cur < 1 || gb_state(self) != 0 || now - S.shift_at < 1.0 || S.rolling || g_crawl_on || S.mass < 3000) return;
     // at a standstill with the pedal still up: the gear for a gentle pull-away (0.3); with the pedal down: for that pedal
@@ -1468,14 +1471,16 @@ static int launch_pick(int stock, float thr)
         float r = wheel_radius(), f_res = resist(0);
         // Above the game's pick: only by physics (lock speed and slip time at this mass and grade), never by a gear count,
         // because every gearbox numbers its gears differently (Damien 13-10: "look at the gear ratio, not the number").
-        bool raise = p_launch_max > 0 && S.mode != MODE_POWER && S.mode != MODE_M;
-        float limit = p_slip_s * (thr >= p_kick_pedal && !raise ? 0.6f : 1.0f);
+        bool lcx = g_lcx != 0;  // launch control (Creep): a higher start gear on the held revs, a longer slip
+        bool raise = lcx || (p_launch_max > 0 && S.mode != MODE_POWER && S.mode != MODE_M);
+        float limit = p_slip_s * (lcx ? 2.5f : thr >= p_kick_pedal && !raise ? 0.6f : 1.0f);
+        float lrpm = lcx ? fminf(fmaxf(T.rpm_limit, 1900.0f) * 0.82f, 1700.0f) : p_launch_rpm;
         pick = 1;
         for (int g = raise ? n_gears() : stock; g >= 1; g--) {
             float ratio = T.ratio[g - 1] * T.diff;
-            float v_lock = p_launch_rpm / (ratio * 9.5493f) * r;
+            float v_lock = lrpm / (ratio * 9.5493f) * r;
             float a = (S.eng.torque * p_launch_torque * ratio * p_eta / r - f_res) / S.mass;
-            if (g > stock && v_lock * 3.6f > p_launch_max) continue;
+            if (g > stock && v_lock * 3.6f > (lcx ? 30.0f : p_launch_max)) continue;
             if (a > 0 && v_lock / a <= limit) { pick = g; break; }
         }
     }

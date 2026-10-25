@@ -254,8 +254,11 @@ static float launch_aim(float thr, float idle, int heavy)
     return lo + (hi - lo) * s;
 }
 
+static float lcx_aim() { return fminf(fmaxf(T.rpm_limit, 1900.0f) * 0.82f, 1700.0f); }
+
 static void launch_end(const char *why, int normal)
 {
+    g_lcx = 0; g_lcx_cap = 1;
     if (!g_ln) return;
     logv(1, "Smooth start: over (%s) after %.1f s, clutch %.2f", why, g_ln_t, g_lc);
     g_ln = 0; g_ln_done = normal; g_ln_why = why;
@@ -266,6 +269,18 @@ static void launch_tick(const launch_in &in)
     float vk = fabsf(in.speed) * 3.6f;
     if (!g_ln) {
         g_ln_done = 0;
+        // Launch control (not documented): standing still, the brake held and the pedal flat for 0.7 s: the clutch opens, the engine is held
+        // at lcx_aim by a throttle cap and TrueShift picks a higher start gear; letting go of the brake launches with that aim.
+        static float lcx_t;
+        if (p_launch > 0 && !in.blocked && !in.shifting && in.gear > 0 && vk < 1.2f && in.speed > -0.1f && in.brake > 0.5f && in.thr > 0.9f && in.idle > 200) {
+            lcx_t += in.dt;
+            if (lcx_t > 0.7f) {
+                lcx_t = 0; g_ln = 1; g_lcx = 1; g_ln_t = g_ln_rel = g_ln_shut = g_ln_rate = 0; g_ln_rpm0 = in.rpm; g_ln_up = 1; g_lc = 1.0f;
+                g_ln_ra = lcx_aim(); g_lcx_cap = 0.5f;
+                logline("Launch control: armed, holding %.0f rpm (gear %d)", g_ln_ra, in.gear);
+                return;
+            }
+        } else lcx_t = 0;
         int rest = vk < 1.2f && in.speed > -0.1f, roll = in.handover >= 0 && vk < p_l_end;
         if (p_launch > 0 && !in.blocked && !in.shifting && in.gear > 0 && in.rpm_per_ms > 0 && in.thr > 0.06f && in.brake < 0.05f &&
             (rest || roll) && in.idle > 200) {
@@ -278,13 +293,24 @@ static void launch_tick(const launch_in &in)
         return;
     }
     g_ln_t += in.dt;
+    if (g_lcx == 1) {  // armed: the clutch stays open, the throttle cap holds the revs, the brake holds the truck
+        g_lc = 1.0f;
+        float aim = lcx_aim();
+        g_lcx_cap = clampv(g_lcx_cap + (aim - in.rpm) / 100 * 0.4f * in.dt, 0.08f, 1.0f);
+        if (in.blocked || in.gear <= 0 || in.thr < 0.5f || g_ln_t > 25 || vk > 2.0f) { launch_end("launch control cancelled", 0); return; }
+        if (in.brake < 0.15f) {  // brake released: launch with the held revs as the aim
+            g_lcx = 2; g_lcx_cap = 1; g_ln_t = 0; g_ln_up = 0; g_lc = p_l_bite; g_ln_ra = aim; g_ln_rate = 0;
+            logline("Launch control: go, %.0f rpm", in.rpm);
+        }
+        return;
+    }
     g_ln_rel = in.thr < 0.03f ? g_ln_rel + in.dt : 0;
     if (in.blocked) { launch_end("blocked", 0); return; }
     if (in.shifting || in.gear <= 0) { launch_end("shift", 0); return; }
     if (g_ln_rel > 0.4f) { launch_end("pedal released", 0); return; }
     if (in.brake > 0.2f) { launch_end("brake", 0); return; }
     if (vk > p_l_end + 4) { launch_end("speed", 0); return; }
-    float aim = launch_aim(in.thr, in.idle, in.heavy);
+    float aim = g_lcx == 2 ? lcx_aim() : launch_aim(in.thr, in.idle, in.heavy);
     g_ln_ra += (aim - g_ln_ra) * fminf(1, in.dt / 0.25f);  // the aim follows the pedal, not jumps with it
     // the engine speed 0.2 s from now (a flat pedal lifts it 1500+ rpm/s against a clutch that carries almost nothing at first):
     // control that, not the speed of this moment, or the engine flares past its aim before the clutch has started to bite

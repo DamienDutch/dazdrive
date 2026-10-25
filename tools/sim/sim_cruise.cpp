@@ -22,6 +22,8 @@ volatile float g_roll_boost_kmh;
 volatile double g_rb_cancel_at = -1e9;
 volatile int g_pcc_on;
 volatile int g_pedal_mapped;
+volatile int g_lcx;
+volatile float g_lcx_cap = 1;
 volatile float g_overspeed_cap = 5;
 volatile float g_pcc_need_kmh = NAN;
 volatile float g_creep_brake;
@@ -291,6 +293,27 @@ static void keys_test()
       printf("pedal blend: eco %.2f, held after the switch %.2f (expect 0.39 both), mid %.2f, end %.2f (expect Power 0.67)\n", e0, held, mid, end);
       bad |= fabsf(e0 - 0.39f) > 0.01f || fabsf(held - e0) > 0.001f || !(mid > e0 && mid < 0.9f) || fabsf(end - 0.67f) > 0.01f;
       p_pc_eco = se; p_pc_pw = sp; p_pc_travel = st; }
+    // parking brake after a long Auto Hold: engaged after auto_hold_park_s, confirmed by the game, released by gas (and the hold is taken over)
+    {
+        float sp = p_ah_park; p_ah_park = 2; g_low_ok = 1; p_ah = 1; p_ah_req = 0.6f;
+        memset(&T, 0, sizeof T); T.engine_on = 1; T.gear = 1; T.dgear = 1; T.in_brake = 0.3f; T.fwd_gears = 12;
+        memset(&AH, 0, sizeof AH); s_park_on = s_park_ok = s_park_bad = 0; s_ah_hold_since = 0; g_sg_hold = 0; g_crawl_on = 0;
+        GA[0x15c] = 0; *(float *)(GA + 0x160) = 0;
+        for (int i = 0; i < 60 * 3; i++, t_now += 1 / 60.0) { auto_hold(GA, 1 / 60.0f); T.parking_brake = GA[0x15c] == 1; }  // the game shows what we wrote
+        int requested = s_park_on && GA[0x15c] == 1;
+        for (int i = 0; i < 60 * 2; i++, t_now += 1 / 60.0) { auto_hold(GA, 1 / 60.0f); T.parking_brake = GA[0x15c] == 1; }
+        int confirmed = s_park_ok, still_holding = AH.st == AH_HOLD;
+        T.in_brake = 0; T.in_thr = 0.3f;
+        for (int i = 0; i < 10; i++, t_now += 1 / 60.0) { auto_hold(GA, 1 / 60.0f); T.parking_brake = GA[0x15c] == 1; }
+        int released = !s_park_on && GA[0x15c] == 0 && (AH.st == AH_LAUNCH || AH.st == AH_OFF);
+        // a game that does not show the parking brake: put back, off for the session
+        T.parking_brake = 0; T.in_thr = 0; T.in_brake = 0.3f; memset(&AH, 0, sizeof AH); s_ah_hold_since = 0; s_park_bad = 0;
+        for (int i = 0; i < 60 * 5; i++, t_now += 1 / 60.0) auto_hold(GA, 1 / 60.0f);
+        int reverted = s_park_bad && !s_park_on && GA[0x15c] == 0;
+        printf("auto hold park: requested %d, confirmed %d (hold %d), released by gas %d, reverted when unconfirmed %d\n", requested, confirmed, still_holding, released, reverted);
+        bad |= !(requested && confirmed && still_holding && released && reverted);
+        p_ah_park = sp; s_park_bad = 0; memset(&AH, 0, sizeof AH);
+    }
     T.speed_limit = 0;
     printf("keys test: %s\n", bad ? "FAIL" : "ok");
     if (bad) exit(1);
