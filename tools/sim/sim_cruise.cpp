@@ -282,6 +282,15 @@ static void keys_test()
       printf("smart overspeed: flat %.2f, -1.5 %% %.2f, -3 %% %.2f, uphill %.2f (expect 3.2, between, 2.0, 3.2)\n", w0, w1, w2, w3);
       bad |= !(w0 > 3.0f && w0 < 3.4f) || !(w1 < w0 && w1 > w2) || !(w2 > 1.9f && w2 < 2.2f) || fabsf(w3 - w0) > 0.01f;
       T.place.orientation.pitch = 0; p_smart_kmh = sp; p_desc_kmh = dc; T.cruise = cr; }
+    // pedal curve after a mode change: stays while the pedal is held, blends with the pedal travel
+    { float se = p_pc_eco, sp = p_pc_pw, st = p_pc_travel; p_pc_eco = 1.35f; p_pc_pw = 1.6f; p_pc_travel = 1.0f;
+      float e0 = pedal_blend(MODE_ECO, 0.5f);                       // first call: Eco curve
+      float held = 0; for (int i = 0; i < 100; i++) held = pedal_blend(MODE_POWER, 0.5f);   // switched to Power, pedal held: still Eco
+      float mid = 0; for (float p = 0.5f; p <= 0.9f; p += 0.05f) mid = pedal_blend(MODE_POWER, p);    // 0.4 of travel
+      float end = 0; for (int k = 0; k < 6; k++) { pedal_blend(MODE_POWER, 0.2f); end = pedal_blend(MODE_POWER, 0.5f); }  // plenty of travel
+      printf("pedal blend: eco %.2f, held after the switch %.2f (expect 0.39 both), mid %.2f, end %.2f (expect Power 0.67)\n", e0, held, mid, end);
+      bad |= fabsf(e0 - 0.39f) > 0.01f || fabsf(held - e0) > 0.001f || !(mid > e0 && mid < 0.9f) || fabsf(end - 0.67f) > 0.01f;
+      p_pc_eco = se; p_pc_pw = sp; p_pc_travel = st; }
     T.speed_limit = 0;
     printf("keys test: %s\n", bad ? "FAIL" : "ok");
     if (bad) exit(1);

@@ -178,6 +178,8 @@ static struct {
     int roll_exit;          // gear to engage after a roll (kept as target until it is in)
     double roll_exit_at;
     double pedal_on_at;     // last time the pedal was pressed
+    double calm_since;      // Power: since when the driving is flat, light and steady
+    float calm_k;           // Power: 0 = full Power shift points, 1 = like Normal (after a calm stretch)
     const char *unsupported; // why this truck is left to the game's own automatic (NULL = fine)
     float rpm_odd_s;        // seconds the rpm did not follow the speed model at all (torque converter?)
     int manual_logged;
@@ -277,10 +279,10 @@ static float by_mode(float eco, float normal, float power)
     if (p_mode_char <= 0) return normal;
     return S.mode == MODE_ECO ? eco : S.mode == MODE_POWER ? power : normal;
 }
-static float mode_rpm() { return S.mode == MODE_ECO ? p_eco_rpm : S.mode == MODE_POWER ? p_power_rpm : 0; }
+static float mode_rpm() { return S.mode == MODE_ECO ? p_eco_rpm : S.mode == MODE_POWER ? p_power_rpm * (1 - S.calm_k) : 0; }
 static float mode_reserve()
 {
-    return S.mode == MODE_ECO ? p_eco_reserve : S.mode == MODE_POWER ? p_power_reserve : p_reserve;
+    return S.mode == MODE_ECO ? p_eco_reserve : S.mode == MODE_POWER ? lerpf(p_power_reserve, p_reserve, S.calm_k) : p_reserve;
 }
 
 // Stock shift points interpolated from low to high gear, like the game does.
@@ -613,6 +615,15 @@ static void refresh(void *self)
     }
 
     if (T.in_thr > 0.02f) S.pedal_on_at = now;
+    // Power on a flat, light, steady stretch for a while: the shift points sink to Normal's, so a long calm cruise ends in the top gear
+    // and Power does not cost fuel for nothing (Damien 25-10: it stayed in the 11th at ~1480 rpm); a firm pedal brings them back at once
+    {
+        bool calm = S.mode == MODE_POWER && p_mode_char > 0 && S.thr < 0.4f && fabsf(T.accel) < 0.2f && fabsf(grade_pct()) < 1.5f && v > 5.5f;
+        if (!calm) S.calm_since = now;
+        float tgt = calm && now - S.calm_since > 8 ? 1.0f : 0.0f;
+        float rate = tgt > S.calm_k ? 1.0f / 6 : 1.0f;
+        S.calm_k += clampf(tgt - S.calm_k, -rate * (float)dt, rate * (float)dt);
+    }
 
     // Kickdown: the pedal pressed past kickdown_pedal quickly. Armed for 3 s
     // (cleared by the kickdown shift itself or by lifting below 0.8).

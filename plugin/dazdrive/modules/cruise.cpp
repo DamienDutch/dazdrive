@@ -27,7 +27,7 @@
 #include <string.h>
 
 static float p_herm;
-static float p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
+static float p_pc_travel, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
 static param g_params[] = {
@@ -39,6 +39,7 @@ static param g_params[] = {
     { "eco_cruise_throttle_cap", &p_eco_cap, 0.9f, "Eco with the cruise on: the cruise never asks for more than this throttle (0..1; 1 = no cap) while the speed is within 4 km/h of the target; further under it the cap is lifted (a climb, a resume)" },
     { "pedal_curve_eco", &p_pc_eco, 1.35f, "Eco: the throttle the engine gets is the pedal to this power (1 = linear; 1.35: half pedal = 39 % throttle, flat pedal still 100 %). Not with the cruise on, not while crawling or below pedal_curve_from_kmh" },
     { "pedal_curve_power", &p_pc_pw, 1.6f, "Power: the pedal is front-loaded, throttle = 1 - (1 - pedal) to this power (1 = linear; 1.6: 60 % pedal = 77 % throttle). Same limits as pedal_curve_eco" },
+    { "pedal_curve_switch_travel", &p_pc_travel, 1.0f, "after a mode change the pedal curve stays the old one until you have moved the pedal this much in total (1 = a full stroke), then it blends into the new one over the next 75 % of that travel. A held pedal never changes. 0 = at once" },
     { "pedal_curve_from_kmh", &p_pc_from, 8, "the Eco and Power pedal curves work from this speed (km/h), so parking and maneuvering stay linear" },
     { "overspeed_cap_kmh", &p_os_cap, 5, "the extra speed we grant over the set speed (hills, descents, coasting boost, smart overspeed) stops this far over the speed limit (km/h; 0 = no cap). Only while the limit is known" },
     { "acc_fast_from_kmh", &p_acc_fast_from, 75, "ACC: from this speed (km/h) the time gap shrinks toward acc_fast_factor, so it follows closer on a motorway (country roads keep the full gap)" },
@@ -202,6 +203,29 @@ static float crest_mass_k()
 {
     float f = fminf(1.0f, fmaxf(0.0f, (load_mass() - 20000) / 20000));
     return 1 + (fmaxf(p_crest_heavy, 1.0f) - 1) * f;
+}
+// The pedal curve of a mode: Eco flatter, Power and M front-loaded, Normal linear
+static float pedal_shape(int md, float r)
+{
+    if (md == MODE_ECO && p_pc_eco > 1) return powf(r, p_pc_eco);
+    if ((md == MODE_POWER || md == MODE_M) && p_pc_pw > 1) return 1 - powf(1 - r, p_pc_pw);
+    return r;
+}
+// After a mode change the curve only moves with the pedal (Damien 25-10: no timer, a held pedal stays what it is): the old curve
+// stays until the pedal has travelled pedal_curve_switch_travel/4, then it blends into the new one over the rest of that travel.
+static float pedal_blend(int md, float r)
+{
+    static int from = -1, to = -1; static float travel, prev = -1, b = 1;
+    if (to < 0) { from = to = md; }
+    if (md != to) { from = b > 0.5f ? to : from; to = md; travel = 0; b = p_pc_travel > 0 ? 0 : 1; }
+    if (prev >= 0 && b < 1) {
+        travel += fabsf(r - prev);
+        float T0 = fmaxf(p_pc_travel, 0.01f);
+        b = fminf(1.0f, fmaxf(0.0f, (travel - 0.25f * T0) / (0.75f * T0)));
+        if (b >= 1) from = to;
+    }
+    prev = r;
+    return from == to || b >= 1 ? pedal_shape(to, r) : pedal_shape(from, r) + (pedal_shape(to, r) - pedal_shape(from, r)) * b;
 }
 static float band_up()
 {
@@ -610,9 +634,7 @@ static float stub_cruise(void *ga, float dt, float pedal)
     g_pedal_mapped = 0;
     if (ga && !*(unsigned char *)((char *)ga + GA_ON) && !g_crawl_on && fabsf(T.speed) * 3.6f >= p_pc_from && r > 0.01f && r < 0.999f) {
         int md = mode_of(game_adaptive());
-        float y = r;
-        if (md == MODE_ECO && p_pc_eco > 1) y = powf(r, p_pc_eco);
-        else if ((md == MODE_POWER || md == MODE_M) && p_pc_pw > 1) y = 1 - powf(1 - r, p_pc_pw);  // M: the sober, direct pedal
+        float y = pedal_blend(md, r);  // M: the sober, direct pedal (Power curve)
         if (y != r) { r = y; g_pedal_mapped = 1; }
     }
     float c = g_creep_thr;  // Creep (heavy loads): a little throttle on top, also with cruise off (stored in inner+0x1424)
