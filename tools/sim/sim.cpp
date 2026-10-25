@@ -302,7 +302,7 @@ static void tick(double dt, int stats)
 
 struct setup { float mass, v0; int g0; double secs; float cvar = 3, shift_time = 0.5f, mass_seen = 0; int eb_toggle = -1; float eb_level = -1;
                float (*road)(double) = NULL; int route = 0; double junction = 0; };
-static int rolls; static double roll_time, min_kmh;
+static int rolls; static double roll_time, min_kmh, t_30, t_50, t_80, d_80;
 
 static void run(const char *name, setup su, void (*ctl)(double))
 {
@@ -316,7 +316,7 @@ static void run(const char *name, setup su, void (*ctl)(double))
     M.v = su.v0 / 3.6f; tick(1 / 60.0, 0);
     M.state = 0; M.gear = M.target = su.g0; M.force = 0;
     M.v = su.v0 / 3.6f; shifts = ups = hunts = last_dir = 0; up_rpm_sum = 0; up_n = 0; rpm_sum = rpm_t = 0;
-    M.s = 0; rolls = 0; roll_time = 0; min_kmh = 1e9;
+    M.s = 0; rolls = 0; roll_time = 0; min_kmh = 1e9; t_30 = t_50 = t_80 = d_80 = -1;
     int f0 = n_failed;
     double t0 = t_now, next_print = t0;
     while (t_now - t0 < su.secs) {
@@ -325,6 +325,9 @@ static void run(const char *name, setup su, void (*ctl)(double))
         tick(1 / 60.0, t_now - t0 > su.secs / 2);
         if (M.gear == 0 && M.v > 1) { roll_time += 1 / 60.0; if (!was0) rolls++; }
         if (t_now - t0 > 3 && M.v * 3.6 < min_kmh) min_kmh = M.v * 3.6;
+        if (t_30 < 0 && M.v * 3.6f >= 30) t_30 = t_now - t0;
+        if (t_50 < 0 && M.v * 3.6f >= 50) t_50 = t_now - t0;
+        if (t_80 < 0 && M.v * 3.6f >= 80) { t_80 = t_now - t0; d_80 = M.s; }
         if (t_now >= next_print) { next_print += 10;
             printf("        t=%5.1f  %5.1f km/h  gear %2d  rpm %4.0f  pedal %.2f cc %.2f grade %.1f%% %c\n", t_now - t0,
                    M.v * 3.6f, M.gear, rpm_now(), M.pedal, M.cc, M.grade_pct, letter); }
@@ -332,6 +335,7 @@ static void run(const char *name, setup su, void (*ctl)(double))
     printf("  -> %d shifts (%d up, avg up-landing %.0f rpm), %d hunting pairs, %d no-pull lessons, end %.1f km/h gear %d, "
            "mean rpm 2nd half %.0f, min %.0f km/h, %d rolls %.0f s, %.0f m\n", shifts, ups, up_n ? up_rpm_sum / up_n : 0,
            hunts, n_failed - f0, M.v * 3.6f, M.gear, rpm_t > 0 ? rpm_sum / rpm_t : 0, min_kmh, rolls, roll_time, M.s);
+    if (getenv("ACCEL")) printf("  accel: 30 km/h at %.1f s, 50 at %.1f s, 80 at %.1f s (%.0f m)\n", t_30, t_50, t_80, d_80);
 }
 
 // A driver holding a speed with the pedal (P controller, a bit lazy).
@@ -352,6 +356,8 @@ static void cruise(float kmh)
 }
 
 static void c_full(double) { M.pedal = 1; }
+static void c_p70(double) { M.pedal = 0.7f; }
+static void c_p50(double) { M.pedal = 0.5f; }
 // Adaptive cruise set to 80 behind a truck doing 50: bursts, then long gaps.
 static void c_acc(double t) { M.cruise_kmh = 80; M.pedal = 0; float e = 50 / 3.6f - M.v; M.cc = e > 0.3f ? 1.0f : e < -0.3f ? 0.0f : 0.3f; }
 static void c_light(double) { M.pedal = 0.4f; }
@@ -474,6 +480,18 @@ int main(int argc, char **argv)
     if (getenv("NOBOOST")) set_param("eco_roll_boost_kmh", 0);
     if (getenv("NOLOAD")) set_param("load_down_from", 1);
 
+    if (getenv("ACCEL")) {  // acceleration study: how fast is a pull-away with 0, 1 or 2 skipped gears (no fuel in it)
+        for (int ms = 0; ms <= 2; ms++) {
+            set_param("max_skip", (float)ms);
+            char nm[120];
+            snprintf(nm, sizeof nm, "ACCEL max_skip %d, 40 t, pedal 1.0, box 0.5 s", ms); run(nm, {40000, 12, 3, 70}, c_full);
+            snprintf(nm, sizeof nm, "ACCEL max_skip %d, 40 t, pedal 0.7, box 0.5 s", ms); run(nm, {40000, 12, 3, 70}, c_p70);
+            snprintf(nm, sizeof nm, "ACCEL max_skip %d, 40 t, pedal 0.5, box 0.5 s", ms); run(nm, {40000, 12, 3, 70}, c_p50);
+            snprintf(nm, sizeof nm, "ACCEL max_skip %d, 40 t, pedal 0.7, slow box 1.2 s", ms); run(nm, {40000, 12, 3, 70, 3, 1.2f}, c_p70);
+            snprintf(nm, sizeof nm, "ACCEL max_skip %d, 20 t, pedal 0.7, box 0.5 s", ms); run(nm, {20000, 12, 3, 70}, c_p70);
+        }
+        return 0;
+    }
     run("A1 40 t, flat, full throttle from 12 km/h (DCT 0.5 s)", {40000, 12, 3, 70}, c_full);
     run("A2 40 t, flat, full throttle, slow box 1.2 s", {40000, 12, 3, 70, 3, 1.2f}, c_full);
     run("A2b 8 t solo, flat, full throttle (skips?)", {8000, 12, 4, 40}, c_full);
