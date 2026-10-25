@@ -27,7 +27,7 @@
 #include <string.h>
 
 static float p_herm;
-static float p_ah_park, p_pc_travel, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
+static float p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
 static param g_params[] = {
@@ -81,6 +81,7 @@ static param g_params[] = {
     { "junction_handover_kmh", &p_jn_hand_kmh, 6, "the cruise is only cancelled for a junction once the speed is down to the junction speed plus the margin plus this (km/h) ..." },
     { "junction_handover_m", &p_jn_hand_m, 30, "... or when the junction is this close (m), whatever the speed" },
     { "speed_limiter_kmh", &p_own_lim, 0, "our own speed limiter (km/h, 0 = off): the throttle fades out only when the speed is about to pass the limit (where it will be in 1.5 s), so a climb at 92 keeps its full throttle; in every mode and with the pedal curves, and the cruise set speed never goes above it. Switch the game's own limiter off" },
+    { "junction_signal_deg", &p_jn_signal, 50, "a junction on the route that turns less than this (degrees, not a roundabout) is only slowed for when you use an indicator: the route is not where you are going, and a crossing you drive straight over needs no braking. 0 = always slow for it" },
     { "junction_cancel_s", &p_jn_cancel_s, 5, "this many seconds before a junction or roundabout we slowed for, the cruise is cancelled with a sound (the game's Resume brings the set speed back). 0 = never" },
     { "junction_min_deg", &p_junc_deg, 25, "turns smaller than this (degrees) are not slowed for" },
     { "roundabout_kmh", &p_rb_kmh, 25, "speed at the entry of a roundabout, also when going straight through" },
@@ -646,14 +647,14 @@ static struct {
 static unsigned char s_aeb_owns;   // our AEB is hooked in (patches in place)
 static unsigned char s_aeb_watch;  // read by those patches every frame: the game's ACC emergency braking and its AEB stores are
                                    // skipped only while our AEB is watching right now (cruise on, or aeb_without_cruise = 1)
-// Our own speed limiter: how much of the throttle may stay. Only the speed in 1.5 s counts (Damien 25-10: no fade on a climb at 92 km/h):
-// full while that is more than 2.5 km/h under the limit, none once it reaches the limit.
+// Our own speed limiter: how much of the throttle may stay. Only the speed in 1 s counts (Damien 25-10: no fade on a climb at 92 km/h):
+// full while that is more than 1.5 km/h under the limit, none once it reaches the limit (a direct cut-off: the first version was slow and soft).
 static float own_limit_k(float kmh, float accel)
 {
     if (!(p_own_lim > 0)) return 1.0f;
     if (kmh >= p_own_lim) return 0.0f;
-    float proj = kmh + accel * 3.6f * 1.5f;
-    return fmaxf(0.0f, fminf(1.0f, (p_own_lim - proj) / 2.5f));
+    float proj = kmh + accel * 3.6f * 1.0f;
+    return fmaxf(0.0f, fminf(1.0f, (p_own_lim - proj) / 1.5f));
 }
 static float stub_cruise(void *ga, float dt, float pedal)
 {
@@ -747,6 +748,12 @@ static float cruise_body(void *ga, float dt, float pedal)
                 ignore_until = wall_s() + 6;
             }
             if (wall_s() < ignore_until) vj = NAN;
+            // a gentle route turn without an indicator: you are going straight on (Damien 25-10: crossings, 548 s and 1455 s)
+            if (vj == vj && p_jn_signal > 0 && !ji.roundabout && ji.turn_deg < p_jn_signal) {
+                unsigned char fl = *(unsigned char *)(g + 0x1d0);   // game_actor lights: bit 4 left, bit 8 right (both = hazards)
+                bool signalling = (fl & 12) == 4 || (fl & 12) == 8;
+                if (!signalling) vj = NAN;
+            }
         }
         // Damien 13-10: we cannot know a good junction speed, so brake only down to it plus a margin, and a few seconds before the
         // junction cancel the cruise (sound) so the rest is the driver's. Like the game's own cancels only the on flag drops; the
@@ -1089,7 +1096,13 @@ static void own_acc(char *g, float dt)
     s_lead_v = lv;
     if (p_own_acc <= 0 || !*(unsigned char *)(g + GA_ON) || g_level < 0 || !(lv == lv) || !(dt > 0 && dt < 0.5f)) { OA.on = 0; s_want_acc = 0; s_lv_prev = NAN; s_a_lead = 0; return; }
     float set = *(float *)(g + GA_SET), v = fabsf(T.speed), kmh = v * 3.6f;
-    float dstar = desired_gap(v);
+    // the wanted gap moves by at most 1.5 m/s when it grows and 3 m/s when it shrinks: a change of the distance stand (1 -> 2) is no reason to brake
+    // at once (Damien 25-10), the gap grows into it
+    static float dstar_sm = NAN;
+    float dstar_raw = desired_gap(v);
+    if (!(dstar_sm == dstar_sm) || fabsf(dstar_raw - dstar_sm) > 60) dstar_sm = dstar_raw;
+    else dstar_sm += fmaxf(-3.0f * dt, fminf(1.5f * dt, dstar_raw - dstar_sm));
+    float dstar = dstar_sm;
     float stopm = stop_gap(v);
     s_dstar = dstar;
     // Heavier = slower to stop (Damien: "start braking earlier at 60 t"): from 30 t up the planned deceleration shrinks
@@ -1643,7 +1656,7 @@ static void aeb(char *g, float dt)
         float jm = route_junction_m();
         if (jm >= 0 && jm < 60 && AE.vl > 2) { p_s = fminf(p_s, 1.5f); f_s = fminf(f_s, 1.0f); }
         // the driver brakes enough by himself
-        if (T.in_brake > 0.05f && -T.accel >= 0.9f * a_need) { cap_st = AEB_OFF; cap = "driver brakes"; }
+        if ((T.in_brake > 0.05f && -T.accel >= 0.9f * a_need) || (T.in_brake > 0.3f && ttc > 1.5f)) { cap_st = AEB_OFF; cap = "driver brakes"; }  // a firm brake pedal ends the warning (Damien 25-10)
         // the ACC (cruise on) already brakes enough and there is time: leave it to the ACC (Damien 12-10: the AEB went off with
         // the ACC on and braking, and he thought the ACC did fine). The AEB is back as soon as that stops being true.
         else if (on && T.in_brake < 0.05f && ttc > 3.0f && -T.accel >= 0.65f * a_need) { cap_st = AEB_OFF; cap = "ACC brakes"; }

@@ -318,9 +318,9 @@ static void keys_test()
     }
     // own speed limiter 95: a climb at 92 keeps the throttle, a flat road at 93.5 fades, a fast approach cuts early
     { float sl = p_own_lim; p_own_lim = 95;
-      float k1 = own_limit_k(92, 0), k2 = own_limit_k(93.5f, 0), k3 = own_limit_k(90, 0.5f), k4 = own_limit_k(94.8f, -0.5f), k5 = own_limit_k(95.2f, 0);
-      printf("own limiter: climb at 92 %.2f, flat 93.5 %.2f, 90 and accelerating %.2f, 94.8 and slowing %.2f, over the limit %.2f (expect 1.00 0.60 0.92 1.00 0.00)\n", k1, k2, k3, k4, k5);
-      bad |= fabsf(k1 - 1) > 0.01f || fabsf(k2 - 0.6f) > 0.02f || fabsf(k3 - 0.92f) > 0.03f || fabsf(k4 - 1) > 0.01f || k5 != 0;
+      float k1 = own_limit_k(92, 0), k2 = own_limit_k(94.2f, 0), k3 = own_limit_k(93.5f, 0.2f), k4 = own_limit_k(94.8f, -0.5f), k5 = own_limit_k(95.2f, 0);
+      printf("own limiter: climb at 92 %.2f, flat 94.2 %.2f, 93.5 and accelerating %.2f, 94.8 and slowing %.2f, over the limit %.2f (expect 1.00 0.53 0.53 1.00 0.00)\n", k1, k2, k3, k4, k5);
+      bad |= fabsf(k1 - 1) > 0.01f || fabsf(k2 - 0.53f) > 0.03f || fabsf(k3 - 0.53f) > 0.05f || fabsf(k4 - 1) > 0.01f || k5 != 0;
       p_own_lim = sl; }
     // rollover guard: a sway that grows (0.6 Hz, 3.5 -> 9 m/s2 at 85 km/h) is caught, normal driving is not
     {
