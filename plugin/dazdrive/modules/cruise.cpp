@@ -759,7 +759,8 @@ static float cruise_body(void *ga, float dt, float pedal)
             static double said_u;
             if (jm >= 0 && jm < 150 && kmh > 35 && (!(vj == vj) || ji.dist_m - jm > 60) && wall_s() - said_u > 10) {
                 said_u = wall_s();
-                logv(1, "Cruise: a prefab %.0f m ahead is not a known junction or roundabout (known: %s)", jm, vj == vj ? (ji.roundabout ? "a roundabout further on" : "a junction further on") : "none");
+                char jd[240]; route_junction_dump(jd, sizeof jd);
+                logv(1, "Cruise: a prefab %.0f m ahead is not a known junction or roundabout (known: %s)", jm, jd);
             }
         }
         if (vj == vj && ji.limit_ms > 0 && p_jn_margin > 0) {

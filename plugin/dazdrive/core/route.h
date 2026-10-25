@@ -2,6 +2,7 @@
 // Without an active route (or off it) everything reports "unknown" and the
 // modules drive carefully on the live grade alone.
 #pragma once
+#include <stddef.h>
 
 void route_reset();                     // forget the cached route (other truck, teleport, load)
 void route_update();                    // call every frame; refreshes itself 4x per second
@@ -12,7 +13,8 @@ float route_max_grade(float d0, float d1);  // steepest 50 m stretch (%) in [d0,
 float route_min_grade(float d0, float d1);  // steepest downhill 50 m stretch (%) in [d0, d1]; NAN if unknown
 float route_crest_m(float max_d);       // distance to the top of the climb we are on; -1 if none within max_d
 float route_valley_m(float max_d);      // a dip: distance to the lowest point within max_d when the road climbs >= 3 m within 300 m after it; -1 if none
-float route_junction_m();               // distance to the next junction/roundabout (prefab) on the route; -1 if none
+float route_junction_m();
+void route_junction_dump(char *buf, size_t n);   // what the junction reading holds, for a log line               // distance to the next junction/roundabout (prefab) on the route; -1 if none
 float route_curve_speed(float a_lat, float a_dec, float a_dec_jn = -1);  // a_dec_jn: junctions planned with this (< 0 = a_dec)  // m/s allowed now for the bends ahead; NAN if unknown
 
 // Junctions on the route (turns and roundabouts): route_curve_speed includes them once

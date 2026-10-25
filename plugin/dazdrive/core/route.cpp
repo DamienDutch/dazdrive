@@ -160,7 +160,18 @@ static void find_junctions(char *task, const char *items, u64 n, u64 seg, float 
         memcpy(&te, litems + (r + 1) * 0x30, 4);
         memcpy(&ie, litems + (r + 1) * 0x30 + 8, 8);
         u64 pe = pi, px = pi + 1;
-        if (te != 0 || px + 1 >= n || px >= seg + 1 + (u64)nc || pe < 1 || *(char *const *)(items + px * 0x20) != ie) return;
+        if (te != 0 || px + 1 >= n || px >= seg + 1 + (u64)nc || pe < 1 || *(char *const *)(items + px * 0x20) != ie) {
+            // a prefab on the route that cannot be read as a junction (Damien 25-10, a roundabout at 46 m the plugin did not know): say why, once per prefab
+            static const char *rej[40]; static int nrej; int kn = 0;
+            for (int k = 0; k < nrej; k++) kn |= rej[k] == ip;
+            if (!kn && nrej < 40) {
+                rej[nrej++] = ip;
+                logline("prefab not read as a junction: %.0f m ahead, %d items before its exit, exit type %u, %s%s%s%s", cum[pe > seg ? pe - (seg + 1) : 0], (int)(r - q + 1), te,
+                        px + 1 >= n ? "route ends " : "", px >= seg + 1 + (u64)nc ? "exit beyond the horizon " : "", pe < 1 ? "no entry node " : "",
+                        te == 0 && px < n && *(char *const *)(items + px * 0x20) != ie ? "exit item mismatch" : "");
+            }
+            return;
+        }
         float a[3], b[3], c[3], d[3];
         if (!node_pos(items, pe - 1, a) || !node_pos(items, pe, b) || !node_pos(items, px, c) || !node_pos(items, px + 1, d)) return;
         float h0 = atan2f(b[0] - a[0], b[2] - a[2]), h1 = atan2f(d[0] - c[0], d[2] - c[2]);
@@ -487,6 +498,16 @@ void route_probe_limit(float limit_kmh)
 }
 
 float route_junction_m() { return R.ok ? R.junction_m : -1; }
+// What the junction reading holds right now, for a log line: distance to the entry, turn, curves, roundabout flag, path ratio
+void route_junction_dump(char *buf, size_t n)
+{
+    int k = 0;
+    buf[0] = 0;
+    for (int i = 0; i < R.njn && k < (int)n - 60; i++)
+        k += snprintf(buf + k, n - k, "%s[%.0f m, %.0f deg, %d curves, %s, x%.2f]", i ? " " : "", R.jn[i].d_in, fabsf(R.jn[i].turn) * 57.2958f, R.jn[i].curves,
+                      R.jn[i].round ? "roundabout" : "junction", R.jn[i].ratio);
+    if (!k) snprintf(buf, n, "none");
+}
 
 // Bends: the radius at each sample from the heading change over 50 m (three
 // points 25 m apart). The speed allowed now so that, braking gently (a_dec),

@@ -90,6 +90,7 @@ float route_valley_m(float) { return -1; }
 static float g_bend_ms = NAN;
 float route_curve_speed(float, float, float) { return route_ok() ? g_bend_ms : NAN; }
 float route_junction_m() { return -1; }
+void route_junction_dump(char *b, size_t n) { snprintf(b, n, "none"); }
 void route_junction_cfg(int, float, float, float, float) {}
 void route_hermite(int) {}
 float route_junction_speed(float, route_junction_t *) { return NAN; }
