@@ -3,11 +3,13 @@
 // game's trucks survive), it looks for the growing sideways swing that preceded the 24-10 rollover: two opposite lateral peaks
 // within 2.5 s. The lateral acceleration is speed x yaw rate. Levels: 1 = a tone and no throttle, 2 = also a soft brake,
 // 3 = a firm brake when the swing grows. Cruise applies g_rsc_thr_cap and g_rsc_brake; this file only decides.
+// The single-bend thresholds (one bend taken too fast, no swing) sit behind rollover_bend, off by default: every physics mod
+// has its own tipping point, so those limits never calibrate for everyone (Damien 25-10). The swing check does not need one.
 #include "suite.h"
 #include <math.h>
 #include <stdio.h>
 
-float g_rsc_mode = 3;
+float g_rsc_mode = 3, g_rsc_bend = 0;
 volatile int g_rsc_level;
 volatile float g_rsc_brake, g_rsc_thr_cap = 1;
 
@@ -57,14 +59,16 @@ void rsc_step(float dt)
     }
     // one bend taken too fast, no swing: a guess from the research (real trucks roll at 2.5-4.9 m/s2, the game's trucks survived 7.7 and
     // held 5 for 3 s): 3.5 m/s2 held for 1 s = a tone only (a warning, like a real system), 4.5 held for 0.5 s = throttle off and a tone,
-    // 6 = the soft brake, 8.5 = the firm one
-    if (fabsf(lps) >= 3.5f && kmh >= 40) {
-        if (!warn_since) warn_since = now;
-        if (now - warn_since > 1.0 && now - warn_at > 4.0 && level == 0) { warn_at = now; play_cue(CUE_AEB_WARN); logline("Rollover guard: warning, lateral %.1f m/s2 at %.0f km/h", lps, kmh); }
-    } else warn_since = 0;
-    if (fabsf(lps) >= 4.5f && kmh >= 40) { if (!high_since) high_since = now; if (now - high_since > 0.5) want = want > 1 ? want : 1; } else high_since = 0;
-    if (fabsf(lps) >= 6.0f) want = want > 2 ? want : 2;
-    if (fabsf(lps) >= 8.5f) want = 3;
+    // 6 = the soft brake, 8.5 = the firm one. Only with rollover_bend on (see the top of the file).
+    if (g_rsc_bend > 0.5f) {
+        if (fabsf(lps) >= 3.5f && kmh >= 40) {
+            if (!warn_since) warn_since = now;
+            if (now - warn_since > 1.0 && now - warn_at > 4.0 && level == 0) { warn_at = now; play_cue(CUE_AEB_WARN); logline("Rollover guard: warning, lateral %.1f m/s2 at %.0f km/h", lps, kmh); }
+        } else warn_since = 0;
+        if (fabsf(lps) >= 4.5f && kmh >= 40) { if (!high_since) high_since = now; if (now - high_since > 0.5) want = want > 1 ? want : 1; } else high_since = 0;
+        if (fabsf(lps) >= 6.0f) want = want > 2 ? want : 2;
+        if (fabsf(lps) >= 8.5f) want = 3;
+    }
     if (want > level) {
         if (level == 0) {
             play_cue(CUE_AEB_WARN);
