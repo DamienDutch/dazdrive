@@ -710,7 +710,9 @@ static int pick_for_speed(float v, float target)
         float err = fabsf(r - target);
         if (err < best_err) { best_err = err; best = g; }
     }
-    return best ? best : n_gears();
+    // nothing fits: too slow for every gear (crawling at 4 km/h after a pause: 25-10, "engage at 4 km/h: gear 12") -> the lowest, not the top
+    if (!best) return rpm_at(1, v) < base_dn(1) + p_hyst ? 1 : n_gears();
+    return best;
 }
 
 // ---------------------------------------------------------------- eco-roll
@@ -1530,7 +1532,8 @@ static int stub_start(void *self)
         S.roll_at = sim_s();
         // the demand filter lags a pedal that goes down hard right at the engage (25-10, 2397 s: full pedal at a junction, demand 0.02, gear 10
         // at 877 rpm on a 2.3% climb, then 10->8 two seconds later): the pedal itself counts
-        int g = pick_for_speed(v, lerpf(cruise_floor(n_gears()) + 100, pw_mid(), smooth(p_power_from, p_power_full, fmaxf(S.demand, clampf(T.in_thr, 0, 1)))));
+        int g = v * 3.6f <= p_on_kmh ? launch_pick(stock, clampf(T.in_thr, 0, 1))   // still at walking pace: a start gear by physics, not a gear for the speed
+              : pick_for_speed(v, lerpf(cruise_floor(n_gears()) + 100, pw_mid(), smooth(p_power_from, p_power_full, fmaxf(S.demand, clampf(T.in_thr, 0, 1)))));
         logv(1, "engage at %.0f km/h: gear %d (game %d)", v * 3.6f, g, stock);
         S.commanded = g;
         S.cmd_why = "engage";
