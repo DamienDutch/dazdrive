@@ -27,7 +27,7 @@
 #include <string.h>
 
 static float p_herm;
-static float p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
+static float p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
 static param g_params[] = {
@@ -74,6 +74,11 @@ static param g_params[] = {
     { "junctions", &p_junc, 1, "1 = with navigation: also slow down before junctions where the route turns, and before roundabouts (needs curves = 1; always on with own_acc = 1)" },
     { "junction_lat", &p_junc_lat, 2.5f, "sideways acceleration (m/s2) allowed in a junction turn (v = sqrt(this x turn radius), at least 15 km/h)" },
     { "junction_margin_kmh", &p_jn_margin, 10, "junctions and roundabouts: brake only down to the junction's speed plus this (km/h); the rest is yours. 0 = down to the junction speed itself" },
+    { "junction_coast_decel", &p_jn_coast, 0.2f, "approaching a junction or roundabout the cruise may still pick up speed while the truck could coast down to the junction speed at this deceleration (m/s2; a loaded truck coasts at about 0.1 to 0.2); no gas above that speed" },
+    { "junction_approach_over_kmh", &p_jn_over, 20, "and never faster than the junction speed plus this (km/h) on the approach" },
+    { "junction_handover_kmh", &p_jn_hand_kmh, 6, "the cruise is only cancelled for a junction once the speed is down to the junction speed plus the margin plus this (km/h) ..." },
+    { "junction_handover_m", &p_jn_hand_m, 45, "... or when the junction is this close (m), whatever the speed" },
+    { "speed_limiter_kmh", &p_own_lim, 0, "our own speed limiter (km/h, 0 = off): the throttle fades out over the last 3 km/h, in every mode and with the pedal curves, and the cruise set speed never goes above it. Switch the game's own limiter off" },
     { "junction_cancel_s", &p_jn_cancel_s, 5, "this many seconds before a junction or roundabout we slowed for, the cruise is cancelled with a sound (the game's Resume brings the set speed back). 0 = never" },
     { "junction_min_deg", &p_junc_deg, 25, "turns smaller than this (degrees) are not slowed for" },
     { "roundabout_kmh", &p_rb_kmh, 25, "speed at the entry of a roundabout, also when going straight through" },
@@ -612,6 +617,11 @@ static float stub_cruise(void *ga, float dt, float pedal)
     }
     float c = g_creep_thr;  // Creep (heavy loads): a little throttle on top, also with cruise off (stored in inner+0x1424)
     if (c > 0 && c < 0.3f && c > r) r = c;
+    // our own speed limiter (the game's is switched off): the throttle fades out over the last 3 km/h
+    if (p_own_lim > 0) {
+        float kl = fabsf(T.speed) * 3.6f;
+        if (kl > p_own_lim - 3) r *= fmaxf(0.0f, fminf(1.0f, (p_own_lim - kl) / 3));
+    }
     if (ga) cruise_trace((char *)ga, r);
     return r;
 }
@@ -692,7 +702,8 @@ static float cruise_body(void *ga, float dt, float pedal)
             // only 1.5 s and 3 s (a second roundabout right after the first, or a Resume still on the approach).
             bool free_to_cancel = ji.roundabout ? (now_c - s_cb_on_since > 1.5 && now_c - s_jn_cancel_at > 3)
                                                 : (now_c - s_cb_on_since > 5 && now_c - s_jn_cancel_at > 20);
-            if (t_to <= p_jn_cancel_s && kmh > jn_orig_kmh + 3 && free_to_cancel) {
+            bool slowed = kmh <= jn_orig_kmh + p_jn_margin + p_jn_hand_kmh || ji.dist_m <= p_jn_hand_m;  // handed over when slowed down or close (Damien 25-10: later, slower)
+            if (t_to <= p_jn_cancel_s && kmh > jn_orig_kmh + 3 && free_to_cancel && slowed) {
                 s_jn_cancel_at = now_c;
                 if (ji.roundabout) g_rb_cancel_at = now_c;
                 *(unsigned char *)(g + GA_ON) = 0;
@@ -730,7 +741,13 @@ static float cruise_body(void *ga, float dt, float pedal)
         // from the entry, so the throttle came on and the brakes right after (Damien 12-10: "gas, then brake")
         // from 400 m (30 s) out, not 150 m: entering a town at 42 km/h the throttle came on towards a roundabout 400 m ahead (35 km/h plan) up to 51 km/h,
         // the brakes and the cancel only 75 m before it (24-10, 1688-1713 s: "veel te hard")
-        if (vj == vj && ji.limit_ms > 0 && kmh > ji.limit_ms * 3.6f + 1 && ji.dist_m < fmaxf(400.0f, 30 * kmh / 3.6f)) target = fminf(target, kmh);
+        if (vj == vj && ji.limit_ms > 0 && kmh > ji.limit_ms * 3.6f + 1 && ji.dist_m < fmaxf(400.0f, 30 * kmh / 3.6f)) {
+            // Gas only while the truck can still coast down to the junction speed (not a blanket no-gas from 400 m: 25-10, two roundabouts
+            // close together on a 70 road: 30 km/h all the way) and never faster than the junction speed + junction_approach_over_kmh
+            float v_env = sqrtf(ji.limit_ms * ji.limit_ms + 2 * p_jn_coast * fmaxf(ji.dist_m - (ji.roundabout ? 15 : 8), 0.0f)) * 3.6f;
+            float v_ok = fminf(v_env, ji.limit_ms * 3.6f + p_jn_over);
+            target = fminf(target, kmh >= v_ok - 2 ? kmh : v_ok);
+        }
     }
     // The ACC's own target (vehicle ahead) always wins, also 0 = stop behind it. But someone cutting in or a
     // car that pulls away (the gap is opening) is no reason to slow down (Damien): then only hold the speed.
@@ -1815,6 +1832,11 @@ static void cr_frame()
     if (g_low_ok && p_min_set > 0) {
         char *ga = game_actor_safe();
         if (ga && *(unsigned char *)(ga + GA_ON) && *(float *)(ga + GA_SET) < p_min_set) *(float *)(ga + GA_SET) = p_min_set;
+    }
+    // Our own speed limiter: the set speed never above it
+    if (p_own_lim > 0) {
+        char *ga = game_actor_safe();
+        if (ga && *(unsigned char *)(ga + GA_ON) && *(float *)(ga + GA_SET) > p_own_lim) *(float *)(ga + GA_SET) = p_own_lim;
     }
     // The game's speed limiter on (g_use_speed_limiter): the set speed never above it (Damien: + / hold went to 110).
     if (g_low_ok && p_limiter > 0) {
