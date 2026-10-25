@@ -26,11 +26,21 @@ WHICH GAME
 
 ETS2 only, and only the Steam beta branch temporary_1_60 (ETS2 1.60). The regular Steam version
 (1.61) is NOT supported yet. To switch: Steam > right-click Euro Truck Simulator 2 > Properties >
-Betas > pick temporary_1_60. A save made with a newer game version may not load in an older one, so
-copy your profile folder (Documents\Euro Truck Simulator 2) somewhere safe first.
+Betas > pick temporary_1_60. No access code is needed. Steam then downloads the older build (a few
+GB); you are on it when the library shows [temporary_1_60] behind the game's name.
+
+A save made with a newer game version may not load in an older one, so copy your profile folder
+(Documents\Euro Truck Simulator 2) somewhere safe first. If your profile is missing or will not load
+on 1.60, make a new profile for the test. Your normal profile is untouched and is back when you set
+the beta to "None" again. DazDrive writes nothing into profiles or saves.
+
+Mods: map and truck mods are fine as long as they work on 1.60 (ProMods: the version made for 1.60).
+Only another automatic-gearbox plugin conflicts (see KNOWN LIMITS).
 
 On any other version the plugin should find nothing to hook and do nothing. It says so in
 plugins\dazdrive\dazdrive.log and in the game's own game.log.txt. That is not a guarantee, though.
+If Steam ever drops the beta branch, the game goes to 1.61 and DazDrive goes quiet: the dash shows A
+again. That is expected until the 1.61 version is out.
 
 American Truck Simulator is not supported in this release: the plugin logs "not supported" and
 stays inactive.
@@ -39,8 +49,7 @@ Multiplayer:
 - Singleplayer is what it is made for.
 - NOT on TruckersMP. Their rules forbid tools that change gameplay (rule 2.1) and their client scans
   memory, so you would risk a ban. Remove the DLL before you join.
-- SCS Convoy: not tested yet. Host your own session and tell the people you drive with. The project
-  this one builds on (car_automatic_transmission) advises against using it in Convoy.
+- SCS Convoy: untested. For now drive singleplayer; Convoy comes later.
 
 
 INSTALL (2 minutes)
@@ -54,14 +63,25 @@ INSTALL (2 minutes)
      Steam tip:      right-click the game > Manage > Browse local files, then open bin > win_x64.
      Windows:        C:\Program Files (x86)\Steam\steamapps\common\Euro Truck Simulator 2\bin\win_x64\plugins\
      Linux / Proton: ~/.local/share/Steam/steamapps/common/Euro Truck Simulator 2/bin/win_x64/plugins/
-4. In the game: gearbox on Automatic (Options > Gameplay).
-5. Start the game. The first time, it shows a warning about plugins ("advanced SDK features"):
-   click OK.
+   Check: you now have ...\win_x64\plugins\dazdrive.dll and ...\win_x64\plugins\dazdrive\dazdrive.ini
+   (not plugins\plugins\...). If Windows removed dazdrive.dll: Windows Security > Protection history >
+   Allow (or Restore), then copy it again.
+4. In the game: Options > Gameplay > Transmission type = Automatic. On Sequential or Manual the
+   gearbox part does nothing; the cruise parts still work. Leave the game's own adaptive cruise
+   control and emergency braking switched on there too: DazDrive uses their radar.
+5. Start the game. Every start shows a warning about plugins ("advanced SDK features"): click OK,
+   that is normal.
+6. Check it works: the gear display on the dashboard shows D (or E / S) instead of A, and
+   plugins\dazdrive\dazdrive.log has a line with "applied". Nothing else appears on screen. Still A?
+   Read WHICH GAME.
 
 That is all: the included dazdrive.ini is the standard preset (see WHAT IS ON BY DEFAULT).
 
 Updating: close the game, then copy the new files over the old ones. That replaces your
 dazdrive.ini, so keep a copy of yours first and put it back, or make a new one with the setup page.
+Never used the setup page? Just overwrite everything.
+Off for a while (a stock evening, TruckersMP): move dazdrive.dll out of plugins, for example into a
+folder plugins_off next to it, and put it back later.
 Remove: delete plugins\dazdrive.dll and the plugins\dazdrive folder.
 
 
@@ -98,6 +118,7 @@ ON in the included ini
   Hill start assist              stable
   Emergency stop signal          stable
   AEB (emergency braking)        stable
+  Rollover protection            beta
 
 OFF in the included ini (switch on with the setup page; the year that turns it on is in brackets)
   Gearbox looks ahead            stable         (~2015)
@@ -140,7 +161,11 @@ Cruise
     vehicle and drives off with it by itself (the "Real truck" preset on the setup page asks for
     resume or the throttle after a longer stop instead).
   - AEB: warning tones, then partial braking, then full braking. It replaces the game's own
-    emergency braking, which empties the brake air.
+    emergency braking, which empties the brake air. It needs the game's radar, so leave an ACC
+    distance, blind spot or emergency braking switched on in the game's options.
+  - Rollover protection (beta): when the truck starts to sway in a bend (a growing sideways swing,
+    also when you drive by hand) a tone, then no throttle, then a soft or firm brake until it is
+    calm again. It does not judge a single bend by a fixed limit.
   - Emergency stop signal: the hazards flash after braking very hard from above 50 km/h, go off
     again if you brake softer before the stop, and stay on after a full stop.
   - Auto Hold: stays braked after a stop until you give gas.
@@ -149,8 +174,9 @@ Cruise
 
 Lane
   Lane centering that sways less. Mode 0 leaves the game's assist alone, mode 2 is a calmer law
-  that learns how your wheel responds (experimental). Keep your hands near the wheel: it is an
-  assistant, not an autopilot.
+  that learns how your wheel responds (experimental). It steers while the cruise control is on:
+  switching the cruise on switches it on, like a travel assist. Keep your hands near the wheel: it
+  is an assistant, not an autopilot.
 
 Creep
   Crawl / maneuver mode: in gears 1, 2 and R the clutch slips at idle so the truck crawls by
@@ -172,9 +198,10 @@ writes the standard preset again; a setting missing from an old ini also gets it
 CONTROLS
 --------
 
-There is no button setup: DazDrive uses the keys and buttons you bound in the game
-(Options > Controls), on a wheel or a keyboard. Check that these are bound, otherwise the part
-that needs them does nothing (everything else keeps working):
+Keep your bindings. There is no button setup: DazDrive uses the keys and buttons you bound in the
+game (Options > Controls), on a keyboard, a wheel or a controller. Check that these are bound (search
+the Controls list for "Cruise" and "Adaptive"), otherwise the part that needs them does nothing
+(everything else keeps working):
 
   Cruise control: on/off, + and -, resume   Needed for every cruise feature (SteadyCruise, ACC, AEB, ...)
   Adaptive Cruise Control Mode              Changes the ACC distance; held for a second: speed-limit
@@ -190,7 +217,7 @@ that needs them does nothing (everything else keeps working):
 - Speed-limit following (ISA, beta): it starts off. While driving, hold the game's ACC distance key
   ("Adaptive Cruise Control Mode") for about a second to switch it on or off. A rising or falling
   pair of tones tells you which way it went, the distance stays as it was, and the choice is
-  remembered.
+  remembered. If your cruise speed suddenly follows the signs, you held that key: hold it again.
 - Crawl mode (if enabled in the setup page): at a standstill hold the game's gearbox-mode key for
   about a second.
 - Cruise + / - and the ACC distance key: see "Cruise" above. Nothing else needs a button.
@@ -217,8 +244,9 @@ Tones
   one, two or three soft tones (slide down: off)  ACC distance close / medium / far (off)
   rising / falling pair of bells                  Feature switched on / off
                                                   (speed-limit following, lane centering, crawl)
-  two short tones                                 AEB warning
-  a quick run of alternating tones                AEB is braking
+  three short pips                                AEB warning; also the rollover protection's tone
+  a quick run of alternating pulses               AEB is braking (faster and harsher when it brakes fully)
+  one steady tone (M mode)                        The wheels push the engine over its limit: shift up
 
 
 KNOWN LIMITS
@@ -253,7 +281,9 @@ Open an issue: https://github.com/DamienDutch/dazdrive/issues/new/choose
 Include: game version, truck and engine/gearbox (mods?), trailer or not, whether a route was
 active, and what you were doing.
 
-Attach the folder plugins\dazdrive\incidents\ (zipped) and plugins\dazdrive\dazdrive.log. When
+Attach the folder plugins\dazdrive\incidents\ (zipped: right-click the folder > Send to > Compressed
+(zipped) folder) and plugins\dazdrive\dazdrive.log. Too big for your chat? Only incidents and the
+log, leave the .csv files out. When
 something goes wrong (the gearbox hunts between gears, you fight a shift, the rpm hits the limiter,
 the truck is stuck in neutral, emergency braking, a ringing lane assist) DazDrive saves that moment
 as one file in the incidents folder: the 20 seconds before and 15 seconds after, with the log lines

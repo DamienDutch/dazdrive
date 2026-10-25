@@ -70,11 +70,13 @@ grep -q "SCS Software" "$out/LICENSE" || { echo "LICENSE lacks the SCS SDK notic
 
 # Leftovers a player should never see: developer names, work-log dates, build names, private links, local extras.
 echo "== leftover check"
-if grep -n -i -E 'damien|11-10|10-10|dev\.[0-9]+|pre\.[0-9]+|claude|home assistant|ha_out|rides\.jsonl|live\.json|/home/' \
+# Work-log dates look like "24-10" (day-month, the project runs from September): any dd-09..dd-12 is one. "1-2 gear" is not.
+datepat='\b[0-3]?[0-9]-(09|1[0-2])\b'
+if grep -n -i -E "damien|$datepat|dev\.[0-9]+|pre\.[0-9]+|claude|home assistant|ha_out|rides\.jsonl|live\.json|/home/|tools/sim|notes/|docs/|\bts[0-9]+[a-z]\b" \
      "$out/README.txt" "$pd/dazdrive.ini" "$pd/dazdrive-setup.html" | grep -v -i 'github.com/DamienDutch' | grep -v 'Copyright'; then
   echo "leftovers in the player files (above): fix the source texts first" >&2; exit 1
 fi
-if grep -i -E 'Damien [0-9]|11-10|rides\.jsonl|ha_out' <<<"$dll_strings" | grep -v -i 'github.com/DamienDutch' | head -3; then
+if grep -i -E "Damien [0-9]|$datepat|rides\.jsonl|ha_out|tools/sim|notes/|docs/" <<<"$dll_strings" | grep -v -i 'github.com/DamienDutch' | head -3; then
   echo "leftovers in the DLL strings (above): fix the help strings first" >&2; exit 1
 fi
 echo "  clean"

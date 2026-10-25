@@ -34,7 +34,7 @@ DazDrive saves a moment as `incidents\<name>_<date>_<time>.csv` when something g
 - `hunt`: the gearbox changed direction three times in 10 s. `override`: you gave a shift hint against a shift it just made.
 - `limiter`: rpm at the limiter over 0.6 s. `lug`: rpm under 90 % of idle over 0.8 s while moving.
 - `neutral`: stuck in neutral for 1.5 s. `air`: brake air so low that DazDrive stopped its own braking.
-- `aeb`: emergency braking acted. `input`: the ACC distance key read as held for 6 s. `lane`: the lane assist swayed or rang.
+- `aeb`: emergency braking acted. `input`: the ACC distance key read as held for 6 s. `lane`: the lane assist swayed or rang. `rsc`: the rollover guard saw a growing sideways swing (tone, throttle off, brake).
 
 Columns include `kmh, rpm, gear, target, thr, brake, accel, grade_pct, set_kmh, gap_m, mode, flags`. The budget is `incident_mb`
 (standard 4) and `log_max_mb`.

@@ -12,17 +12,26 @@ assist behave like the real thing. Lekker rijden.
 You **must** know these before you install it:
 
 - **ETS2 1.60 only.** It works on the Steam beta branch `temporary_1_60`, not on the regular version
-  (1.61) yet. Steam > right-click Euro Truck Simulator 2 > Properties > Betas > `temporary_1_60`. A save
-  made with a newer game version may not load in an older one, so copy your profile folder
-  (`Documents\Euro Truck Simulator 2`) somewhere safe first. American Truck Simulator is not supported.
+  (1.61) yet. Steam > right-click Euro Truck Simulator 2 > Properties > Betas > `temporary_1_60`. No
+  access code is needed; Steam then downloads the older build (a few GB) and the library shows
+  `[temporary_1_60]` behind the game's name. A save made with a newer game version may not load in an
+  older one, so copy your profile folder (`Documents\Euro Truck Simulator 2`) somewhere safe first. If
+  your profile is missing or will not load on 1.60, make a new profile for the test: your normal one is
+  untouched and is back when you set the beta to "None" again. DazDrive writes nothing into profiles or
+  saves. If Steam ever drops the beta branch, the game goes to 1.61 and DazDrive goes quiet (the dash
+  shows A again) until the 1.61 version is out. American Truck Simulator is not supported.
+- **Mods:** map and truck mods are fine as long as they work on 1.60 (ProMods: the version made for
+  1.60). Only another automatic-gearbox plugin conflicts.
 - **Do not use it on TruckersMP.** Its rules forbid tools that change gameplay and its client scans
   memory, so you risk a ban. Remove the DLL before you join. It is made for singleplayer. SCS Convoy is
-  not tested yet: host your own session and tell the people you drive with.
+  untested: drive singleplayer for now; Convoy comes later.
 - **Use at your own risk.** DazDrive patches the game's code in memory. It can crash the game and there
   is no guarantee it works on your setup. On a game version it does not know it should find nothing to
   hook and do nothing; it says so in `plugins\dazdrive\dazdrive.log`. That is not a guarantee either.
 - **The DLL is not signed**, so Windows Defender or SmartScreen may warn about it. `BUILD-INFO.txt` in
-  the zip has the SHA-256 of the DLL, so you can check you have the real file.
+  the zip has the SHA-256 of the DLL, so you can check you have the real file. SmartScreen on the
+  download: "Keep anyway". If Windows removes `dazdrive.dll` after you copied it: Windows Security >
+  Protection history > Allow (or Restore), then copy it again.
 - Not affiliated with SCS Software.
 
 ## Why I made this
@@ -66,7 +75,8 @@ The game already has an automatic, cruise control and lane assist. This changes 
 | Downhill speed control | stable | on | Holds the set speed downhill with engine brake and retarder. |
 | Hill start assist | stable | on | The brake holds briefly on a slope. |
 | Emergency stop signal | stable | on | Hazards flash after a hard stop. |
-| AEB (automatic emergency braking) | stable | on | Warning tones, then partial, then full braking. Replaces the game's own emergency braking. |
+| AEB (automatic emergency braking) | stable | on | Warning tones, then partial, then full braking. Replaces the game's own emergency braking. Needs the game's radar: leave an ACC distance, blind spot or emergency braking on in the game's options. |
+| Rollover protection | beta | on | A tone, then no throttle, then a brake when the truck starts to sway in a bend (a growing sideways swing). Also when you drive by hand. |
 | Gearbox looks ahead | stable | off (~2015) | Predictive shifting: gears chosen for the climbs and tops on your navigation route. |
 | Cruise looks ahead (PCC, predictive cruise control) | stable | off (~2015) | Carries speed into climbs and eases off before tops. Needs a route. With it, the truck also coasts in neutral on gentle descents with the cruise on (Fine-tuning, Cruise control). |
 | Slow for bends | beta | off (~2020) | Eases off, and brakes gently if needed, before sharp bends. Needs a route. |
@@ -77,7 +87,7 @@ The game already has an automatic, cruise control and lane assist. This changes 
 | Crawl mode | experimental | off (~2020) | Creeps at walking pace in 1, 2 and R, for parking and docking. |
 | Smooth start | experimental | off (setup page only) | Closes the clutch itself when you pull away: the engine follows the pedal, the clutch slips, then closes gently. |
 | **JunctionSense** | experimental | off (~2020) | Slows for junctions and roundabouts on your route. |
-| Lane centering | experimental | off (~2020) | Keeps the truck in its lane (self-learning). Keep your hands near the wheel: it is an assistant, not an autopilot. |
+| Lane centering | experimental | off (~2020) | Keeps the truck in its lane while the cruise control is on (self-learning). Keep your hands near the wheel: it is an assistant, not an autopilot. |
 
 Stable = tested a lot. Beta = light testing, not confirmed yet. Experimental = not
 proven yet. Where a feature has an established industry name (ACC, AEB, Auto Hold, ISA, PCC) it uses
@@ -94,12 +104,22 @@ brackets is the truck year on the setup page that switches the feature on.
    game > Manage > Browse local files, then open `bin` > `win_x64`.
    On Linux/Proton the folder is
    `~/.local/share/Steam/steamapps/common/Euro Truck Simulator 2/bin/win_x64/plugins/`.
-3. Gearbox on **Automatic** in the game (Options > Gameplay). Start the game. The first time, it shows
-   a warning about plugins ("advanced SDK features"): click OK.
+   Check: you now have `...\win_x64\plugins\dazdrive.dll` and `...\win_x64\plugins\dazdrive\dazdrive.ini`,
+   not `plugins\plugins\...`.
+3. In the game: Options > Gameplay > Transmission type = **Automatic**. On Sequential or Manual the
+   gearbox part does nothing; the cruise parts still work. Leave the game's own adaptive cruise control
+   and emergency braking switched on there too: DazDrive uses their radar. Start the game. Every start
+   shows a warning about plugins ("advanced SDK features"): click OK, that is normal.
+4. Check it works: the gear display on the dashboard shows D (or E / S) instead of A, and
+   `plugins\dazdrive\dazdrive.log` has a line with "applied". Nothing else appears on screen. If it
+   still shows A, read "Which game" above.
 
 Updating: close the game first. Copying the new files over the old ones replaces your
-`dazdrive.ini`, so keep a copy of yours and put it back, or make a new one with the setup page.
-To remove it, delete `plugins\dazdrive.dll` and the `plugins\dazdrive` folder.
+`dazdrive.ini`, so keep a copy of yours and put it back, or make a new one with the setup page. Never
+used the setup page? Just overwrite everything.
+To switch it off for a while (a stock evening, TruckersMP), move `dazdrive.dll` out of `plugins`, for
+example into a folder `plugins_off` next to it, and put it back later. To remove it, delete
+`plugins\dazdrive.dll` and the `plugins\dazdrive` folder.
 
 The included `dazdrive.ini` matches the year "~2010 (Modern)" on the setup page: the features marked
 "on" above. To change that, open `plugins\dazdrive\dazdrive-setup.html` in a browser (works offline,
@@ -110,17 +130,22 @@ only change what you want; per module you can fine-tune with Presets, Advanced (
 (every raw setting). Full details, controls, dash letters and tones:
 `README.txt` in the zip ([source](release/README-player.txt)).
 
-**Keys to bind.** There is no button setup: DazDrive uses the keys you bind in the game (Options > Controls).
-Cruise control (on/off, + and -, resume) is needed for every cruise feature. Two more are worth binding:
-*Adaptive Cruise Control Mode* (ACC distance; hold it for a second to switch speed-limit following on or off) and
-*Adaptive Automatic Transmission Mode* (steps the gearbox mode Eco / Normal / Power / M; hold it at a standstill to
-switch crawl mode). Unbound, only the part that needs the key does nothing.
+**Keys.** Keep your bindings: there is no button setup, DazDrive uses the keys you bind in the game
+(Options > Controls; keyboard, wheel or controller, all fine). Only check that cruise control (on/off, + and -,
+resume) has a key or button: every cruise feature needs it. Two optional extras, search the Controls list for
+"Adaptive": *Adaptive Cruise Control Mode* (ACC distance; hold it for a second to switch speed-limit following on or
+off; if your cruise speed suddenly follows the signs, you held it, hold it again) and *Adaptive Automatic
+Transmission Mode* (steps the gearbox mode Eco / Normal / Power / M; hold it at a standstill to switch crawl mode).
+Unbound, only the part that needs the key does nothing.
 
 ## Reporting a problem
 
-[Open an issue](https://github.com/DamienDutch/dazdrive/issues/new/choose) with:
+[Open an issue](https://github.com/DamienDutch/dazdrive/issues/new/choose), or send the same things to
+whoever gave you the zip, with:
 
-- the folder `plugins\dazdrive\incidents\` (zipped) and `plugins\dazdrive\dazdrive.log`. When something
+- the folder `plugins\dazdrive\incidents\` (zipped: right-click the folder > Send to > Compressed
+  (zipped) folder) and `plugins\dazdrive\dazdrive.log`. Too big for your chat? Only `incidents` and the
+  log, leave the `.csv` files out. When something
   goes wrong (the gearbox hunts, you fight a shift, the rpm hits the limiter, stuck in neutral,
   emergency braking, a ringing lane assist) DazDrive saves that moment as a file there: the 20 s
   before and 15 s after, with the log lines of that time. The name has the local date and time. The
