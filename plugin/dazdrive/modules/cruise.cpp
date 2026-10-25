@@ -1720,6 +1720,19 @@ static void aeb(char *g, float dt)
 
 static void cr_frame()
 {
+    // Trace for a bug report (Damien 25-10: "gas and retarder at once"): the throttle the engine gets with the retarder or the engine brake on
+    {
+        static double gr_since, gr_log;
+        if (!T.paused && T.eff_thr > 0.1f && (T.retarder > 0 || T.motor_brake)) {
+            if (!gr_since) gr_since = wall_s();
+            if (wall_s() - gr_since > 0.8 && wall_s() - gr_log > 5) {
+                gr_log = wall_s();
+                logv(2, "gas and retarder together: %.0f km/h, engine throttle %.2f (pedal %.2f), retarder %d, engine brake %d, cruise %s set %.0f, smart %.1f, grade %.1f%%, mode %d",
+                     fabsf(T.speed) * 3.6f, T.eff_thr, T.in_thr, (int)T.retarder, (int)T.motor_brake, T.cruise > 0.5f ? "on" : "off", T.cruise * 3.6f,
+                     g_smart_ours == g_smart_ours ? g_smart_ours : -1.0f, pitch_grade(), mode_of(game_adaptive()));
+            }
+        } else gr_since = 0;
+    }
     g_inc.gap_m = g_radar_ok && wall_s() - s_radar.at < 0.3 && s_radar.gap > 0.3f ? s_radar.gap : NAN;
     g_inc.flags = (g_inc.flags & ~(INC_AEB | INC_ISA)) | (AE.st != AEB_OFF ? INC_AEB : 0) | (p_isa > 0 ? INC_ISA : 0);
     DEV_NOTE(cruise(T.cruise > 0.5f, T.cruise * 3.6f, g_acc ? g_level : -1, g_radar_ok ? s_radar.gap : NAN, s_radar.v,

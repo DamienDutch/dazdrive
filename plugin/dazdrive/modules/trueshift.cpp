@@ -178,6 +178,7 @@ static struct {
     int roll_exit;          // gear to engage after a roll (kept as target until it is in)
     double roll_exit_at;
     double pedal_on_at;     // last time the pedal was pressed
+    double skip_log_at;     // last 'single up, no skip' log line
     double calm_since;      // Power: since when the driving is flat, light and steady
     float calm_k;           // Power: 0 = full Power shift points, 1 = like Normal (after a calm stretch)
     const char *unsupported; // why this truck is left to the game's own automatic (NULL = fine)
@@ -1202,14 +1203,25 @@ static int decide_gear(void *self, const char **why)
             if (h > cur + 1) {
                 // At high demand only when the skipped-to gear still pulls hard (light truck).
                 float a_skip = skip_accel() * (S.demand > 0.75f ? 2.0f : 1.0f);
-                if (coast || grade > 0.02f || (force_at(h, v2u, 0.85f) - f_up) / S.mass < a_skip) break;
+                if (coast || grade > 0.02f || (force_at(h, v2u, 0.85f) - f_up) / S.mass < a_skip) {
+                    block = coast ? "skip: coasting" : grade > 0.02f ? "skip: climbing" : "skip: too little pull in the skipped-to gear";
+                    break;
+                }
                 // and keeps most of the pull of the next gear (a car must not jump 2 -> 5 at full throttle)
                 if (S.demand > 0.75f &&
-                    force_at(h, v2u, 1.0f) - f_up < 0.7f * (force_at(cur + 1, v2u, 1.0f) - f_up)) break;
+                    force_at(h, v2u, 1.0f) - f_up < 0.7f * (force_at(cur + 1, v2u, 1.0f) - f_up)) { block = "skip: loses too much pull at high demand"; break; }
             }
             best = h;
         }
-        if (best > cur) { S.skip_wait_at = 0; *why = best - cur > 1 ? "up skip" : "up"; return best; }
+        if (best > cur) {
+            // why was this a single step when a skip was allowed (Damien 25-10: it skips too little when driving gently)? one line per 5 s
+            if (best == cur + 1 && maxg > cur + 1 && cur + 2 <= n && T.in_thr < 0.3f && now - S.skip_log_at > 5) {
+                S.skip_log_at = now;
+                logv(2, "single up %d->%d, no skip: %s (%.0f km/h, %.0f rpm, pedal %.2f, demand %.2f, grade %.1f%%, %.1f t)", cur, best,
+                     block[0] ? block : "the next gear above was not tried", v * 3.6f, rpm, T.in_thr, S.demand, grade_pct(), S.mass / 1000);
+            }
+            S.skip_wait_at = 0; *why = best - cur > 1 ? "up skip" : "up"; return best;
+        }
         if (now - S.blocked_log_at > 10) {
             S.blocked_log_at = now;
             logline("up blocked in %d: %s (%.0f km/h, %.0f rpm, demand %.2f, grade %.1f%%, %.1f t)", cur, block,
