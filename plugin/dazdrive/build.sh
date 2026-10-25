@@ -23,7 +23,16 @@ podman run --rm -v "$root:/w:Z" -w /w/dazdrive registry.fedoraproject.org/fedora
    -o $name.dll $srcs suite.def -static -static-libgcc -static-libstdc++ -lwinmm"
 ls -l "$here/$name.dll"
 if [ "${1:-}" = install ]; then
-  dst="$HOME/.local/share/Steam/steamapps/common/Euro Truck Simulator 2/bin/win_x64/plugins"
+  # The game may sit in a second Steam library (libraryfolders.vdf lists them all); the default library is the fallback.
+  dst=""
+  for lib in $(sed -n 's/.*"path"[[:space:]]*"\(.*\)".*/\1/p' "$HOME/.local/share/Steam/steamapps/libraryfolders.vdf" 2>/dev/null); do
+    d="$lib/steamapps/common/Euro Truck Simulator 2/bin/win_x64/plugins"
+    [ -d "$d" ] && dst="$d" && break
+  done
+  [ -n "$dst" ] || dst="$HOME/.local/share/Steam/steamapps/common/Euro Truck Simulator 2/bin/win_x64/plugins"
+  [ -d "$dst" ] || { echo "no plugins folder found (is ETS2 installed?)" >&2; exit 1; }
+  pgrep -x eurotrucks2.exe >/dev/null && { echo "the game is running: close it first, the DLL stays loaded" >&2; exit 1; }
+  [ -f "$dst/$name.dll" ] && cp -p "$dst/$name.dll" "$dst/$name.dll.bak-$(date +%y%m%d-%H%M)"   # the previous DLL stays next to it
   cp "$here/$name.dll" "$dst/"
   echo "installed in $dst"
 fi
