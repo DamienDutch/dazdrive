@@ -315,6 +315,12 @@ static void keys_test()
         bad |= !(requested && confirmed && still_holding && released && reverted);
         p_ah_park = sp; s_park_bad = 0; memset(&AH, 0, sizeof AH);
     }
+    // own speed limiter 95: a climb at 92 keeps the throttle, a flat road at 93.5 fades, a fast approach cuts early
+    { float sl = p_own_lim; p_own_lim = 95;
+      float k1 = own_limit_k(92, 0), k2 = own_limit_k(93.5f, 0), k3 = own_limit_k(90, 0.5f), k4 = own_limit_k(94.8f, -0.5f), k5 = own_limit_k(95.2f, 0);
+      printf("own limiter: climb at 92 %.2f, flat 93.5 %.2f, 90 and accelerating %.2f, 94.8 and slowing %.2f, over the limit %.2f (expect 1.00 0.60 0.92 1.00 0.00)\n", k1, k2, k3, k4, k5);
+      bad |= fabsf(k1 - 1) > 0.01f || fabsf(k2 - 0.6f) > 0.02f || fabsf(k3 - 0.92f) > 0.03f || fabsf(k4 - 1) > 0.01f || k5 != 0;
+      p_own_lim = sl; }
     // rollover guard: a sway that grows (0.6 Hz, 3.5 -> 9 m/s2 at 85 km/h) is caught, normal driving is not
     {
         auto run_rsc = [](float a0, float a1, float f, float secs, float kmh, double *lvl2_at, float *brake_max, int *lvl_max) {

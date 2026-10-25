@@ -80,7 +80,7 @@ static param g_params[] = {
     { "junction_approach_over_kmh", &p_jn_over, 20, "and never faster than the junction speed plus this (km/h) on the approach" },
     { "junction_handover_kmh", &p_jn_hand_kmh, 6, "the cruise is only cancelled for a junction once the speed is down to the junction speed plus the margin plus this (km/h) ..." },
     { "junction_handover_m", &p_jn_hand_m, 30, "... or when the junction is this close (m), whatever the speed" },
-    { "speed_limiter_kmh", &p_own_lim, 0, "our own speed limiter (km/h, 0 = off): the throttle fades out over the last 3 km/h, in every mode and with the pedal curves, and the cruise set speed never goes above it. Switch the game's own limiter off" },
+    { "speed_limiter_kmh", &p_own_lim, 0, "our own speed limiter (km/h, 0 = off): the throttle fades out only when the speed is about to pass the limit (where it will be in 1.5 s), so a climb at 92 keeps its full throttle; in every mode and with the pedal curves, and the cruise set speed never goes above it. Switch the game's own limiter off" },
     { "junction_cancel_s", &p_jn_cancel_s, 5, "this many seconds before a junction or roundabout we slowed for, the cruise is cancelled with a sound (the game's Resume brings the set speed back). 0 = never" },
     { "junction_min_deg", &p_junc_deg, 25, "turns smaller than this (degrees) are not slowed for" },
     { "roundabout_kmh", &p_rb_kmh, 25, "speed at the entry of a roundabout, also when going straight through" },
@@ -646,6 +646,15 @@ static struct {
 static unsigned char s_aeb_owns;   // our AEB is hooked in (patches in place)
 static unsigned char s_aeb_watch;  // read by those patches every frame: the game's ACC emergency braking and its AEB stores are
                                    // skipped only while our AEB is watching right now (cruise on, or aeb_without_cruise = 1)
+// Our own speed limiter: how much of the throttle may stay. Only the speed in 1.5 s counts (Damien 25-10: no fade on a climb at 92 km/h):
+// full while that is more than 2.5 km/h under the limit, none once it reaches the limit.
+static float own_limit_k(float kmh, float accel)
+{
+    if (!(p_own_lim > 0)) return 1.0f;
+    if (kmh >= p_own_lim) return 0.0f;
+    float proj = kmh + accel * 3.6f * 1.5f;
+    return fmaxf(0.0f, fminf(1.0f, (p_own_lim - proj) / 2.5f));
+}
 static float stub_cruise(void *ga, float dt, float pedal)
 {
     if (ga) keys_tick((char *)ga);
@@ -674,10 +683,7 @@ static float stub_cruise(void *ga, float dt, float pedal)
     if (g_rsc_thr_cap < 1) r = fminf(r, g_rsc_thr_cap);  // rollover guard: no throttle
     if (g_lcx_cap < 1) r = fminf(r, g_lcx_cap);  // launch control holds the revs with a throttle cap
     // our own speed limiter (the game's is switched off): the throttle fades out over the last 3 km/h
-    if (p_own_lim > 0) {
-        float kl = fabsf(T.speed) * 3.6f;
-        if (kl > p_own_lim - 3) r *= fmaxf(0.0f, fminf(1.0f, (p_own_lim - kl) / 3));
-    }
+    if (p_own_lim > 0) r *= own_limit_k(fabsf(T.speed) * 3.6f, T.accel);
     if (ga) cruise_trace((char *)ga, r);
     return r;
 }
