@@ -105,7 +105,7 @@ static int novr;
 static void apply(const cfg &c)
 {
     for (auto &p : g_params) *p.val = p.def;
-    p_mode = c.mode;
+    p_mode = c.mode; p_needs_cc = 0;   // the sim has no cruise: lane steers by itself here (needs_cruise is tested separately)
     p_bias = getenv("BIAS") ? atof(getenv("BIAS")) : 0; p_bend_out = getenv("BEND_OUT") ? atof(getenv("BEND_OUT")) : 0; p_learn = getenv("LEARN") ? atof(getenv("LEARN")) : 0; p_sway = getenv("SWAY") ? atof(getenv("SWAY")) : 0;  // the old scenarios test the fixed law
     L_cur = L_base = { 1, 1, p_l_max }; L_trial = 0; L_hold = 0; L_t = 0; L_Nw = L_Syy = L_Cxx = L_Cxy = L_Cyy = 0; for (int k = 0; k < LK_NK; k++) L_Sxx[k] = L_Sxy[k] = 0;
     L_scn = L_scs = L_sc_zc = L_since = 0; L_b_valid = 0; L_ring_cool = 0; L_nupd = 0; SW_fac = 1; SW_t = 0; SW_hold_until = 0; SW_events = 0; SW_lastact = -1e9; L_loaded = 0; L_dirty = 0; learn_block_reset(); L_dev_blocks = 0; L_blocks_ok = L_blocks_bad = 0; L_rolled = 0;

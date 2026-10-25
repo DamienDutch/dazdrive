@@ -26,7 +26,7 @@
 static float *g_minp, p_on_kmh, p_a_max, p_a_leak, p_min_kmh, p_mode, p_gain, p_dead, p_tone;
 static float p_runaway, p_bend_out, p_bias, p_blend, p_blend_max, p_f_pull, p_follow, p_f_act, p_f_hold, p_f_win, p_f_max, p_f_tau, p_f_ret, p_f_rate, p_f_back, p_f_bend;   // shared steering
 static float p_edge_look, p_edge_from, p_edge_full, p_backoff, p_drv_rate, p_drv_follow, p_drv_attack, p_drv_release, p_drv_leak;
-static float p_rb_off, p_umax, p_ind_pause, p_ind_resume, p_ind_off, p_keep_on, p_nonffb, p_slow_resume;
+static float p_needs_cc, p_rb_off, p_umax, p_ind_pause, p_ind_resume, p_ind_off, p_keep_on, p_nonffb, p_slow_resume;
 static float p_sway, p_sw_cut, p_sw_rec, p_sw_amp;
 static float p_learn, p_l_rate, p_l_min, p_l_max, p_l_update, p_l_save;
 static float p_head_ref, p_k_off, p_k_head, p_k_afb, p_bend_a, p_edge_boost, p_rate2, p_i2, p_i2max;
@@ -94,6 +94,7 @@ static param g_params[] = {
     { "on_kmh", &p_on_kmh, 39, "keep_on = 0: after dropping below min_kmh it only comes back from this speed" },
     { "indicator_pause", &p_ind_pause, 1, "1 = an indicator (one side, not the hazards) pauses the assist: the wheel is yours for the lane change; after the indicator goes off and a lane is found again (or 4 s) it comes back gently over 1 s. 0 = only no steering back against the indicator" },
     { "indicator_off", &p_ind_off, 1, "with indicator_pause: the indicator also switches the game's lane keeping itself off (silently), and it is switched on again after the lane change. Not when you switch it back on yourself meanwhile" },
+    { "needs_cruise", &p_needs_cc, 1, "1 = lane centering steers only while the cruise control is on, and switching the cruise on switches lane keeping on (like a travel assist); without the cruise only the game's warning stays. 0 = also without the cruise" },
     { "roundabout_off", &p_rb_off, 1, "1 = when the cruise control cancels itself for a roundabout, lane keeping goes off with it (a roundabout is yours to steer), and comes back on when the cruise is resumed (within 90 s). Junctions: use your indicator" },
     { "indicator_resume", &p_ind_resume, 0, "with indicator_pause: lane keeping that went off during the lane change (above min_kmh) is switched on again afterwards (sets the game's lane-keeping flag). Off by default: the game does not switch it off for an indicator, and with keep_on not for speed, so it would mostly undo your own key press (tools/sim run_lane.sh: Indicator + key)" },
     { "non_ffb_mode", &p_nonffb, 0, "without a force-feedback wheel (keyboard, gamepad, mouse steering: the game adds the assist to the steering angle instead of turning the wheel; recognized from the steering data in ~1 s): 0 = the game's own law (mode 2 is fitted on FFB wheels), 2 = mode 2 anyway (not tuned)" },
@@ -924,7 +925,7 @@ static float filter_a(float a)
         g_ci = 0;
         return fabsf(a) < 1e-4f ? 0 : a * 0.94f;
     }
-    if (p_mode >= 1 && (g_pause || (p_keep_on > 0 && T.speed * 3.6f < p_min_kmh))) return fabsf(a) < 1e-4f ? 0 : a * 0.94f;  // indicator pause / too slow: release the wheel in ~0.3 s
+    if (p_mode >= 1 && (g_pause || (p_needs_cc > 0 && !(T.cruise > 0.5f)) || (p_keep_on > 0 && T.speed * 3.6f < p_min_kmh))) return fabsf(a) < 1e-4f ? 0 : a * 0.94f;  // indicator pause / too slow: release the wheel in ~0.3 s
     if (p_mode < 1 || g_u == 0 || !law2()) return a;
     a *= 1 - clampf(p_a_leak + g_act * p_drv_leak, 0, 0.5f);
     return clampf(a, -p_a_max, p_a_max);
@@ -1102,6 +1103,27 @@ static void roundabout_off()
     }
 }
 
+// The cruise coming on switches lane keeping on (needs_cruise): the lane toggle then only decides while the cruise runs
+static void cruise_lane_on()
+{
+    static int prev_cc; static double cc_on_at;
+    int cc = T.cruise > 0.5f;
+    double now = wall_s();
+    if (cc && !prev_cc) cc_on_at = now;
+    prev_cc = cc;
+    static double done_at = -1;
+    if (p_needs_cc > 0 && cc && cc_on_at > 0 && now - cc_on_at > 0.3 && done_at < cc_on_at && !g_pause) {
+        done_at = now;
+        char *ga = game_actor_safe();
+        float kmh = fabsf(T.speed) * 3.6f;
+        if (ga && !(*(unsigned char *)(ga + 0x1d1) & 0x20) && kmh > fmaxf(p_min_kmh, 5) + 2) {
+            lka_set(ga, 1);
+            if (p_tone > 0) play_cue(CUE_LANE_RESUME);
+            logline("Lane: cruise on, lane keeping on (%.0f km/h)", kmh);
+        }
+    }
+}
+
 static void ln_frame()
 {
     // Hysteresis on the minimum speed: once above on_kmh it works down to min_kmh; below that it waits for on_kmh.
@@ -1112,7 +1134,7 @@ static void ln_frame()
         else if (kmh < p_min_kmh) latched = 0;
         *g_minp = p_keep_on > 0 ? 0.0f : latched ? p_min_kmh : fmaxf(p_on_kmh, p_min_kmh);
     }
-    if (o_law) roundabout_off();
+    if (o_law) { roundabout_off(); cruise_lane_on(); }
     if (p_ind_pause > 0 && p_mode >= 1 && o_law) indicator_pause();  // first: it may undo a key press (see there)
     // Lane keeping switched on/off by its key: game_actor+0x1d1 bit 0x20 (docs/lka-roll-re.md A2).
     static int was = -1, slow_off;
