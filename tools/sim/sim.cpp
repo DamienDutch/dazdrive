@@ -369,6 +369,9 @@ static void cruise(float kmh)
 
 static void c_full(double) { M.pedal = 1; }
 static void c_p70(double) { M.pedal = 0.7f; }
+static void c_p20(double) { M.pedal = 0.2f; }
+static void c_p30(double) { M.pedal = 0.3f; }
+static void c_p40(double) { M.pedal = 0.4f; }
 static void c_p50(double) { M.pedal = 0.5f; }
 // Adaptive cruise set to 80 behind a truck doing 50: bursts, then long gaps.
 static void c_acc(double t) { M.cruise_kmh = 80; M.pedal = 0; float e = 50 / 3.6f - M.v; M.cc = e > 0.3f ? 1.0f : e < -0.3f ? 0.0f : 0.3f; }
@@ -492,6 +495,22 @@ int main(int argc, char **argv)
     if (getenv("NOBOOST")) set_param("eco_roll_boost_kmh", 0);
     if (getenv("NOLOAD")) set_param("load_down_from", 1);
 
+    if (getenv("ACCEL0")) {  // pull-away from a standstill at light pedal, on his two boxes: 0 to 30 and 0 to 50 km/h with 0 or 2 skipped gears
+        struct Tr { const char *name; void (*use)(); int g0; } trucks[2] = { { "ATO2612F (12, diff 3.08)", use_ato, 1 }, { "Xtended 12+2 (diff 3.40)", use_renault, 3 } };
+        void (*ctls[4])(double) = { c_p20, c_p30, c_p40, c_p50 }; const char *cn[4] = { "0.2", "0.3", "0.4", "0.5" };
+        for (auto &tr : trucks) {
+            tr.use();
+            for (float mass : { 36000.0f, 20000.0f })
+                for (int c = 0; c < 4; c++)
+                    for (int ms : { 0, 2 }) {
+                        set_param("max_skip", (float)ms);
+                        char nm[160];
+                        snprintf(nm, sizeof nm, "ACCEL0 %s, %.0f t, pedal %s, max_skip %d", tr.name, mass / 1000, cn[c], ms);
+                        run(nm, {mass, 1, tr.g0, 90}, ctls[c]);
+                    }
+        }
+        return 0;
+    }
     if (getenv("ACCEL")) {  // acceleration study: how fast is a pull-away with 0, 1 or 2 skipped gears (no fuel in it), on his two boxes
         struct Tr { const char *name; void (*use)(); int ng; } trucks[2] = { { "ATO2612F 12 speeds, diff 3.08", use_ato, 12 }, { "Xtended 12+2, diff 3.40", use_renault, 14 } };
         for (auto &tr : trucks) {
