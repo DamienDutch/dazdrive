@@ -316,11 +316,11 @@ BUTTONS = []
 _OFF_1995 = {
     "trueshift": {"eco_roll": 0, "lookahead": 0, "smooth_stop": 0, "mode_character": 0, "eco_rev_ceiling_rpm": 0},
     "cruise": {"curves": 0, "curve_brake": 0, "descent": 0, "emergency_hazards": 0, "acc_calm_cut_in": 0,
-               "hill_start": 0, "predictive": 0, "aeb": 0, "pedal_curve_eco": 1, "pedal_curve_power": 1, "eco_cruise_throttle_cap": 1},
+               "hill_start": 0, "predictive": 0, "aeb": 0, "rollover_guard": 0, "pedal_curve_eco": 1, "pedal_curve_power": 1, "eco_cruise_throttle_cap": 1},
 }
 _OFF_2000 = {
     "trueshift": {"eco_roll": 0, "lookahead": 0, "mode_character": 0, "eco_rev_ceiling_rpm": 0},
-    "cruise": {"curves": 0, "curve_brake": 0, "emergency_hazards": 0, "predictive": 0, "aeb": 0, "pedal_curve_eco": 1, "pedal_curve_power": 1, "eco_cruise_throttle_cap": 1},
+    "cruise": {"curves": 0, "curve_brake": 0, "emergency_hazards": 0, "predictive": 0, "aeb": 0, "rollover_guard": 0, "pedal_curve_eco": 1, "pedal_curve_power": 1, "eco_cruise_throttle_cap": 1},
 }
 # ~2010 is the shipped preset, so it overrides nothing
 _ON_2015 = {"trueshift": {"lookahead": 1},
@@ -390,6 +390,9 @@ FEATURES = [
     {"id": "aeb", "group": "Cruise control", "stage": "stable", "since": "2006", "label": "Emergency braking (AEB)", "desc": "Warns, then brakes when a crash is near", "needs": ["cc"],
      "info": "Warning tones, then partial braking, then full braking when a crash is near. It replaces the game's own emergency braking, which drained the brake air. Works without cruise too. Needs SteadyCruise; without it the game's own braking stays.",
      "keys": [["cruise", "aeb", 1, 0]]},
+    {"id": "rsc", "group": "Cruise control", "stage": "beta", "since": "2005", "label": "Rollover protection", "desc": "Tone, then throttle off, then a brake when a bend is taken too fast",
+     "info": "Watches the sideways acceleration, also when you drive by hand. A tone first, then no throttle, then a soft or firm brake when the truck is about to tip. The limits are estimates, not measured on the game's trucks. Real trucks have had roll stability control since about 2005 (required in the EU from 2014).",
+     "keys": [["cruise", "rollover_guard", 3, 0]]},
     {"id": "hill", "group": "Cruise control", "stage": "stable", "since": "2000", "label": "Hill start assist", "desc": "Holds the brake 3 s on a slope",
      "info": "After stopping on a slope the brake holds for 3 s, so you can move your foot to the throttle without rolling back. Not used while Auto Hold is on.",
      "keys": [["cruise", "hill_start", 1, 0]]},
