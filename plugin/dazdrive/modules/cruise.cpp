@@ -653,6 +653,8 @@ static float stub_cruise(void *ga, float dt, float pedal)
     if (ga) own_acc((char *)ga, dt);  // our ACC target goes into +0x1a0 before the game's controller and its overspeed braking read it
     float r = cruise_body(ga, dt, pedal);
     if (ga) aeb((char *)ga, dt);
+    rsc_step(dt);                                  // rollover guard (core/rsc.cpp): its brake rides on the AEB's fast request path
+    s_want_aeb = fmaxf(s_want_aeb, g_rsc_brake);
     if (AE.st > 0 && r > pedal) r = pedal;  // AEB warns or brakes: no cruise throttle
     // The driver's gas always wins over our own braking (Damien, ts4w: full gas near a stop did nothing until he
     // switched cruise off; the game zeroes the throttle while a brake request is set). Auto Hold lets go by itself.
@@ -669,6 +671,7 @@ static float stub_cruise(void *ga, float dt, float pedal)
     }
     float c = g_creep_thr;  // Creep (heavy loads): a little throttle on top, also with cruise off (stored in inner+0x1424)
     if (c > 0 && c < 0.3f && c > r) r = c;
+    if (g_rsc_thr_cap < 1) r = fminf(r, g_rsc_thr_cap);  // rollover guard: no throttle
     if (g_lcx_cap < 1) r = fminf(r, g_lcx_cap);  // launch control holds the revs with a throttle cap
     // our own speed limiter (the game's is switched off): the throttle fades out over the last 3 km/h
     if (p_own_lim > 0) {

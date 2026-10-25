@@ -175,6 +175,9 @@ static inline float overspeed_room(float set_ms)
     float r = T.speed_limit * 3.6f + g_overspeed_cap - set_ms * 3.6f;
     return r > 0 ? r : 0;
 }
+extern volatile int g_rsc_level;         // rollover guard: 0 off, 1 alert (tone, no throttle), 2 soft brake, 3 firm brake
+extern volatile float g_rsc_brake, g_rsc_thr_cap;   // what Cruise applies for it: a brake request 0..1, a throttle cap 0..1
+void rsc_step(float dt);                // core/rsc.cpp, called from the cruise throttle stub
 extern volatile int g_lcx;               // Creep: launch control phase, 0 off, 1 armed (brake + flat pedal at a standstill), 2 launching
 extern volatile float g_lcx_cap;       // Creep asks Cruise to cap the engine's throttle at this while launch control holds the revs (1 = no cap)
 extern volatile int g_pedal_mapped;     // Cruise: the throttle the engine gets is the pedal through the Eco / Power curve this frame

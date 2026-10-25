@@ -97,6 +97,7 @@ float route_limit_ahead(float, float *d) { if (d) *d = NAN; return NAN; }
 void route_probe_limit(float) {}
 
 #include "modules/cruise.cpp"
+#include "core/rsc.cpp"
 
 // ---- the game's cruise (incremental PI, see docs/cruise-re.md § 1)
 static float stock_thr;
@@ -313,6 +314,33 @@ static void keys_test()
         printf("auto hold park: requested %d, confirmed %d (hold %d), released by gas %d, reverted when unconfirmed %d\n", requested, confirmed, still_holding, released, reverted);
         bad |= !(requested && confirmed && still_holding && released && reverted);
         p_ah_park = sp; s_park_bad = 0; memset(&AH, 0, sizeof AH);
+    }
+    // rollover guard: a sway that grows (0.6 Hz, 3.5 -> 9 m/s2 at 85 km/h) is caught, normal driving is not
+    {
+        auto run_rsc = [](float a0, float a1, float f, float secs, float kmh, double *lvl2_at, float *brake_max, int *lvl_max) {
+            T.paused = 0; T.gear = 1; T.speed = kmh / 3.6f; g_rsc_level = 0;
+            *lvl2_at = -1; *brake_max = 0; *lvl_max = 0;
+            for (double t = 0; t < secs; t += 1 / 60.0, t_now += 1 / 60.0) {
+                float amp = a0 + (a1 - a0) * (float)(t / secs), a = amp * sinf(6.2831853f * f * (float)t);
+                T.yaw = a / (T.speed * 6.2831853f);
+                rsc_step(1 / 60.0f);
+                if (g_rsc_level >= 2 && *lvl2_at < 0) *lvl2_at = t;
+                if (g_rsc_brake > *brake_max) *brake_max = g_rsc_brake;
+                if (g_rsc_level > *lvl_max) *lvl_max = g_rsc_level;
+            }
+            T.yaw = 0; rsc_step(1 / 60.0f);
+        };
+        double l2; float bm; int lm;
+        run_rsc(3.5f, 9.0f, 0.6f, 8, 85, &l2, &bm, &lm);
+        int sway_ok = l2 > 0 && l2 < 4.0 && bm > 0.15f && lm >= 2;
+        double l2b; float bmb; int lmb;
+        run_rsc(0.5f, 2.2f, 0.25f, 12, 85, &l2b, &bmb, &lmb);      // lane changes and bends: well under the floor
+        run_rsc(1.0f, 1.0f, 0.0f, 6, 85, &l2b, &bmb, &lmb);
+        int calm_ok = lmb == 0 && bmb == 0;
+        float lvl_normal = 0; { double q; float w; int m; run_rsc(3.0f, 3.0f, 0.05f, 10, 40, &q, &w, &m); lvl_normal = (float)m; }   // a roundabout at 40 km/h
+        printf("rollover guard: growing sway level %d, soft brake from %.1f s (brake %.2f), lane changes level %d, roundabout level %.0f\n", lm, l2, bm, lmb, lvl_normal);
+        bad |= !(sway_ok && calm_ok && lvl_normal == 0);
+        T.yaw = 0; T.speed = 0; g_rsc_level = 0; g_rsc_brake = 0; g_rsc_thr_cap = 1;
     }
     T.speed_limit = 0;
     printf("keys test: %s\n", bad ? "FAIL" : "ok");
