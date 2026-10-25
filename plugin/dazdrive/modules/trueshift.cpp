@@ -1171,7 +1171,9 @@ static int decide_gear(void *self, const char **why)
             float rc = rpm_at(cur, v2), rh = rpm_at(h, v2);
             if (S.skip_wait_at != 0 && now - S.skip_wait_last > 1.0) S.skip_wait_at = 0;   // an old wait, not this one
             float low = fmaxf(fmaxf(dn_pt(h), base_dn(h)) + p_hyst, idle_rpm() + 350);
-            skip_rpm = rh > 1 ? fmaxf(low * rc / rh, S.up_pt + 10) : 0;   // the rpm in this gear from which the skip lands on `low`
+            // the rpm in this gear from which the skip lands on `low` AFTER the speed lost during the shift (v2 < v: 25-10, the wait aimed at
+            // the landing at today's speed, so the skip then failed on 'rpm too low after shift' and became a single step)
+            skip_rpm = rh > 1 ? fmaxf(low * (rc / rh) * (v / fmaxf(v2, 0.5f)), S.up_pt + 10) : 0;
             float t_to = (skip_rpm - rpm) / fmaxf(1.0f, rpm * T.accel / v);
             if (skip_rpm > 0 && skip_rpm <= fminf(S.up_pt + p_skip_over, 0.85f * S.eng.rpm_limit) && t_to <= p_skip_wait &&
                 (S.skip_wait_at == 0 || now - S.skip_wait_at <= p_skip_wait)) {
