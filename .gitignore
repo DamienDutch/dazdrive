@@ -31,3 +31,6 @@ docs/ha-koppeling.md
 plugin/dazdrive/core/dev.cpp
 plugin/dazdrive/core/dev.h
 tools/import_runs.py
+
+# phone dashboard (Damien only, a separate Python process; not part of a release)
+dash/
