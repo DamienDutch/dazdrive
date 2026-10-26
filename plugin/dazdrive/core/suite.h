@@ -234,7 +234,7 @@ float wheel_radius();    // powered wheels, meters (0 if unknown)
 // game tick (the game's cruise fn call, hooked by core whatever the ini says) and writes them. The throttle is the base (the
 // game's cruise output, or what Cruise posts from its own controller), then every floor, then every cap, then every scale.
 // Brake wishes are in the game's request unit 0..1 (the top of actuate.cpp says why not m/s2).
-enum { ACT_CRUISE, ACT_HILL, ACT_HOLD, ACT_BEND, ACT_ACC, ACT_AEB, ACT_RSC, ACT_CREEP, ACT_LCX, ACT_RET_DECEL, ACT_RET_NORM, ACT_N };
+enum { ACT_CRUISE, ACT_HILL, ACT_HOLD, ACT_BEND, ACT_ACC, ACT_AEB, ACT_RSC, ACT_CREEP, ACT_LCX, ACT_RET_DECEL, ACT_RET_NORM, ACT_DECEL, ACT_N };
 struct act_wish { float brake, floor, cap, scale, ret; };  // brake request 0..1; throttle at least floor (0 = none), at most cap (1 = none), times scale (1 = none); retarder torque factor 0..1 (1 = none)
 void act_brake(int owner, float want);
 void act_thr_floor(int owner, float v);

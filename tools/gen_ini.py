@@ -93,10 +93,14 @@ STANDARD = {
         "owner": 0,              # OFF: the low-speed owner does not drive anything yet
         "trace": 0,              # OFF: the shadow owner and its csv are for test builds
     },
+    "decel": {
+        "enabled": 0,            # OFF: the deceleration assist is new, not ridden yet
+    },
 }
 
-# Sections that are not on the setup page (no tile, no knob, no Custom list): developer switches of something not wired in yet.
-NO_PAGE = ("pedal", "lowspeed")
+# Sections that are not on the setup page (no tile, no knob, no Custom list): developer switches of something not wired in yet
+# or not ridden yet.
+NO_PAGE = ("pedal", "lowspeed", "decel")
 # Single keys of a shown section that stay off the page too (still in the ini, with their help text).
 NO_PAGE_KEYS = (("core", "retarder_hook"),)
 
@@ -110,6 +114,7 @@ SECTION_INTRO = {
     "creep": "Crawl / maneuver mode (slipping clutch in 1, 2 and R). Off in the standard preset.",
     "pedal": "The accelerator pedal as a wish for power. Off: the pedal asks a share of the engine's torque, as always.",
     "lowspeed": "Low-speed owner for stopping, standing and pulling away. Not wired in yet: both settings stay off.",
+    "decel": "Deceleration assist for the retarder and engine-brake lever: the service brake adds what the lever's target deceleration needs. Off in the standard preset.",
 }
 
 
