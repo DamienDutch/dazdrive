@@ -4,7 +4,7 @@
 // slips at idle and the truck crawls along by itself; the brake takes the crawl away, the throttle asks
 // for a bit more speed (maneuvering) and above ~30 % takes over completely.
 //
-// How (all static RE, nothing of this has run in the game yet):
+// How (worked out by static RE; the crawl is driven daily now):
 //  - The drivetrain gets its clutch from one copy (inner+0x142c -> drive+0x330, 0x1408c82cf). We raise
 //    that copy to a floor for the player's truck only (game_patch_clutch_floor). The gearbox sequencer
 //    and the automatic's own rules keep seeing the clutch they set. The engine's idle governor holds
