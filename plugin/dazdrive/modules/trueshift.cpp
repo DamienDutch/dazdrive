@@ -1335,8 +1335,9 @@ static int decide_gear(void *self, int *why)
         // or a reset it starts from 0). A pedal near the floor asks more than this gear gives: gs_cfg.pull
         float need = fmaxf(fminf(fmaxf(S.f_need, force_at(cur, v, S.thr)), force_at(cur, v, fmaxf(S.thr, S.demand))), f_hold);
         // (choice_objective 1 with the wish pedal on: what the driver wishes, not the throttle the wish gives in this gear, which is the wish
-        // only where the gear can deliver it)
+        // only where the gear can deliver it; the same for the cruise with [cruise] force_mode 1: the force it asks, not its throttle)
         float f_wish = p_ch_obj > 0 && !coast_p ? pedal_wish_force(v) : -1;
+        if (f_wish < 0 && p_ch_obj > 0 && !coast_p) f_wish = cruise_wish_force(v);
         if (f_wish >= 0) need = fmaxf(f_wish, f_hold);
         gs_out so;
         // choice_route_cap: the speeds the scores look ahead to stop at what the route allows: the speed allowed now for the bends and
