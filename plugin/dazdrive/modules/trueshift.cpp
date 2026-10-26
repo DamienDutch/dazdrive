@@ -50,7 +50,7 @@ static param g_params[] = {
     { "choice_comfort", &p_ch_norm, 0.8f, "choice 1, Normal: the same, a little more careful" },
     { "choice_comfort_power", &p_ch_power, 0.65f, "choice 1, Power: the same, the most careful (skips the least)" },
     { "choice_rpm_weight", &p_ch_rpm, 0.5f, "choice 1: weight of the cost of the revs (far above the torque plateau, and just above idle under load). A guess, there is no efficiency map: 0 = revs do not count" },
-    { "choice_shift_weight", &p_ch_shift, 1.0f, "choice 1: weight of the cost of a shift (the shift time of the gearbox times the power asked: the drive time it loses). Higher = fewer, longer shifts, more skipping, mostly with a slow gearbox" },
+    { "choice_shift_weight", &p_ch_shift, 4.0f, "choice 1: weight of the cost of a shift (the shift time of the gearbox times the power asked: the drive time it loses). Higher = fewer, longer shifts, more skipping, mostly with a slow gearbox" },
     { "choice_stay", &p_ch_stay, 0.03f, "choice 1, Eco and Normal: bonus for the gear the truck is in, against hunting between two gears that score alike" },
     { "choice_stay_power", &p_ch_stay_pw, 0.08f, "choice 1, Power: the same, higher" },
     { "launch_correct", &p_launch_fix, 1, "1 = when the game picked a lower start gear than the physics of launch_max_kmh / launch_slip_s allow (after reversing, after the engine started, or its own downshift at a stop), the gear is changed at the standstill before the pull-away: no climbing through the low gears (0 = off)" },
@@ -256,6 +256,7 @@ static struct {
     double roll_exit_at;
     double pedal_on_at;     // last time the pedal was pressed
     double skip_log_at;     // last 'single up, no skip' log line
+    double score_log_at;    // last 'score' log line (choice = 1)
     double calm_since;      // Power: since when the driving is flat, light and steady
     float calm_k;           // Power: 0 = full Power shift points, 1 = like Normal (after a calm stretch)
     const char *unsupported; // why this truck is left to the game's own automatic (NULL = fine)
@@ -933,6 +934,22 @@ static float climb_need_kmh()
     return 8;
 }
 
+// choice = 1: the settings of the score function (core/gearscore.h) for the mode of now
+static gs_cfg score_cfg(int skips)
+{
+    gs_cfg c = {};
+    c.comfort = by_mode(p_ch_eco, p_ch_norm, p_ch_power);
+    c.w_rpm = p_ch_rpm;
+    c.w_shift = p_ch_shift;
+    c.stay = by_mode(p_ch_stay, p_ch_stay, p_ch_stay_pw);
+    c.idle = idle_rpm();
+    c.skips = skips;
+    c.hyst = p_hyst;
+    c.horizon = 8;                 // s: the speed the demanded acceleration reaches in that time decides how soon a gear needs the next shift
+    c.learn_res = learned().res;   // what the no-pull lessons of this grade ask of an upshift
+    return c;
+}
+
 static int decide_gear(void *self, int *why)
 {
     *why = W_NONE;
@@ -1100,7 +1117,7 @@ static int decide_gear(void *self, int *why)
     // down"). No kickdown behavior: it needs the load, not a burst of throttle; over 100 % the lugging rule above takes over.
     float load = fmax > 1 ? f_res / fmax : 0, dn_base = dn_eff;
     if (p_load_from < 1 && thr > 0.25f && T.accel < -0.1f && load > p_load_from) dn_eff = fmaxf(dn_eff, lerpf(dn_eff, V.plateau + 50, smooth(p_load_from, 1.0f, load)));
-    if (cur > 1 && (rpm < dn_eff || lug)) {
+    if (cur > 1 && ((p_choice < 1 && rpm < dn_eff) || lug)) {   // choice 1: only lugging; the scores decide the rest below
         // maneuvering (Damien 24-10, 3856-3877 s: 6>4>5>3>4>5>6>7>8>9 in 21 s between 6 and 25 km/h): at a gentle pedal and a low speed only
         // a near-stall or lugging takes a gear off, not the demand-based downshift point
         if (p_calm > 0 && V.mass > 6000 && v * 3.6f < p_calm && !lug && !kick && thr < 0.6f && rpm > idle_rpm() + 230) { *why = W_LOW_SPEED_HOLD; return cur; }
@@ -1177,6 +1194,61 @@ static int decide_gear(void *self, int *why)
         if (a == a && b == b) g_ahead = fmaxf(a, b - 0.5f);
         climbing = 0;
     }
+    // choice = 1: of the gears the rules above left open, the best score. The rules that came before (limiter, stall, braking, engine
+    // brake, kickdown, hints, min gap, no pull, climb ahead, lugging, junction) stand; the vetoes and timers below are the same ones the
+    // upshift and downshift paths use. No candidate at all (a wrong gear far from the window) falls through to the paths below.
+    if (p_choice > 0) {
+        float gp = grade_pct();
+        S.pk = fmaxf(gp, S.pk - 0.15f * (float)clampf((float)(now - S.pk_at), 0, 60)); S.pk_at = now;
+        float g_pk = gp > 1.5f ? fmaxf(gp, S.pk) : gp;
+        if (g_ahead == g_ahead) g_pk = fmaxf(g_pk, g_ahead);
+        float f_hold = fmaxf(f_res, resist_grade(v, g_pk));      // what holding the speed on the worst grade of the next seconds asks
+        // what is asked: the force of the last seconds (up fast, down slow), but no more than the pedal gives in this gear now: right after
+        // a shift the old gear's force would still be in it and make every higher gear look out of reach
+        float need = fmaxf(fminf(S.f_need, force_at(cur, v, fmaxf(S.thr, S.demand))), f_hold);
+        gs_out so;
+        gs_eval(&so, cur, n, v, need, f_hold, coast_p, score_cfg(coast_p ? 0 : skips));   // (no skipping with the pedal off, as in the upshift path)
+        int w = so.best;
+        if (w == cur) { *why = W_HOLD; return cur; }
+        if (w) {
+            bool forced = !so.cur_ok;   // this gear is outside the window or cannot make the demanded pull: a change is due, whatever the timers say
+            int ret = -1, why_v = W_NONE;
+            if (w < cur) {
+                bool deep = forced && (rpm < idle_rpm() + 250 || so.t[cur].share > 1.0f || kick);
+                if (!forced && !kick && p_calm > 0 && V.mass > 6000 && v * 3.6f < p_calm && thr < 0.6f && rpm > idle_rpm() + 230) ret = cur, why_v = W_LOW_SPEED_HOLD;
+                else if (S.shift_dir > 0 && since < p_dwell_ud && !deep && !kick) ret = cur, why_v = W_ANTI_HUNT_DOWN;
+                else if (top_near && rpm > idle_rpm() + 300) ret = cur, why_v = W_TOP_AHEAD;
+                else if (top_ok || top_over) ret = cur, why_v = top_ok ? W_TOP_REACHABLE : W_OVER_TOP;
+                else if (T.cruise > 0.5f && !kick && T.in_thr < 0.1f && v >= T.cruise - crest_band() && rpm > band_rpm() && (fmax - f_res) / V.mass > 0.06f)
+                    ret = cur, why_v = W_CRUISE_BAND;
+                else { ret = w; why_v = cur - w > 1 ? W_DOWN_SKIP : W_DOWN; }
+            } else {
+                bool wants_power = clampf(T.in_thr, 0, 1) >= 0.5f || thr >= 0.5f || thr > S.demand + 0.05f;
+                bool jn_soon = jn >= 0 && jn < fmaxf(50.0f, v * 3);
+                double dwell = now - S.kd_at < by_mode(3, p_kick_dwell, 8) + 1 ? by_mode(3, p_kick_dwell, 8) : by_mode(p_dwell_du, p_dwell_du, 4.0f);
+                // a change for a better score only while pulling steadily (the early upshift's conditions): not right after taking over, not
+                // right after a brake at low speed, not onto a rising grade, not within the kickdown dwell, not while the truck is slowing
+                bool steady_up = now - S.ours_at > (S.ours_launch ? 1.0 : 3.0) && (now - S.brake_at > 6 || v * 3.6f >= 60) && !climbing &&
+                                 !(now - S.kd_at < by_mode(3, p_kick_dwell, 8)) && T.accel > -0.15f && thr >= 0.6f * S.demand;
+                if (coast_p && S.mode == MODE_POWER && p_mode_char > 0 && now - S.pedal_on_at < 3 && rpm < lim * 0.9f) ret = cur, why_v = W_POWER_HOLDS;
+                else if (!wants_power && (T.accel < -0.2f || jn_soon) && rpm < lim * 0.9f) ret = cur, why_v = W_UP_VETO;
+                else if (S.shift_dir < 0 && since < dwell && rpm < S.up_pt + 100) ret = cur, why_v = W_ANTI_HUNT_UP;
+                else if (!forced && !steady_up) ret = cur, why_v = W_HOLD;
+                else { ret = w; why_v = w - cur > 1 ? W_UP_SKIP : W_UP; }
+            }
+            *why = why_v;
+            if (ret != cur && now - S.score_log_at > 0.5) {
+                S.score_log_at = now;
+                int g2 = so.second;
+                char nx[48] = "no other candidate";
+                if (g2) snprintf(nx, sizeof nx, "gear %d %.3f", g2, so.t[g2].score);
+                logv(2, "score %s %d->%d: gear %d %.3f (share %.2f, %.0f rpm), then %s (%.0f km/h, pedal %.2f, demand %.2f, asks %.0f N, window %.0f-%.0f rpm, grade %.1f%%, %.1f t)",
+                     ret > cur ? "up" : "down", cur, ret, w, so.t[w].score, so.t[w].share, so.t[w].rpm, nx, v * 3.6f, T.in_thr, S.demand, need, so.lo, so.hi, grade_pct(), V.mass / 1000);
+            }
+            return ret;
+        }
+    }
+
     // (not within the kickdown/lugging dwell either: the early path took 9 -> 10 two seconds after a lugging 10 -> 9 on a 2.3 % climb)
     if (steady && cur < n && S.demand < p_power_from && !(S.shift_dir < 0 && since < p_dwell_du) && !(now - S.kd_at < by_mode(3, p_kick_dwell, 8)) && !climbing) {
         float need = fmaxf(S.f_need, f_res), k = mode_reserve() + learned().res;

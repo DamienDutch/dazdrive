@@ -51,14 +51,14 @@ double wall_s() { return t_now; }
 double sim_s() { return t_now; }
 void csv_cap(FILE **, const char *) {}
 FILE *open_out(const char *name, const char *mode) { return NULL; }  // no trace file
-static int verbose, n_failed, g_x_failed;
+static int verbose, n_failed, g_x_failed, g_quiet;   // g_quiet: the SCORES table runs print no shift lines
 static float g_stuck_s = -1;   // the last 'stuck in neutral for N s' line (tail_pre's gap-state timer)
 void logline(const char *fmt, ...)
 {
     if (strstr(fmt, "no pull after")) n_failed++;
     if (!strncmp(fmt, "stuck in neutral for", 20)) { va_list ap; va_start(ap, fmt); g_stuck_s = (float)va_arg(ap, double); va_end(ap); }
     int shift = !strncmp(fmt, "shift", 5) || strstr(fmt, "no pull after") || !strncmp(fmt, "load changed", 12);
-    if (!verbose && !shift) return;
+    if ((!verbose && !shift) || g_quiet) return;
     va_list ap; va_start(ap, fmt);
     printf("%7.1f  ", t_now); vprintf(fmt, ap); printf("\n");
     va_end(ap);
@@ -263,6 +263,7 @@ static int shifts, ups, hunts, last_dir; static double last_shift_t;
 static double up_rpm_sum; static int up_n;
 static double up_rpm_min, rpm_all_sum, rpm_all_t, skip_rpm_min, skip_pull_min; static int skips_up, hunts_ts, shifts_ts;   // RELAX study: landing rpm, mean rpm below 50 km/h, skips, and shifts/hunting above the takeover speed
 static double rpm_sum, rpm_t;   // time-weighted rpm in the second half
+static double g_sh_t, g_rpm_s, g_rpm_t; static int g_dskips;   // SCORES table: seconds in shifts, rpm in gear over the whole run, downward skips; g_quiet = run() prints nothing
 
 // A session reset as core/telemetry.cpp session_reset does it: the vehicle model first, then the module.
 static void sim_reset(int level, const char *why) { vehicle_reset(level); if (m_trueshift.reset) m_trueshift.reset(level, why); }
@@ -296,6 +297,7 @@ static void tick(double dt, int stats)
                 if (lr < skip_rpm_min) skip_rpm_min = lr;
                 if ((F - Fr) / M.mass < skip_pull_min) skip_pull_min = (F - Fr) / M.mass;
             } }
+        if (dir < 0 && M.gear > 0 && M.gear - M.target > 1) g_dskips++;
         if (M.v * 3.6f >= 8) { shifts_ts++; if (last_dir && dir != last_dir && t_now - last_shift_t < 5) hunts_ts++; }
         if (last_dir && dir != last_dir && t_now - last_shift_t < 5) hunts++;
         last_dir = dir; last_shift_t = t_now;
@@ -340,6 +342,7 @@ static void tick(double dt, int stats)
     if (M.v < 0) M.v = 0;
     M.s += M.v * dt;
     if (stats) { rpm_sum += rpm_now() * dt; rpm_t += dt; }
+    if (M.state) g_sh_t += dt; else if (M.gear > 0) { g_rpm_s += rpm_now() * dt; g_rpm_t += dt; }
     if (M.gear > 0 && !M.state && M.v * 3.6f < 50) { rpm_all_sum += rpm_now() * dt; rpm_all_t += dt; }
 }
 
@@ -349,7 +352,7 @@ static int rolls; static double roll_time, min_kmh, t_30, t_50, t_80, d_80;
 
 static void run(const char *name, setup su, void (*ctl)(double))
 {
-    printf("\n=== %s ===\n", name);
+    if (!g_quiet) printf("\n=== %s ===\n", name);
     memset(&M, 0, sizeof M);
     M.mass = su.mass; M.gear = M.target = su.g0; M.cvar = su.cvar; M.shift_time = su.shift_time;
     M.eb_level = su.eb_level; M.eb_toggle = su.eb_toggle; M.mass_seen = su.mass_seen;
@@ -361,6 +364,7 @@ static void run(const char *name, setup su, void (*ctl)(double))
     M.v = su.v0 / 3.6f; shifts = ups = hunts = last_dir = 0; up_rpm_sum = 0; up_n = 0; rpm_sum = rpm_t = 0;
     M.s = 0; rolls = 0; roll_time = 0; min_kmh = 1e9; t_30 = t_50 = t_80 = d_80 = -1;
     up_rpm_min = skip_rpm_min = skip_pull_min = 1e9; rpm_all_sum = rpm_all_t = 0; skips_up = hunts_ts = shifts_ts = 0;
+    g_sh_t = g_rpm_s = g_rpm_t = 0; g_dskips = 0;
     int f0 = n_failed;
     double t0 = t_now, next_print = t0;
     while (t_now - t0 < su.secs) {
@@ -373,9 +377,10 @@ static void run(const char *name, setup su, void (*ctl)(double))
         if (t_50 < 0 && M.v * 3.6f >= 50) t_50 = t_now - t0;
         if (t_80 < 0 && M.v * 3.6f >= 80) { t_80 = t_now - t0; d_80 = M.s; }
         if (t_now >= next_print) { next_print += 10;
-            printf("        t=%5.1f  %5.1f km/h  gear %2d  rpm %4.0f  pedal %.2f cc %.2f grade %.1f%% %c\n", t_now - t0,
+            if (!g_quiet) printf("        t=%5.1f  %5.1f km/h  gear %2d  rpm %4.0f  pedal %.2f cc %.2f grade %.1f%% %c\n", t_now - t0,
                    M.v * 3.6f, M.gear, rpm_now(), M.pedal, M.cc, M.grade_pct, letter); }
     }
+    if (g_quiet) return;
     printf("  -> %d shifts (%d up, avg up-landing %.0f rpm), %d hunting pairs, %d no-pull lessons, end %.1f km/h gear %d, "
            "mean rpm 2nd half %.0f, min %.0f km/h, %d rolls %.0f s, %.0f m\n", shifts, ups, up_n ? up_rpm_sum / up_n : 0,
            hunts, n_failed - f0, M.v * 3.6f, M.gear, rpm_t > 0 ? rpm_sum / rpm_t : 0, min_kmh, rolls, roll_time, M.s);
@@ -560,6 +565,7 @@ static void sc_show(const char *title, const gs_out &o, int cur)
                t.ok ? "ok " : "out", t.gas, t.rpmc, t.shiftc, t.shifts, t.stay, t.score);
     }
 }
+static int run_scores_table();
 static int run_scores()
 {
     printf("\n=== SCORES part 1: the score function on the vehicle model (Renault ATO 12 speeds, diff 3.08) ===\n");
@@ -623,6 +629,117 @@ static int run_scores()
             }
     printf("  Eco higher than Power in %d cases, lower in %d; Normal higher than Power in %d\n", eco_far, eco_near, pw_far);
     sc_check(eco_near == 0 && eco_far > 0 && pw_far > 0, "Eco skips farther than Power, never less; Normal farther than Power somewhere");
+    return run_scores_table();
+}
+
+// ---- part 2: choice 0 (the cascade) against choice 1 (the scores) in the simulator
+struct sc_res { int shifts, skips; double shift_s, rpm, t50; int hunts; };
+static sc_res sc_last;
+static void sc_do(const char *name, setup su, void (*ctl)(double), int choice)
+{
+    set_param("choice", (float)choice);
+    sim_reset(RESET_HARD, "sim: next scores scenario");   // every run starts from a module that knows nothing of the one before
+    g_quiet = getenv("SC_VERBOSE") ? 0 : 1;
+    run(name, su, ctl);
+    g_quiet = 0;
+    sc_last = { shifts, skips_up + g_dskips, g_sh_t, g_rpm_t > 0 ? g_rpm_s / g_rpm_t : 0, t_50, hunts };
+}
+static void sc_print(const char *label, int choice, const sc_res &r)
+{
+    char t50[16]; if (r.t50 < 0) snprintf(t50, sizeof t50, "   -"); else snprintf(t50, sizeof t50, "%4.1f", r.t50);
+    printf("  %-44s %d  %6d %6d %8.1f %8.0f  %s %6d\n", label, choice, r.shifts, r.skips, r.shift_s, r.rpm, t50, r.hunts);
+}
+static sc_res g_cmp[2];
+static void sc_pair(const char *label, setup su, void (*ctl)(double))   // both choices on the same scenario; the results stay in g_cmp
+{
+    for (int ch = 0; ch < 2; ch++) { sc_do(label, su, ctl, ch); g_cmp[ch] = sc_last; sc_print(label, ch, sc_last); }
+}
+static void sc_header(const char *title)
+{
+    printf("\n  %s\n  %-44s %s  %6s %6s %8s %8s  %4s %6s\n", title, "scenario", "c", "shifts", "skips", "shift s", "mean rpm", "t50", "hunts");
+}
+// the regression of a real ride: the pedal ramps up, the truck skips at 45 km/h, the driver lifts to 0.00 a second after the skip landed
+static int g_rg_roll0, g_rg_roll10; static double g_rg_lift, g_rg_first; static float g_rg_p0 = 0.45f; static int g_rg_g0, g_rg_sh0, g_rg_sh10; static bool g_rg_done10;
+static void c_regress(double t)
+{
+    if (g_rg_lift < 0 && M.gear >= g_rg_g0 + 2 && M.v * 3.6f >= 40) g_rg_lift = t + 1.0;   // the skip has landed
+    if (g_rg_lift < 0 && t >= 25) g_rg_lift = t;                                          // no skip came: lift anyway
+    M.pedal = g_rg_lift >= 0 && t >= g_rg_lift ? 0.0f : fminf(0.73f, g_rg_p0 + 0.04f * (float)t);
+    static bool at_lift; if (t < 0.1) { at_lift = false; g_rg_done10 = false; }
+    if (!at_lift && g_rg_lift >= 0 && t >= g_rg_lift) { at_lift = true; g_rg_sh0 = shifts; g_rg_roll0 = rolls; }
+    if (at_lift && g_rg_first < 0 && shifts > g_rg_sh0) g_rg_first = t - g_rg_lift;
+    if (!g_rg_done10 && g_rg_lift >= 0 && t >= g_rg_lift + 10) { g_rg_done10 = true; g_rg_sh10 = shifts; g_rg_roll10 = rolls; }
+}
+static int sc_gear_for(float kmh, float rpm_min)   // the highest gear that still gives at least rpm_min at kmh
+{
+    int g0 = 1;
+    for (int g = 1; g <= NG; g++) if ((kmh / 3.6f) / RADIUS * RATIO[g - 1] * DIFF * 9.5493f >= rpm_min) g0 = g;
+    return g0;
+}
+static void c_hold45(double) { hold(45); }
+static void c_hold70(double) { hold(70); }
+static int run_scores_table()
+{
+    struct Tr { const char *name; void (*use)(); int g0; } trucks[2] = { { "ATO", use_ato, 1 }, { "XT", use_renault, 3 } };
+    // 1. pull-away from a standstill at a light pedal (the ACCEL0 scenarios), 90 s
+    printf("\n=== SCORES part 2: choice 0 (shift points) against choice 1 (scores), Normal, max_skip 2, 0.5 s box ===\n");
+    printf("  shifts, skips (up + down), seconds in shifts, mean rpm in gear, time to 50 km/h (- = not reached), hunting pairs (direction reversal within 5 s)\n");
+    sc_res tot[2] = {};
+    int n_rows = 0, n_t50 = 0;
+    sc_header("pull-away from a standstill, 90 s");
+    void (*ctls[4])(double) = { c_p20, c_p30, c_p40, c_p50 }; const char *cn[4] = { "0.2", "0.3", "0.4", "0.5" };
+    for (auto &tr : trucks) {
+        tr.use();
+        for (float mass : { 20000.0f, 36000.0f })
+            for (int c = 0; c < 4; c++) {
+                char nm[100]; snprintf(nm, sizeof nm, "pull-away %s %.0f t pedal %s", tr.name, mass / 1000, cn[c]);
+                sc_pair(nm, {mass, 1, tr.g0, 90}, ctls[c]);
+                if (g_cmp[0].shifts > 100) continue;   // the XT at pedal 0.2 never gets going in either mode (its low-speed shifting in the sim): not in the sums
+                for (int ch = 0; ch < 2; ch++) { tot[ch].shifts += g_cmp[ch].shifts; tot[ch].skips += g_cmp[ch].skips; tot[ch].shift_s += g_cmp[ch].shift_s; tot[ch].rpm += g_cmp[ch].rpm; tot[ch].hunts += g_cmp[ch].hunts; if (g_cmp[0].t50 > 0 && g_cmp[1].t50 > 0) tot[ch].t50 += g_cmp[ch].t50; }
+                if (g_cmp[0].t50 > 0 && g_cmp[1].t50 > 0) n_t50++;
+                n_rows++;
+            }
+    }
+    printf("  %-44s %d  %6d %6d %8.1f %8.0f  %4.1f %6d   (sums; mean rpm and t50 are means over the rows, t50 where both reach 50)\n", "pull-away, 14 rows without the XT at 0.2", 0, tot[0].shifts, tot[0].skips, tot[0].shift_s, tot[0].rpm / n_rows, tot[0].t50 / n_t50, tot[0].hunts);
+    printf("  %-44s %d  %6d %6d %8.1f %8.0f  %4.1f %6d\n", "", 1, tot[1].shifts, tot[1].skips, tot[1].shift_s, tot[1].rpm / n_rows, tot[1].t50 / n_t50, tot[1].hunts);
+    // 2. steady cruising
+    sc_header("steady cruising (a driver holding the speed), 90 s");
+    use_ato();
+    for (float mass : { 17000.0f, 36000.0f })
+        for (float kmh : { 45.0f, 70.0f }) {
+            char nm[100]; snprintf(nm, sizeof nm, "cruise %.0f km/h, ATO %.0f t", kmh, mass / 1000);
+            sc_pair(nm, {mass, kmh, sc_gear_for(kmh, 1100), 90}, kmh < 50 ? c_hold45 : c_hold70);
+        }
+    // 3. the other modes and a slow box, pull-away 36 t pedal 0.3
+    sc_header("the modes and a slow gearbox (ATO 36 t, pedal 0.3, 90 s)");
+    sc_pair("Eco", {36000, 1, 1, 90, 10.0f}, c_p30);
+    sc_pair("Normal", {36000, 1, 1, 90, 3.0f}, c_p30);
+    sc_pair("Power", {36000, 1, 1, 90, 1.6667f}, c_p30);
+    sc_pair("Normal, slow box 1.2 s", {36000, 1, 1, 90, 3.0f, 1.2f}, c_p30);
+    // 4. the regression from a ride: the truck skips to the tenth at ~45 km/h and 880 rpm, the driver lifts to 0.00 one second later. Several
+    // ramps and start speeds, so that the skip lands at different moments; no brake, no engine brake, no retarder: no hard rule asks for a shift
+    printf("\n  regression (17 t ATO, 8 at the start speed): the pedal ramps from p0 by 0.04/s to 0.73, the driver lifts to 0.00 one second after the first gear +2 lands at >= 40 km/h\n");
+    printf("  %-22s | %-44s | %-44s\n", "", "choice 0", "choice 1");
+    int worst = 0, n_skip1 = 0, n_var = 0;
+    for (float v0 : { 34.0f, 38.0f, 42.0f })
+        for (float p0 : { 0.2f, 0.3f, 0.4f, 0.45f }) {
+            if (getenv("RG_ONLY") && (fabs(atof(getenv("RG_ONLY")) - v0) > 0.01 || fabs(atof(getenv("RG_ONLY2")) - p0) > 0.01)) continue;
+            char cell[2][100]; int sh[2]; 
+            for (int ch = 0; ch < 2; ch++) {
+                g_rg_lift = -1; g_rg_first = -1; g_rg_g0 = 8; g_rg_p0 = p0;
+                sc_do("regression", {17000, v0, 8, 45}, c_regress, ch);
+                bool skipped = g_rg_lift >= 0 && g_rg_lift < 25;   // the lift was triggered by a landed skip, not by the 25 s fallback
+                sh[ch] = g_rg_done10 ? g_rg_sh10 - g_rg_sh0 : -1;
+                const char *rl = g_rg_done10 && g_rg_roll10 > g_rg_roll0 ? " (eco-roll)" : "";
+                if (g_rg_first >= 0) snprintf(cell[ch], sizeof cell[ch], "%s lift t=%4.1f: %d shifts, 1st at +%.1f s%s", skipped ? "+2 gears" : "none", g_rg_lift, sh[ch], g_rg_first, rl);
+                else snprintf(cell[ch], sizeof cell[ch], "%s lift t=%4.1f: %d shifts", skipped ? "+2 gears" : "none", g_rg_lift, sh[ch]);
+                if (ch == 1) { n_var++; if (skipped) n_skip1++; if (sh[1] > worst) worst = sh[1]; }
+            }
+            printf("  from %2.0f km/h, p0 %.2f   | %-44s | %-44s\n", v0, p0, cell[0], cell[1]);
+        }
+    printf("  choice 1: %d of %d ramps got the extra 2 gears; the most shifts in the 10 s after the lift: %d\n", n_skip1, n_var, worst);
+    sc_check(n_skip1 > 0, "choice 1 skips in some of the ramps (else the test says nothing)");
+    sc_check(worst <= 1, "choice 1: at most 1 shift in the 10 s after the lift to 0.00 in every ramp (no engine brake, no retarder, no brake; an eco-roll into neutral counts as the one shift)");
     return g_sc_failed;
 }
 
@@ -639,6 +756,8 @@ int main(int argc, char **argv)
     if (getenv("BAND0")) set_param("crest_band_kmh", 0);
     if (getenv("NOBOOST")) set_param("eco_roll_boost_kmh", 0);
     if (getenv("NOLOAD")) set_param("load_down_from", 1);
+    if (getenv("CHOICE")) set_param("choice", (float)atoi(getenv("CHOICE")));   // CHOICE=1: every scenario below with the score-based gear choice
+    if (getenv("SCP")) { char b[200]; snprintf(b, sizeof b, "%s", getenv("SCP")); for (char *t = strtok(b, ","); t; t = strtok(NULL, ",")) { char *e = strchr(t, '='); if (e) { *e = 0; set_param(t, (float)atof(e + 1)); } } }   // SCP="key=value,..." overrides ini keys (tuning)
 
     if (getenv("SCORES")) return run_scores();
     if (getenv("RELAX")) {  // skip_relax_rpm study: pull-away at a fixed pedal from a standstill, 12 and 25 km/h, 12/20/36 t, both of his boxes
