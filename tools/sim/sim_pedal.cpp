@@ -129,6 +129,7 @@ static void set_param(module &m, const char *n, float v)
 {
     for (int i = 0; i < m.n_params; i++) if (!strcmp(m.params[i].key, n)) *m.params[i].val = v;
 }
+static float g_ref_now = 0;   // ref_now for the sections A ... F: 0 = the peak power as the reference (their numbers as before), G runs them again with 1
 static void params_default()
 {
     for (module *m : { &m_trueshift, &m_pedal })
@@ -136,6 +137,7 @@ static void params_default()
     set_param(m_trueshift, "idle_rpm", IDLE);
     p_wish = 1;
     p_ref_kwt = 0;   // the exponents as the ini has them; the per-truck scaling has its own test (D2)
+    p_ref_now = g_ref_now;
 }
 
 // The truck at a speed in a gear, clutch closed, locked. mode: MODE_*.
@@ -572,6 +574,103 @@ static void zero_and_fuzz()
     check(applied > 200, "F fuzz: only %d calls applied, the fuzz does not reach the wish", applied);
 }
 
+// ---------------------------------------------------------------- G: the reference at this speed (ref_now)
+// The reference worked out here again (not from the module's code): the gears whose rpm at v lies in the score function's window
+// (idle + 60 % of the way to the plateau, at least idle + 150, up to the top of the power range or 93 % of the limit), the best of them
+// at full throttle, as engine power
+static bool in_window(int g, float v)
+{
+    float lo = fmaxf(IDLE + 0.6f * fmaxf(0.0f, V.plateau - IDLE), IDLE + 150), hi = fminf(RANGES[R_POWER][1], 0.93f * LIMIT), r = vehicle_rpm_at(g, v);
+    return r >= lo && r <= hi;
+}
+static float pref_now(float v, int *best)   // *best = the gear it comes from, 0 = none in the window
+{
+    float p = 0;
+    *best = 0;
+    for (int g = 1; g <= 12; g++) {
+        float w = vehicle_force_at(g, v, 1) * v / V.eta;
+        if (in_window(g, v) && w > p) { p = w; *best = g; }
+    }
+    return p;
+}
+// the steady gas over the pedal 0 ... 0.85 (steps of 0.01) in gear g; returns the longest stretch where it does not rise, *sat = the
+// first pedal at gas 1 (1 = none up to 0.85: the blend and the flat pedal take it there)
+static float flat_stretch(int g, float kmh, float mass, float *curve, float *sat)
+{
+    float prev = -1, run = 0, worst = 0;
+    *sat = 1;
+    world(g, kmh, MODE_NORMAL, mass);
+    for (int i = 0; i <= 85; i++) {
+        float p = i / 100.0f, gas = steady(p);
+        curve[i] = gas;
+        if (*sat >= 1 && gas >= 0.999f) *sat = p;
+        run = i > 0 && gas <= prev + 1e-4f ? run + 0.01f : 0;
+        worst = fmaxf(worst, run);
+        prev = gas;
+    }
+    return worst;
+}
+static void ref_now_checks()
+{
+    printf("== G ref_now 1: a full wish is the power the best gear in the usable window gives at this speed, the same in every gear\n");
+    static float c1[86], c0[86];
+    for (float kmh : { 45.0f, 70.0f })
+        for (float mass : { 17000.0f, 33000.0f }) {
+            p_ref_now = 1;
+            world(9, kmh, MODE_NORMAL, mass);
+            int gb = 0;
+            float want = pref_now(T.speed, &gb), peak = peak_power();
+            printf("   %2.0f km/h, %2.0f t: window gears", kmh, mass / 1000);
+            for (int g = 1; g <= 12; g++) if (in_window(g, T.speed)) printf(" %d (%.0f rpm)", g, vehicle_rpm_at(g, T.speed));
+            printf("; reference %.0f kW from gear %d, peak %.0f kW (%.1f %%)\n", want / 1000, gb, peak / 1000, 100 * want / peak);
+            check(gb > 0 && want <= peak * 1.001f, "G %.0f km/h %.0f t: reference %.0f W from gear %d, peak %.0f W", kmh, mass / 1000, want, gb, peak);
+            // the same reference in every gear at this speed (gears where the wish applies: 8 is over the rev limit at 70 km/h)
+            const int G45[3] = { 8, 9, 10 }, G70[3] = { 9, 10, 11 };
+            const int *gs = kmh < 50 ? G45 : G70;
+            float r0 = -1;
+            for (int k = 0; k < 3; k++) {
+                world(gs[k], kmh, MODE_NORMAL, mass);
+                steady(0.5f);
+                check(S.on_at >= 0, "G %.0f km/h %.0f t gear %d: the wish does not apply", kmh, mass / 1000, gs[k]);
+                if (r0 < 0) r0 = S.pref;
+                check(S.pref == r0, "G %.0f km/h %.0f t: the reference in gear %d is %.1f W, in gear %d %.1f W", kmh, mass / 1000, gs[k], S.pref, gs[0], r0);
+                check(fabsf(S.pref - want) <= 0.001f * want, "G %.0f km/h %.0f t gear %d: reference %.0f W, %.0f W expected", kmh, mass / 1000, gs[k], S.pref, want);
+            }
+            printf("   the reference in gears %d/%d/%d: %.1f W in each\n", gs[0], gs[1], gs[2], r0);
+            // the curve in the gear the reference comes from, ref_now 1 against 0; then where the other gears of the window reach gas 1
+            float s1, s0, f1 = flat_stretch(gb, kmh, mass, c1, &s1);
+            p_ref_now = 0;
+            float f0 = flat_stretch(gb, kmh, mass, c0, &s0);
+            p_ref_now = 1;
+            printf("   gear %2d pedal  ", gb);
+            for (int i = 0; i <= 85; i += 5) printf(" %5.2f", i / 100.0f);
+            printf("\n     ref_now 1 gas");
+            for (int i = 0; i <= 85; i += 5) printf(" %5.3f", c1[i]);
+            printf("   longest flat %.2f, gas 1 at %.2f\n     ref_now 0 gas", f1, s1);
+            for (int i = 0; i <= 85; i += 5) printf(" %5.3f", c0[i]);
+            printf("   longest flat %.2f, gas 1 at %.2f\n", f0, s0);
+            check(f1 <= 0.05f + 1e-4f, "G %.0f km/h %.0f t gear %d: a flat stretch of %.2f pedal with ref_now 1", kmh, mass / 1000, gb, f1);
+            for (int g = 1; g <= 12; g++) {
+                if (g == gb || !in_window(g, kmh / 3.6f)) continue;
+                float sa1, sa0, fl1 = flat_stretch(g, kmh, mass, c1, &sa1);
+                p_ref_now = 0;
+                float fl0 = flat_stretch(g, kmh, mass, c0, &sa0);
+                p_ref_now = 1;
+                printf("     gear %2d (%.0f rpm): gas 1 at pedal %.2f / %.2f (ref_now 1 / 0), longest flat %.2f / %.2f\n", g, vehicle_rpm_at(g, T.speed), sa1, sa0, fl1, fl0);
+            }
+            // wish 0: the pedal itself with either reference
+            int bad = 0;
+            for (float rn : { 0.0f, 1.0f })
+                for (int k = 0; k < 3; k++) {
+                    world(gs[k], kmh, MODE_NORMAL, mass);
+                    p_wish = 0; p_ref_now = rn;
+                    for (int i = 0; i <= 100; i++) { float p = i / 100.0f; res r = step(p); if (r.on || memcmp(&r.out, &p, sizeof p)) bad++; }
+                }
+            check(bad == 0, "G %.0f km/h %.0f t: wish 0 changed the pedal %d times", kmh, mass / 1000, bad);
+        }
+    p_ref_now = g_ref_now;
+}
+
 int main(int argc, char **argv)
 {
     verbose = argc > 1 && !strcmp(argv[1], "-v");
@@ -587,6 +686,15 @@ int main(int argc, char **argv)
     passthrough_checks();
     truck_curve_checks();
     params_default();
+    zero_and_fuzz();
+    // ref_now 1 (the default): the reference at this speed, then the cap, the shape, the pass-throughs and the fuzz again with it
+    params_default();
+    ref_now_checks();
+    g_ref_now = 1;
+    params_default();
+    cap_checks();
+    shape_checks();
+    passthrough_checks();
     zero_and_fuzz();
     printf("\n%d checks, %d failed\n", n_checks, n_failed);
     return n_failed ? 1 : 0;
