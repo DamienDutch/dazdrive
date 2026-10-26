@@ -647,8 +647,10 @@ static void sc_do(const char *name, setup su, void (*ctl)(double), int choice)
 {
     set_param("choice", (float)choice);
     // a short drive first: the module keeps a once-per-standstill flag (the launch correction) until the truck moves, and a run that ends
-    // in a crawl would give the one after it a different start than its twin
-    g_quiet = 1; run("wash", {20000, 30, 6, 2}, c_hold80); g_quiet = 0;
+    // in a crawl would give the one after it a different start than its twin. In the scenario's mode: the module reads the mode once a
+    // second, at a phase the run before sets, so the first second of an Eco or Power run was Normal or not depending on that run
+    setup wash = {20000, 30, 6, 2}; wash.cvar = su.cvar;
+    g_quiet = 1; run("wash", wash, c_hold80); g_quiet = 0;
     sim_reset(RESET_HARD, "sim: next scores scenario");   // every run starts from a module that knows nothing of the one before
     g_quiet = getenv("SC_VERBOSE") ? 0 : 1;
     run(name, su, ctl);
