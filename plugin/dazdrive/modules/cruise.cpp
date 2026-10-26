@@ -2094,5 +2094,13 @@ static const char *cr_status()
     return b;
 }
 
+void cruise_info_get(cruise_info *o)
+{
+    o->hold = AH.st;
+    o->hold_req = AH.r;
+    o->sg_hold = g_sg_hold;
+    o->feed = g_feed;
+}
+
 module m_cruise = { "cruise", "Cruise", g_params, sizeof g_params / sizeof g_params[0], cr_start, cr_frame, NULL,
                     cr_stop, cr_reset, cr_status };

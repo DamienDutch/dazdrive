@@ -1358,7 +1358,7 @@ static void note_gear_change(void *self)
 // A launch the start-gear function never saw (24-10: after reversing in the yard, and right after the engine started, the game picked
 // gear 2 itself with 36.7 t, and the box climbed 2>3>4>5 in 7 s; the start function says 4): at a standstill, in a low gear, the clutch
 // still slipping or even before the pedal, take the physics' gear straight away: a shift now costs next to nothing. Once per standstill.
-static int launch_pick(int stock, float thr);
+static int launch_pick(int stock, float thr, bool force = false);
 static bool takeover_launch_ok(float) { return p_takeover > 0; }
 static void launch_correct(void *self)
 {
@@ -1510,10 +1510,10 @@ static void tail_pre(void *self)
 
 // The start gear by physics (see stub_start): lock speed and slip time at this mass and grade, never by a gear count. `stock` = the game's
 // pick; the result may be above it (launch_max_kmh) or below it.
-static int launch_pick(int stock, float thr)
+static int launch_pick(int stock, float thr, bool force)
 {
     int pick = stock;
-    if (p_start_fix > 0 && takeover() && V.eng_ok && wheel_radius() > 0.1f && stock <= n_gears()) {
+    if (p_start_fix > 0 && (force || takeover()) && V.eng_ok && wheel_radius() > 0.1f && stock <= n_gears()) {
         float r = wheel_radius(), f_res = resist(0);
         // Above the game's pick: only by physics (lock speed and slip time at this mass and grade), never by a gear count,
         // because every gearbox numbers its gears differently (Damien 13-10: "look at the gear ratio, not the number").
@@ -1566,6 +1566,16 @@ static int stub_start(void *self)
     S.cmd_why = pick == stock ? W_START : W_START_LOWERED;
     return pick;
 }
+
+// For the low-speed owner (suite.h): the start gear the physics would pick, also where TrueShift does not have the truck (below its
+// takeover speed, which is where a stop and a launch happen). The game's own pick is its default: 4 alone, 1 with a trailer.
+int ts_start_gear(float thr)
+{
+    int n = n_gears();
+    if (n < 1 || !V.eng_ok || !(V.mass > 0) || !(wheel_radius() > 0.1f)) return 0;
+    return launch_pick(T.trailer ? 1 : (n < 4 ? n : 4), clampf(thr, 0, 1), true);
+}
+float ts_idle_rpm() { return idle_rpm(); }
 
 // ---------------------------------------------------------------- module
 

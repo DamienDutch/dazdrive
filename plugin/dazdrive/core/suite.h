@@ -182,6 +182,26 @@ extern float g_rsc_mode;                 // ini rollover_guard: 0 off, 1 tone on
 extern float g_rsc_bend;                 // ini rollover_bend: 1 = also the single-bend thresholds (off: only the swing check)
 void rsc_step(float dt);                // core/rsc.cpp, called by the actuator every tick; posts its brake wish and throttle cap (ACT_RSC)
 extern volatile int g_lcx;               // Creep: launch control phase, 0 off, 1 armed (brake + flat pedal at a standstill), 2 launching
+// Read-only views of what the other modules decide, for the low-speed owner (modules/lowspeed.cpp). Nothing here changes a module.
+struct creep_info {       // Creep (crawl and smooth start)
+    int crawl;            // the crawl / maneuver mode is on (the controller drives the clutch floor)
+    int launch;           // the smooth start (or launch control) holds the clutch
+    float floor;          // the crawl's clutch floor, 0 closed .. 1 open
+    float launch_clutch;  // the smooth start's clutch value (valid while launch)
+    float add_thr;        // the throttle the crawl adds for a heavy load (0 = none)
+    float brake;          // the crawl's descent brake request
+    float brake_off;      // ini [creep] brake: the brake pedal that takes the crawl away
+};
+void creep_info_get(creep_info *o);
+struct cruise_info {      // Cruise (Auto Hold, Stop&Go)
+    int hold;             // Auto Hold: 0 off, 1 holds the standstill, 2 releasing for a launch
+    float hold_req;       // the brake request Auto Hold holds now (0..1)
+    int sg_hold;          // Stop&Go holds the stop behind a lead
+    float feed;           // the cruise throttle fed to the automatic's pedal at walking pace (0 = none)
+};
+void cruise_info_get(cruise_info *o);
+int ts_start_gear(float thr);   // TrueShift: the start gear by physics (mass, grade, engine) for this pedal, whether or not TrueShift has the truck; 0 = unknown
+float ts_idle_rpm();            // TrueShift: the idle rpm (learned at a standstill, else the ini's)
 extern volatile int g_pedal_mapped;     // Cruise: the throttle the engine gets is the pedal through the Eco / Power curve this frame
 extern volatile int g_pcc_on;         // Cruise: predictive cruise (PCC) is switched on
 extern volatile int g_cruise_smooth;  // the Cruise module drives the cruise throttle itself

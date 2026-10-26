@@ -633,4 +633,15 @@ static void ck_stop()
     if (g_csv) fflush(g_csv);
 }
 
+void creep_info_get(creep_info *o)
+{
+    o->crawl = g_on;
+    o->launch = g_ln;
+    o->floor = g_f;
+    o->launch_clutch = g_lc;
+    o->add_thr = g_cthr;
+    o->brake = g_cbrake;
+    o->brake_off = p_brake;
+}
+
 module m_creep = { "creep", "Creep", g_params, sizeof g_params / sizeof g_params[0], ck_start, ck_frame, NULL, ck_stop, ck_reset, ck_status };
