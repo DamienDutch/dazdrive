@@ -15,7 +15,7 @@ static param g_params[] = {
     { "log_level", &p_log_level, 2, "dazdrive.log: 0 = start-up, errors, mode changes and one line per incident, 1 = + every shift and the modules' detail lines, 2 = + periodic traces and the csv trace files. The detail lines of level 1 are in every incident file anyway" },
     { "csv_max_mb", &p_csv_max_mb, 5, "a csv trace (log_level 2 only) moves to <name>.1 and starts again beyond this size (MB, 0.5-200): ~2.5 hours of driving per file" },
     { "log_max_mb", &p_log_max_mb, 5, "dazdrive.log moves to dazdrive.log.1 and starts again beyond this size (MB, 0.2-100). The log of the previous session stays as dazdrive.prev.log" },
-    { "retarder_hook", &g_retarder_hook, 0, "1 = install a hook on the retarder torque of the game's drivetrain, so that the suite can scale it (nothing does yet, the torque stays as it is). The dashboard, the animation and the lever keep showing the game's own retarder step. 0 = the game's retarder is left alone" },
+    { "retarder_hook", &g_retarder_hook, 0, "1 = install a hook on the retarder torque of the game's drivetrain, so that the suite can scale it for the player's truck (only the deceleration assist's soften does; otherwise the torque stays as it is). The dashboard, the animation and the lever keep showing the game's own retarder step. 0 = the game's retarder is left alone" },
 };
 module m_core = { "core", "Core", g_params, sizeof g_params / sizeof g_params[0], act_start, NULL, NULL, act_stop, act_reset, act_status };
 
@@ -71,7 +71,7 @@ static const struct { const char *sec, *key; float lo, hi; } k_bounds[] = {
     { "pedal", "wish", 0, 1 }, { "pedal", "blend_from", 0.5f, 1 }, { "pedal", "kick_rate", 0.3f, 20 }, { "pedal", "kick", 0, 0.5f },
     { "pedal", "kick_s", 0, 2 }, { "pedal", "exponent_eco", 0.5f, 2 }, { "pedal", "exponent_normal", 0.5f, 2 },
     { "pedal", "exponent_power", 0.5f, 2 }, { "pedal", "rise_rate_eco", 0.3f, 50 }, { "pedal", "rise_rate_normal", 0.3f, 50 },
-    { "pedal", "rise_rate_power", 0.3f, 50 }, { "pedal", "curve_ref_kw_t", 0, 50 }, { "pedal", "ref_now", 0, 1 },
+    { "pedal", "rise_rate_power", 0.3f, 50 }, { "pedal", "curve_ref_kw_t", 0, 50 }, { "pedal", "ref_now", 0, 1 }, { "decel", "soften", 0, 1 },
 };
 
 // The value as it may be used: finite, within its bounds (or, without a bounds row, within +-1e6). Returns the value it

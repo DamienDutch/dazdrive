@@ -13,6 +13,10 @@
 // give the top step's 3.0 in a gap: such lines say 'unreachable'); no overshoot over the target above 0.5; the jerk of the
 // deceleration stays within 1.5 x jerk_limit; the descent ends at v = 0 with the final jerk within jerk_limit, no reversal and no
 // request left. Then the cases where it must do nothing or end at once, brake air low (no windup) and the engine brake alone.
+// Soften ([decel] soften with the retarder hook; the plant's retarder, its gap floor too, times the factor the actuator merged): a
+// 10 t truck whose first step alone gives 2.0 m/s2 against a 0.6 target, with the gear held and with a shift every 4 s: the
+// deceleration within 0.2 of the target once settled, the factor without oscillation (sign changes of its derivative outside the
+// gaps), back to 1 after the lever is released; the hook off: factor 1; a 36 t truck: factor 1 at every step.
 // Jerk is the difference of the plant's true deceleration over 0.1 s. Outside the assert: the edges the retarder makes by itself (the
 // shift's fall and recovery, the pull's build-up, the fade); they are printed (edge) next to the assist-off figure.
 // Build+run: tools/sim/run_decel.sh [-v]
@@ -95,8 +99,13 @@ struct sc {
     double aeb_t; float aeb;                       // another owner's wish from this time (-1 = never)
     double air_t0, air_t1;                         // brake air low from .. to (the actuator pauses our requests; -1 = never)
     int engine_only;                               // no retarder: the engine brake alone (0.6 m/s2 at 18 t), T.retarder 0
+    int soften;                                    // the retarder hook is in (soften acts; the key is at its default 1 in every run)
+    float tmin;                                    // target_min for this run (0 = the default)
+    float ret_abs;                                 // the held step's deceleration at this mass, m/s2 (0 = the 18 t curve x 18 / mass)
+    float cycle;                                   // s between the shifts
+    double release_t;                              // the lever released at this time (-1 = never)
     sc() : mass_t(18), gain(1), n(4), step(2), enabled(1), thr(0), brk(0), cruise(0), gear_start(8), press_t(-1), press_thr(0), press_brk(0), aeb_t(-1), aeb(0),
-           air_t0(-1), air_t1(-1), engine_only(0) {}
+           air_t0(-1), air_t1(-1), engine_only(0), soften(0), tmin(0), ret_abs(0), cycle(CYCLE_S), release_t(-1) {}
 };
 
 struct res {
@@ -112,6 +121,11 @@ struct res {
     int limited;             // the request sat at max_brake
     float lvl_air0, lvl_air1;   // the assist's level when the air ran low and when it came back
     float tgt_seen;          // the assist's target at 3.0 s
+    float k_min, k_rel;      // soften: the lowest retarder factor, the factor 1.0 s after the lever was released
+    float soft_err;          // the worst |deceleration - target| once settled (from 8 s, above 12 km/h, outside a gap and 0.8 s after it)
+    float k_settled;         // the factor at the end of that window
+    int k_flips, k_flips_all;   // sign changes of the factor's derivative in that window, and over the whole run
+    float gap_hi, gap_lo;    // soften: the deceleration's highest and lowest against the target in a gap and 0.8 s after it (above 12 km/h)
 };
 
 static char buf[0x200];
@@ -129,8 +143,10 @@ static res run(const sc &s)
     for (auto &p : g_params) *p.val = p.def;
     p_enabled = (float)s.enabled;
     D = decltype(D)();
+    if (s.tmin > 0) p_tmin = s.tmin;
     memset(buf, 0, sizeof buf);
-    for (int o = 0; o < ACT_N; o++) act_brake(o, 0);
+    for (int o = 0; o < ACT_N; o++) { act_brake(o, 0); act_retarder_scale(o, 1); }
+    g_ret_scale = 1.0f; s_ret_in = s.soften != 0;
     s_req_ours = 0; s_dec_was = 0; s_br_at = 0; s_hooked = 1;
     s_aeb_was = s_hill_was = s_hold_was = 0;
     t_now = 0;
@@ -138,12 +154,14 @@ static res run(const sc &s)
     float v = 60 / 3.6f, y = 0, rb = 0, hist[10] = { 0 }, tgt_full = decel_target(s.step, s.n);
     r.tgt = tgt_full;
     int gear = s.gear_start;
-    double gap_t0 = -1, gap_t1 = -1, next_gap = CYCLE_S, taper_t = -1, frame_at = 0;
+    double gap_t0 = -1, gap_t1 = -1, next_gap = s.cycle, taper_t = -1, frame_at = 0;
     int gaps_judged = 0, in_gap = 0, neutral = 0, step_i = 0, hi = 0;
     double judged = -1, flip_t = -1;
     float prev_v = v;
     double stop_at = -1;
     bool pressed = false;
+    float k_prev = 1, dk_last = 0;
+    r.k_min = 1; r.k_rel = -1; r.k_settled = -1;
     for (; t_now < 45; step_i++) {
         double t = t_now;
         // the driver and the other owners
@@ -156,10 +174,12 @@ static res run(const sc &s)
         }
         if (t >= 3.0 && r.tgt_seen == 0) r.tgt_seen = D.tgt;
         if (s.aeb_t >= 0 && t >= s.aeb_t) act_brake(ACT_AEB, s.aeb);
+        bool released = s.release_t >= 0 && t >= s.release_t;
+        if (released) T.retarder = 0;
         // the gearbox: a shift every CYCLE_S while the speed allows one, then neutral under NEUTRAL_KMH
         if (!neutral && v * 3.6f < NEUTRAL_KMH) { neutral = 1; gear = 0; in_gap = 0; }
         if (!neutral && !in_gap && t >= next_gap && v * 3.6f > 10) {
-            in_gap = 1; gap_t0 = t; gap_t1 = t + GAP_S + GAP_JITTER * (2 * uni() - 1); next_gap += CYCLE_S;
+            in_gap = 1; gap_t0 = t; gap_t1 = t + GAP_S + GAP_JITTER * (2 * uni() - 1); next_gap += s.cycle;
             flip_t = gap_t1 - TAIL_S - TAIL_JITTER * (2 * uni() - 1);
         }
         if (in_gap && flip_t >= 0 && t >= flip_t) { if (gear > 1) gear--; flip_t = -1; }
@@ -167,14 +187,15 @@ static res run(const sc &s)
         T.eff_clutch = in_gap ? 1.0f : 0.0f;
         T.gear = gear;
         // the retarder
-        rb += (1 - rb) * (float)(DT / BUILD_S);
-        float full = (s.engine_only ? 0.6f : ret_step18(s.step, s.n)) * k_m * rb, fl = fminf(FLOOR18 * k_m, full), env = 1;
+        if (released) rb -= rb * (float)(DT / BUILD_S);
+        else rb += (1 - rb) * (float)(DT / BUILD_S);
+        float full = s.ret_abs > 0 ? s.ret_abs * rb : (s.engine_only ? 0.6f : ret_step18(s.step, s.n)) * k_m * rb, fl = fminf(FLOOR18 * k_m, full), env = 1;
         if (gap_t0 >= 0) {
             if (in_gap) env = fmaxf(0.0f, 1 - (float)(t - gap_t0) / FALL_S);
             else if (t - gap_t1 >= 0 && t - gap_t1 < RISE_S && gap_t1 > gap_t0) env = (float)(t - gap_t1) / RISE_S;
         }
         float fade = fminf(fmaxf((v * 3.6f - 4.5f) / 1.5f, 0.0f), 1.0f);
-        float ret = neutral ? COAST : (fl + (full - fl) * env) * fade;
+        float ret = neutral ? COAST : (fl + (full - fl) * env) * fade * g_ret_scale;   // the factor of the last tick (1 without soften)
         // the service brake: the request the actuator wrote, behind the lag
         y += (cur_req() - y) * (float)(DT / LAG_S);
         float bd = G * y;
@@ -204,6 +225,7 @@ static res run(const sc &s)
             if (tgt_full > reach) r.unreach = 1;
             r.gap_err = fmaxf(r.gap_err, fabsf(a - goal)); gaps_judged++;
         }
+        if (s.soften && (in_gap || (gap_t1 > 0 && t < gap_t1 + 0.8)) && v * 3.6f > 12) { r.gap_hi = fmaxf(r.gap_hi, a - tgt_full); r.gap_lo = fminf(r.gap_lo, a - tgt_full); }
         if (in_gap && v * 3.6f > 8) r.gap_min = r.gap_min == 0 ? a : fminf(r.gap_min, a);
         if (t > 1.5 && v * 3.6f > 8 && !neutral && a - tgt_full > r.ovs) { r.ovs = a - tgt_full; r.ovs_t = (float)t; }
         if (t > 0.2) {
@@ -214,6 +236,18 @@ static res run(const sc &s)
         if (neutral && taper_t < 0 && v < tgt_full * tgt_full / (2 * p_jerk)) taper_t = t;
         if (taper_t >= 0 && v > 0.02f && stop_at < 0) r.final_jerk = fmaxf(r.final_jerk, fabsf(jerk));
         if (verbose && step_i % vstep == 0) printf("   t=%5.2f v=%5.2f a=%5.2f ret=%4.2f bd=%4.2f req=%.3f lvl=%.3f ref=%.2f meas=%.2f j=%.1f k=%.3f %s\n", t, v * 3.6f, a, ret, bd, cur_req(), D.lvl, D.ref, D.a, jerk, D.k, in_gap ? "gap" : neutral ? "neutral" : "");
+        {   // soften: the factor's course, judged once settled outside the gaps and their recovery
+            float kf = g_ret_scale, dk = kf - k_prev;
+            bool steady = t >= 8.0 && v * 3.6f > 12 && !in_gap && !neutral && !(gap_t1 > 0 && t < gap_t1 + 0.8) && !released;
+            if (fabsf(dk) > 1e-6f) {
+                if (dk_last != 0 && (dk > 0) != (dk_last > 0)) { r.k_flips_all++; if (steady) r.k_flips++; }
+                dk_last = dk;
+            }
+            k_prev = kf;
+            r.k_min = fminf(r.k_min, kf);
+            if (s.release_t >= 0 && r.k_rel < 0 && t >= s.release_t + 1.0) r.k_rel = kf;
+            if (steady) { r.soft_err = fmaxf(r.soft_err, fabsf(a - tgt_full)); r.k_settled = kf; }
+        }
         // the truck
         prev_v = v;
         v -= a * (float)DT;
@@ -225,12 +259,14 @@ static res run(const sc &s)
         if (stop_at >= 0 && t_now > stop_at + 0.5) r.req_after_stop = fmaxf(r.req_after_stop, cur_req());
         if (stop_at >= 0 && t_now > stop_at + 1.5) break;
         if (s.press_t >= 0 && t_now > s.press_t + 1.0) break;   // the pedal cases only look at the moment of the press
+        if (s.release_t >= 0 && t_now > s.release_t + 3.0) break;
     }
     r.gaps = gaps_judged;
     return r;
 }
 
 static int fails;
+static bool bits_one(float f) { return f == 1.0f; }
 static void check(bool ok, const char *what, char *why, size_t n)
 {
     if (ok) return;
@@ -331,6 +367,43 @@ int main(int argc, char **argv)
         check(r.t_stop > 0 && r.req_after_stop <= 0, "no clean stop", why, sizeof why);
         printf("  %-34s target %.2f  %s%s\n", "engine brake only (no retarder)", r.tgt_seen, why[0] ? "FAIL: " : "ok", why);
         if (why[0]) fails++;
+    }
+    {   // soften: a light truck whose first step alone is far over the target, then the cases where the factor must stay 1
+        printf("soften (10 t, step 1 of 4 alone 2.0 m/s2, target 0.6; judged from 8 s above 12 km/h, outside the gaps and 0.8 s after them):\n");
+        struct { const char *name; float cycle; double rel; } lt[3] = { { "gear held", 1000, -1 }, { "a shift every 4 s", 4, -1 }, { "gear held, released at 14 s", 1000, 14 } };
+        for (auto &c : lt) {
+            sc s; s.mass_t = 10; s.n = 4; s.step = 1; s.tmin = 0.6f; s.ret_abs = 2.0f; s.soften = 1; s.cycle = c.cycle; s.release_t = c.rel;
+            res r = run(s);
+            char why[160] = "";
+            check(r.k_settled > 0 && r.soft_err <= 0.2f, "decel not within 0.2 of the target", why, sizeof why);
+            check(r.k_flips == 0, "the factor oscillates", why, sizeof why);
+            check(r.k_min >= DC_SOFT_MIN - 1e-6f, "factor under its floor", why, sizeof why);
+            check(r.gap_hi < 0.5f, "overshoot >= 0.5 at a shift", why, sizeof why);
+            if (c.rel >= 0) check(r.k_rel == 1.0f, "factor not 1 after the release", why, sizeof why);
+            else check(r.t_stop > 0 && r.final_jerk <= p_jerk && r.req_after_stop <= 0 && bits_one(g_ret_scale), "no clean stop with factor 1", why, sizeof why);
+            printf("  %-28s factor %.2f (lowest %.2f), |decel - target| <= %.2f, derivative sign changes %d (whole run %d), gap err %.2f (%d) at the shifts %+.2f/%+.2f",
+                   c.name, r.k_settled, r.k_min, r.soft_err, r.k_flips, r.k_flips_all, r.gap_err, r.gaps, r.gap_hi, r.gap_lo);
+            if (c.rel >= 0) printf(", 1.0 s after the release %.2f", r.k_rel);
+            else printf(", stop %.1fs fin %.1f, factor at the stop %.2f", r.t_stop, r.final_jerk, g_ret_scale);
+            printf("  %s%s\n", why[0] ? "FAIL: " : "ok", why);
+            if (why[0]) fails++;
+        }
+        {   // the same truck, the hook not in: the factor is never posted
+            sc s; s.mass_t = 10; s.n = 4; s.step = 1; s.tmin = 0.6f; s.ret_abs = 2.0f; s.soften = 0; s.cycle = 1000;
+            res r = run(s);
+            char why[100] = "";
+            check(r.k_min == 1.0f && W[ACT_RET_DECEL].ret == 1.0f, "a factor was posted", why, sizeof why);
+            printf("  %-28s lowest factor %.2f  %s%s\n", "hook off", r.k_min, why[0] ? "FAIL: " : "ok", why);
+            if (why[0]) fails++;
+        }
+        for (int st = 1; st <= 4; st++) {   // a heavy truck: the step never brakes harder than its target, the factor stays 1
+            sc s; s.mass_t = 36; s.n = 4; s.step = st; s.soften = 1;
+            res r = run(s);
+            char why[100] = "";
+            check(r.k_min == 1.0f, "the factor left 1", why, sizeof why);
+            printf("  36t g1.0 N4 s%d tgt %.2f      lowest factor %.2f, ovs %+.2f  %s%s\n", st, r.tgt, r.k_min, r.ovs, why[0] ? "FAIL: " : "ok", why);
+            if (why[0]) fails++;
+        }
     }
     printf("%s\n", fails ? "decel sim: FAILED" : "decel sim: all asserts passed");
     return fails ? 1 : 0;

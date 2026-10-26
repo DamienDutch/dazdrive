@@ -255,7 +255,7 @@ void act_retarder_scale(int owner, float factor);   // the game's retarder torqu
 void act_thr_base(float v);      // this tick's base throttle in place of the game's cruise output (Cruise, from its ACT_POST hook only)
 const act_wish *act_wishes();    // [ACT_N]: what every owner holds now (traces, sims)
 float act_request();             // the brake request we hold in game_actor+0x17c now (0 = none)
-void act_brake_write(char *ga);  // merge the brake wishes and write the request (the tick does it; sims)
+void act_brake_write(char *ga);  // merge the brake wishes and write the request, merge the retarder factors (the tick does it; sims)
 // Per-tick hooks for a module that works inside the cruise fn call: ACT_PRE runs before the game's own cruise controller (its
 // inputs), ACT_POST after it (stock = what it returned: post the wishes), ACT_DONE after the merge (thr = what the engine gets).
 struct act_tick { char *ga; float dt, pedal, stock, thr; };
@@ -270,7 +270,7 @@ int act_clutch_ok();             // the drivetrain clutch hook is in
 void act_clutch(char *inner, float v, int mirror);
 void act_clutch_release();       // the game's own clutch until the owner posts again (the value and g_clutch_ours stay)
 int act_clutch_vehicle(char *inner, float v);   // the vehicle's own clutch value, once; 1 = written
-extern volatile float g_ret_scale;  // the merged retarder factor the drivetrain hook applies (1 = the game's own)
+extern volatile float g_ret_scale;  // the merged retarder factor the drivetrain hook applies to the player's vehicle (1 = the game's own)
 extern float g_retarder_hook;    // [core] retarder_hook: 1 = install the retarder hook
 extern float g_air_min_psi;      // [cruise] air_min_psi: below it our brake requests pause (holds and the AEB excepted)
 void act_start();                // m_core (config.cpp): hooks before the modules start
