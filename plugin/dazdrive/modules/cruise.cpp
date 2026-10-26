@@ -315,12 +315,12 @@ static float ah_drive_force()
     return s_ah_k * te * T.ratio[g - 1] * T.diff * V.eta * couple / r;
 }
 
-// Force (N) that gets the truck going: the grade force plus a small push (0.25 m/s2 with rolling resistance).
+// Force (N) that gets the truck going: the model's whole resistance at a standstill on the pitch grade (grade, rolling, the
+// learned extra; holding back alone would be less, but the release aims at moving off) with 10 % margin, plus a small push (0.25 m/s2).
 static float ah_need()
 {
-    float gr = pitch_grade() / 100, m = V.mass;
-    float f_grade = m * 9.81f * gr / sqrtf(1 + gr * gr);
-    float need = 1.1f * f_grade + m * 0.25f;
+    float m = V.mass;
+    float need = 1.1f * vehicle_resist_grade(0, pitch_grade()) + m * 0.25f;
     return need < m * 0.12f ? m * 0.12f : need;
 }
 
