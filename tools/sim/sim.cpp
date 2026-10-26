@@ -185,6 +185,8 @@ float route_curve_speed(float, float a_dec, float)
 }
 float route_junction_m() { return route_ok() && M.junction_s > M.s ? (float)(M.junction_s - M.s) : -1; }
 float route_bend_speed(float, float) { return NAN; }   // the scenarios have no road bends, only the junction above
+static float g_act_req;   // the brake request the suite itself holds (the deceleration assist in the ride; the telemetry does not show it)
+float act_request() { return g_act_req; }
 static void *SELF = (void *)&M;
 static char letter = 'A';
 
