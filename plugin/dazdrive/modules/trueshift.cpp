@@ -590,6 +590,14 @@ static void refresh(void *self)
                 "low %.0f-%.0f high %.0f-%.0f power %.0f-%.0f, shift time %.2f s",
                 e->torque, e->rpm_limit, e->n_curve, V.plateau, e->range[0][0], e->range[0][1], e->range[1][0],
                 e->range[1][1], e->range[2][0], e->range[2][1], e->range[3][0], e->range[3][1], e->shift_time);
+        // the whole torque curve (rpm: share of the peak), so a ride log shows where the torque falls off
+        char cv[24 * 16] = "";
+        for (int i = 0, k = 0; i < e->n_curve && i < 24; i++) {
+            int w = snprintf(cv + k, sizeof cv - k, "%s%.0f: %.2f", i ? ", " : "", e->curve[i][0], e->curve[i][1]);
+            if (w < 0 || w >= (int)sizeof cv - k) break;
+            k += w;
+        }
+        logv(1, "engine curve: %s", cv);
         S.letter_state = -1;
         S.eng_seen = 1; S.eng_torque = e->torque; S.eng_limit = e->rpm_limit;
     }
