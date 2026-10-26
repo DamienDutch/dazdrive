@@ -28,7 +28,7 @@
 #include <string.h>
 
 static float p_herm;
-static float p_sg_rearm, p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_own_bias, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
+static float p_sg_rearm, p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_own_bias, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade, p_aeb_mode, p_aeb_margin, p_aeb_warn_dec, p_aeb_full_frac;
 static float p_rb_curves;  // roundabout_curves
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
@@ -130,6 +130,10 @@ static param g_params[] = {
     { "aeb_partial_decel", &p_aeb_part_dec, 3.0f, "AEB: deceleration of the partial stage (m/s2; Mercedes ABA: ~3)" },
     { "aeb_max_decel", &p_aeb_max_dec, 6.5f, "AEB: the most it asks for in the full stage (m/s2)" },
     { "aeb_min_kmh", &p_aeb_kmh, 15, "AEB: only steps in above this speed (km/h); once braking it brakes to a stop. Slower is the ACC's job" },
+    { "aeb_mode", &p_aeb_mode, 0, "AEB: 0 = stages by time to collision (aeb_warn_s ... aeb_full_s). 1 = by the deceleration it would take to stop short of the lead: leaves the driver in charge until late (a US-style system), then brakes firmly to stop about aeb_margin_m behind the lead" },
+    { "aeb_margin_m", &p_aeb_margin, 0.5f, "AEB, mode 1: the gap it aims to stop at behind the lead (m)" },
+    { "aeb_warn_decel", &p_aeb_warn_dec, 2.5f, "AEB, mode 1: warning tones when stopping behind the lead takes at least this deceleration (m/s2)" },
+    { "aeb_full_frac", &p_aeb_full_frac, 0.85f, "AEB, mode 1: full braking when stopping takes this share of aeb_max_decel; it then brakes with exactly the deceleration the stop takes (never above aeb_max_decel)" },
     { "trace", &p_trace, 1, "1 = write cruise.csv (10 per second while cruise is on or Auto Hold holds) for analysis" },
     { "approach_s", &p_approach_s, 2.5f, "own cruise throttle: the throttle eases off when the truck would reach the set speed within about this many seconds at the speed it is gaining now (also on a descent), so it arrives without overshooting. Eco 1.2x, Power 0.6x. 0 = off" },
     { "smooth", &p_smooth, 1, "1 = own smooth cruise throttle (no bursts after shifts; Eco gentle, Power keen), 0 = the game's" },
@@ -1327,6 +1331,9 @@ static void cr_start()
                 float ebv = eb ? game_cvar_get(eb) : NAN, bsv = bs ? game_cvar_get(bs) : NAN;
                 logline("Cruise: own AEB in place (%s; warning %.1f s, partial %.1f s / %.1f m/s2, full %.1f s); the game's emergency braking is replaced only while ours watches (its AEB option: %.0f)",
                         p_aeb_manual > 0 ? "also without cruise" : "with cruise only", p_aeb_warn_s, p_aeb_part_s, p_aeb_part_dec, p_aeb_full_s, ebv);
+                if (p_aeb_mode > 0)
+                    logline("Cruise: AEB by distance (aeb_mode 1): warning from %.1f m/s2 needed, full braking from %.1f m/s2 (%.2f x %.1f), stop %.1f m behind the lead", p_aeb_warn_dec,
+                            p_aeb_full_frac * p_aeb_max_dec, p_aeb_full_frac, p_aeb_max_dec, p_aeb_margin);
                 if (p_aeb_manual > 0 && !(ebv > 0) && !(bsv > 0))
                     logline("Cruise: AEB: the game's radar only runs with an ACC distance, the blind spot or the emergency brake option on; with ACC off and both options off the AEB sees nothing without cruise");
             } else {
@@ -1481,7 +1488,10 @@ static void aeb_stage(int st, float gap, float kmh)
     }
     if (st != AEB_OFF && st <= AEB_FULL && st > AE.ev_max) AE.ev_max = st;
     if (AE.st == AEB_OFF) AE.air_low = 0;
-    if (st > AE.st && st <= AEB_FULL)
+    if (st > AE.st && st <= AEB_FULL && p_aeb_mode > 0)
+        logline("AEB: %s: lead %.1f m ahead at %.0f km/h (we %.0f), needs %.1f m/s2 to stop %.1f m behind it (braking at most %.1f), time to collision %.1f s (mass %.0f t)",
+                aeb_name[st], gap, AE.vl * 3.6f, kmh, AE.a_need, p_aeb_margin, p_aeb_max_dec, AE.ttc, load_mass() / 1000);
+    else if (st > AE.st && st <= AEB_FULL)
         logline("AEB: %s: lead %.1f m ahead at %.0f km/h (we %.0f), time to collision %.1f s, needs %.1f m/s2 (mass %.0f t)",
                 aeb_name[st], gap, AE.vl * 3.6f, kmh, AE.ttc, AE.a_need, load_mass() / 1000);
     if (st == AEB_HOLD && AE.st != AEB_HOLD) {
@@ -1526,7 +1536,7 @@ static void aeb_record(float gap, float kmh, float vc, float ttc, float a_need)
         char stamp[32];
         s_inc = open_incident("incidents", "aeb", g_incident_mb, stamp, sizeof stamp);
         if (s_inc) {
-            fprintf(s_inc, "# DazDrive %s AEB incident at %s (local time), %.0f t, log clock %.0f s (dazdrive.log); stage 0 off 1 warning 2 partial 3 full 4 hold; indicator 1 left -1 right 2 hazards\n", SUITE_VERSION, stamp,
+            fprintf(s_inc, "# DazDrive %s AEB incident at %s (local time), %.0f t, log clock %.0f s (dazdrive.log); stage 0 off 1 warning 2 partial 3 full 4 hold (no partial in aeb_mode 1, where a_need is the deceleration it takes to stop aeb_margin_m behind the lead); indicator 1 left -1 right 2 hazards\n", SUITE_VERSION, stamp,
                     load_mass() / 1000, now);
             fputs("t,kmh,gap_m,lead_kmh,closing_ms,ttc_s,a_need,stage,request,a_cmd,thr,brake,decel,steer,yaw_deg_s,indicator,air_psi\n", s_inc);
             for (int k = 0; k < s_ring_n; k++) aeb_row(s_inc, s_ring[(s_ring_i - s_ring_n + k + AEB_RING) % AEB_RING]);
@@ -1552,6 +1562,7 @@ static void aeb(char *g, float dt)
     int active = (on || p_aeb_manual > 0) && T.engine_on && !T.paused && T.gear >= 0 && T.dgear >= 0 && v > -0.5f && !T.parking_brake;
     s_aeb_watch = active ? 1 : 0;  // not watching (cruise off with aeb_without_cruise = 0, reversing, ...): the game's own AEB is left alone
     float heavy = fminf(2.0f, fmaxf(1.0f, load_mass() / 30000)), hs = sqrtf(heavy);  // heavier: slower to stop, so earlier
+    float a_top = fminf(p_aeb_max_dec, 0.4f + 10.0f / heavy);  // aeb_mode 1: the most it can ask for: what the brakes deliver at full request (see below)
     // the radar lead (fresh, plausible); a jump in the gap is a new target
     int fresh = g_radar_ok && now - s_radar.at < 0.3 && s_radar.gap > 0.3f && s_radar.gap < 100 && s_radar.v >= 0 && s_radar.v < 70;
     float gap = fresh ? s_radar.gap : NAN;
@@ -1596,6 +1607,13 @@ static void aeb(char *g, float dt)
         float b = -AE.a_l - 0.5f;  // the lead brakes (0.5: radar speed noise)
         if (AE.vl < 0.5f) a_need = fmaxf(a_need, v > 0 ? v * v / (2 * room) : 0);
         else if (b > 0.3f) a_need = fmaxf(a_need, v > 0 ? v * v / (2 * (room + AE.vl * AE.vl / (2 * b))) : 0);
+        // aeb_mode 1: the deceleration that stops us aeb_margin_m behind the lead (a standing lead, or one that holds its speed;
+        // a lead that brakes is added as its own stopping distance); no fixed margin, no credit for a lead that pulls away
+        if (p_aeb_mode > 0) {
+            float room1 = fmaxf(0.2f, gap - p_aeb_margin);
+            a_need = vc > 0 ? vc * vc / (2 * room1) : 0;
+            if (AE.vl >= 0.5f && b > 0.3f && v > 0) a_need = fmaxf(a_need, v * v / (2 * (room1 + AE.vl * AE.vl / (2 * b))));
+        }
         ttc = vc > 0.3f ? gap / vc : INFINITY;
         if (la > 0 && vc > 0.3f) { float d = vc * vc - 2 * la * gap; ttc = d < 0 ? INFINITY : (vc - sqrtf(d)) / la; }  // gap = vc t - la t^2 / 2
         // crossing traffic (roundabouts, junctions): the gap closes as if the lead stood still while its speed says it drives;
@@ -1667,6 +1685,21 @@ static void aeb(char *g, float dt)
         if (ttc < p_s * k || a_need > 2.5f / hs * ka) keep = AEB_PARTIAL;
         if (ttc < f_s * k || a_need > 0.6f * p_aeb_max_dec / hs * ka) keep = AEB_FULL;
     }
+    if (p_aeb_mode > 0) {
+        // by the required deceleration only (instead of the above): a warning from aeb_warn_decel, full braking from aeb_full_frac of
+        // the most it may use (no partial stage); braking goes on while the gap is still closing, so it brakes to a stop
+        want = keep = AEB_OFF;
+        float f_a = p_aeb_full_frac * a_top, w_a1 = p_aeb_warn_dec * a_top / p_aeb_max_dec;  // a heavy truck cannot brake as hard: it starts in proportion earlier
+        if (fresh && vc > 0.3f) {
+            if (a_need >= w_a1) want = AEB_WARN;
+            if (a_need >= f_a) want = AEB_FULL;
+        }
+        if (fresh && vc > -0.5f) {
+            float ka = 0.75f;
+            if (a_need >= w_a1 * ka) keep = AEB_WARN;
+            if (a_need >= f_a * ka || (AE.st == AEB_FULL && vc > 0.3f)) keep = AEB_FULL;
+        }
+    }
     if (AE.st <= AEB_WARN && kmh < p_aeb_kmh) want = AEB_OFF;        // steps in from aeb_min_kmh
     if (!fresh && AE.st >= AEB_PARTIAL && AE.st <= AEB_FULL && now - AE.lost_at < 0.7) keep = AE.st;  // lost it close in: keep braking a moment
     if (want > cap_st) want = cap_st;
@@ -1685,7 +1718,8 @@ static void aeb(char *g, float dt)
     else if (keep >= st) AE.calm_since = 0;
     else {
         if (!AE.calm_since) AE.calm_since = now;
-        if (now - AE.calm_since > (st >= AEB_PARTIAL ? 1.0 : 1.5)) { st = st - 1 > keep ? st - 1 : keep; AE.calm_since = now; }
+        int lower = p_aeb_mode > 0 && st == AEB_FULL ? AEB_WARN : st - 1;  // no partial stage in aeb_mode 1
+        if (now - AE.calm_since > (st >= AEB_PARTIAL ? 1.0 : 1.5)) { st = lower > keep ? lower : keep; AE.calm_since = now; }
     }
     AE.ttc = ttc; AE.a_need = a_need;
     if (st != AE.st) aeb_stage(st, fresh ? gap : 0.0f, kmh);
@@ -1715,6 +1749,7 @@ static void aeb(char *g, float dt)
     // the closing speed, so following a braking lead at a steady gap does not flip between two requests
     float fl = fminf(1, fmaxf(0, vc));
     if (st == AEB_PARTIAL) a_cmd = fminf(fmaxf(1.15f * a_need, fl * 0.7f * p_aeb_part_dec), 1.15f * p_aeb_part_dec);
+    else if (st == AEB_FULL && p_aeb_mode > 0) a_cmd = fminf(fmaxf(a_need, fl * 1.0f), a_top);  // what the stop takes, nothing more
     else if (st == AEB_FULL) a_cmd = ttc < 0.8f * hs ? p_aeb_max_dec : fminf(fmaxf(1.4f * a_need, fl * p_aeb_part_dec), p_aeb_max_dec);
     if ((st == AEB_PARTIAL || st == AEB_FULL) && !fresh) a_cmd = fmaxf(a_cmd, AE.a_cmd);
     AE.a_cmd = a_cmd;

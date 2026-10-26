@@ -741,7 +741,8 @@ static accres acc_run(const char *name, int own, int scen)
 // Brakes: the game slews +0x17c at 5/s; request r gives 0.4 + 10 r / (mass / 30 t) m/s2 (ts4* logs, 26-30 t); the driver's
 // brake pedal 8 m/s2 at 1.0; throttle 20 kN at 1.0 (zeroed while the request is > 0). Air: every rise of the applied brake
 // costs 60 psi per unit, the compressor gives 4 psi/s (rough; only for "one ramp vs pulses").
-struct aebres { float min_gap, peak_dec, end_kmh, warn_lead_s, psi_drop, max_req, after_kd; int max_st, flips, hit; };
+struct aebres { float min_gap, peak_dec, end_kmh, warn_lead_s, psi_drop, max_req, after_kd; int max_st, flips, hit; float warn_gap, brake_gap, final_gap, hit_kmh; };
+static double g_aeb_v0 = 80;   // our start speed (km/h)
 static aebres aeb_run(const char *name, int scen, float mass, float psi0)
 {
     memset(GA, 0, sizeof GA); memset(&C, 0, sizeof C); memset(&OA, 0, sizeof OA); memset(&s_radar, 0, sizeof s_radar);
@@ -749,10 +750,10 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
     p_smooth = 1; p_own_acc = 1; g_radar_ok = 1; o_radar = fake_radar; g_low_ok = 1; g_level = 1; g_sg_ok = 0; p_ah = 0; p_hill = 0;
     o_cruise = stock_cruise; stock_thr = 0; s_aeb_owns = 1; g_sim_mass = mass;
     T.engine_on = 1; T.gear = 8; T.dgear = 8; T.eff_clutch = 0; T.parking_brake = 0; T.in_brake = 0; T.in_thr = 0; T.air_warning = 0; T.paused = 0;
-    double t0 = t_now, x = 0, v = 80 / 3.6, lx = 0, lv = 0, brk = 0, psi = psi0, a_f = 0;
+    double t0 = t_now, x = 0, v = g_aeb_v0 / 3.6, lx = 0, lv = 0, brk = 0, psi = psi0, a_f = 0;
     int lead_on = 0, last_dir = 0;
     float cross_v = 0;
-    aebres r = { 1e9f, 0, 0, -1, 0, 0, 0, 0, 0, 0 };
+    aebres r = { 1e9f, 0, 0, -1, 0, 0, 0, 0, 0, 0, -1, -1, -1, 0 };
     double t_warn = -1, t_part = -1;
     float pedal = 0.3f, pbrake = 0; int u_hold = 0;   // a driver holding 30 % throttle who does not see it
     if (scen == 2) v = 60 / 3.6;
@@ -761,32 +762,38 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
     for (; t_now - t0 < 40; t_now += 1 / 60.0) {
         double t = t_now - t0, dt = 1 / 60.0;
         switch (scen) {
-        case 0: case 4: case 5: case 6: if (!lead_on) { lead_on = 1; lx = x + 200; lv = 0; } break;      // stopped queue 200 m ahead
+        case 0: case 4: case 5: case 6: case 14: case 15: if (!lead_on) { lead_on = 1; lx = x + 200; lv = 0; } break;      // stopped queue 200 m ahead
         case 1: case 10: case 11: if (!lead_on) { lead_on = 1; lx = x + 150; lv = 40 / 3.6; } break;     // slow truck
         case 2: if (!lead_on && t >= 2) { lead_on = 1; lx = x + 20; lv = 30 / 3.6; }                     // cut-in at 20 m, 30 km/h, brakes to 0
                 if (lead_on && t >= 3) lv = fmax(0, lv - 3 * dt); break;
         case 3: if (t >= 2 && t < 4) { lead_on = 1; lx = x + 25; lv = 0; cross_v = 10; } else { lead_on = 0; cross_v = 0; } break;  // crossing car
         case 7: if (!lead_on) { lead_on = 1; lx = x + 25; lv = 80 / 3.6; }                               // following 25 m, lead brakes 5 m/s2 to 0
                 if (t >= 3) lv = fmax(0, lv - 5 * dt); break;
+        case 12: if (!lead_on) { lead_on = 1; lx = x + 30; lv = 50 / 3.6; }                              // following 30 m at 50, lead brakes 5 m/s2 to 0
+                 if (t >= 3) lv = fmax(0, lv - 5 * dt);
+                 break;
+        case 13: if (!lead_on) { lead_on = 1; lx = x + 150; lv = 60 / 3.6; } break;                       // far, slower lead (60 km/h at 150 m, we 80)
         case 8: case 9: if (!lead_on) { lead_on = 1; lx = x + (scen == 8 ? 12 : 7); lv = 80 / 3.6; }      // tailgating 12 / 7 m at 80, lead brakes 4 m/s2 to 0
                 if (t >= 5) lv = fmax(0, lv - 4 * dt); break;
         }
         if (lead_on) lx += lv * dt;
         float gap = lead_on ? (float)(lx - x) : 0;
-        if (lead_on && gap < 0.05f) { r.hit = 1; }
+        if (lead_on && gap < 0.05f) { if (!r.hit) r.hit_kmh = (float)((v - lv) * 3.6); r.hit = 1; }
         // the driver
         static double kd_at; if (t == 0) kd_at = -1;
         if (scen == 4 && AE.st >= AEB_PARTIAL && kd_at < 0) { pedal = 0.9f; kd_at = t; }   // kick-down during partial braking ...
         if (scen == 4 && kd_at >= 0 && t > kd_at + 1) lead_on = 0;                          // ... and 1 s later it changed lanes: the lead is gone
         if (scen == 4 && kd_at >= 0 && t > kd_at + 0.4 && t < kd_at + 1) r.after_kd = fmaxf(r.after_kd, *(float *)(GA + GA_BRAKE_REQ));
-        if (scen == 8 || scen == 9) { pedal = 0; u_hold = 1; }
+        if (scen == 8 || scen == 9 || scen == 12 || scen == 14 || scen == 15) { pedal = 0; u_hold = 1; }
+        // 13: the driver sees the slower lead and eases off with a gentle brake from 70 m, then holds its speed
+        if (scen == 13) { pedal = 0.3f; if (lead_on && gap < 70 && v > lv + 0.3) { pedal = 0; pbrake = 0.15f; u_hold = 0; } else if (gap < 70) { pedal = 0; pbrake = 0; u_hold = 1; } }
         // 10: at the warning the driver indicates left and steers left; 1.5 s later the lead is beside us (gone from the radar)
         // 11: the same indicator, but no steering (it is no evasion: keeps braking)
         static double ev_at; if (t == 0) { ev_at = -1; T.in_steer = 0; T.yaw = 0; }
-        if ((scen == 10 || scen == 11) && AE.st >= AEB_WARN && ev_at < 0) ev_at = t;
-        if ((scen == 10 || scen == 11) && ev_at >= 0) { GA[0x1d0] = 4; if (scen == 10) { T.in_steer = 0.03f; T.yaw = 0.006f; } }
-        if (scen == 10 && ev_at >= 0 && t > ev_at + 1.5) lead_on = 0;
-        if (scen == 10 && ev_at >= 0 && t > ev_at + 0.8 && t < ev_at + 1.5) r.after_kd = fmaxf(r.after_kd, *(float *)(GA + GA_BRAKE_REQ));
+        if ((scen == 10 || scen == 11 || scen == 15) && AE.st >= AEB_WARN && ev_at < 0) ev_at = t;
+        if ((scen == 10 || scen == 11 || scen == 15) && ev_at >= 0) { GA[0x1d0] = 4; if (scen != 11) { T.in_steer = 0.03f; T.yaw = 0.006f; } }
+        if ((scen == 10 || scen == 15) && ev_at >= 0 && t > ev_at + 1.5) lead_on = 0;
+        if ((scen == 10 || scen == 15) && ev_at >= 0 && t > ev_at + 0.8 && t < ev_at + 1.5) r.after_kd = fmaxf(r.after_kd, *(float *)(GA + GA_BRAKE_REQ));
         if (scen == 6) { pedal = 0; if (lead_on && gap < 105) pbrake = 0.5f; }         // the driver brakes in time by himself
         T.in_thr = pedal; T.in_brake = pbrake;
         T.speed = (float)v; T.accel = (float)a_f; T.air_psi = (float)psi;
@@ -800,10 +807,13 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
         float u = act_stub(GA, (float)dt, pedal);
         float req = *(float *)(GA + GA_BRAKE_REQ);
         r.max_req = fmaxf(r.max_req, req);
+        if (r.warn_gap < 0 && lead_on && AE.st >= AEB_WARN && AE.st <= AEB_FULL) r.warn_gap = gap;
+        if (r.brake_gap < 0 && lead_on && req > 0.02f) r.brake_gap = gap;
         int dir = req > prev_req + 1e-4f ? 1 : req < prev_req - 1e-4f ? -1 : 0;
         if (dir && last_dir && dir != last_dir) { r.flips++; if (verbose) printf("   flip t=%.2f req %.3f st %d gap %.1f v %.1f psi %.0f a_need %.2f\n", t, req, AE.st, gap, v * 3.6, psi, AE.a_need); }
         if (dir) last_dir = dir;
         prev_req = req;
+        if (getenv("AEBDBG") && lead_on && (AE.st || req > 0)) printf("  t %.2f gap %.2f v %.2f st %d a_need %.2f a_cmd %.2f req %.3f accel %.2f\n", t, gap, v, AE.st, AE.a_need, AE.a_cmd, req, a_f);
         brk = req > brk ? fmin(req, brk + 5 * dt) : fmax(req, brk - 5 * dt);   // the game's slew
         double applied = fmax(brk * 10 / fmax(1.0, mass / 30000.0), pbrake * 8.0);
         static double applied_prev; if (t == 0) applied_prev = 0;
@@ -826,6 +836,7 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
         if (scen != 2 && scen != 7 && v < 0.01 && t > 5 && AE.st == AEB_HOLD) { T.in_brake = 0.3f; }
     }
     r.end_kmh = (float)(v * 3.6);
+    r.final_gap = lead_on ? (float)(lx - x) : -1;
     r.warn_lead_s = t_warn >= 0 && t_part >= 0 ? (float)(t_part - t_warn) : -1;
     if (r.min_gap > 1e8f) r.min_gap = 0;
     printf("%-50s max %-15s min gap %5.1f m, peak decel %.1f, max request %.2f, warning %.1f s before braking, air -%.0f psi, request reversals %d, end %.0f km/h%s\n",
@@ -1005,5 +1016,56 @@ int main(int argc, char **argv)
     junction_test();
     reset_test();
     limiter_test();
+    // own AEB by distance (aeb_mode 1) against the time stages (aeb_mode 0). The driver holds the speed and does not react.
+    // After the tests above on purpose: its long runs move the clock, which would shift the timing of the Auto Hold runs.
+    {
+        int bad = 0;
+        printf("--- own AEB, aeb_mode 1 (by the deceleration it takes to stop 0.5 m behind the lead) against aeb_mode 0 (time stages)\n");
+        aebres a, t[2][3];
+        const double sp[3] = { 30, 50, 80 };
+        for (int m = 0; m < 2; m++)
+            for (int i = 0; i < 3; i++) {
+                char nm[80]; snprintf(nm, sizeof nm, "mode %d: standing lead at %.0f km/h, 26 t", m, sp[i]);
+                p_aeb_mode = (float)m; g_aeb_v0 = sp[i];
+                t[m][i] = aeb_run(nm, 14, 26000, 140);
+            }
+        for (int i = 0; i < 3; i++) {
+            bad |= t[1][i].hit || t[1][i].final_gap < 0.2f || t[1][i].final_gap > 1.5f;
+            if (i < 2) bad |= !(t[1][i].brake_gap < t[0][i].brake_gap) || !(t[1][i].warn_gap < t[0][i].warn_gap);   // later than mode 0 at 30 and 50
+        }
+        printf("   standing lead, distance to the lead (m): first warning / first braking / final gap\n");
+        printf("   %-8s %-28s %-28s\n", "km/h", "mode 0 (time to collision)", "mode 1 (distance)");
+        for (int i = 0; i < 3; i++)
+            printf("   %-8.0f %5.1f / %5.1f / %5.2f           %5.1f / %5.1f / %5.2f\n", sp[i], t[0][i].warn_gap, t[0][i].brake_gap, t[0][i].final_gap,
+                   t[1][i].warn_gap, t[1][i].brake_gap, t[1][i].final_gap);
+        g_aeb_v0 = 80; p_aeb_mode = 1;
+        a = aeb_run("mode 1: standing lead at 80 km/h, 60 t", 14, 60000, 140); bad |= a.hit || a.final_gap < 0.2f || a.final_gap > 1.5f;
+        g_aeb_v0 = 50; a = aeb_run("mode 1: following 30 m at 50, the lead brakes 5 m/s2 to 0", 12, 26000, 140); bad |= a.hit || a.flips > 6;
+        g_aeb_v0 = 80;
+        a = aeb_run("mode 1: far slower lead (60 km/h at 150 m), eased off", 13, 26000, 140); bad |= a.max_req > 0 || a.max_st != AEB_OFF;   // no intervention at all
+        a = aeb_run("mode 1: standing lead, at the warning: indicator + steer left", 15, 26000, 140); bad |= a.hit || a.after_kd > 0;
+        printf("   request 0.8-1.5 s after the evasion: %.2f (must be 0)\n", a.after_kd);
+        a = aeb_run("mode 1: standing lead, kick-down in braking, lane change", 4, 26000, 140); bad |= a.after_kd > 0;
+        printf("   request 0.4-1 s after the kick-down: %.2f (must be 0)\n", a.after_kd);
+        a = aeb_run("mode 1: standing lead, the driver brakes himself (4 m/s2)", 6, 26000, 140); bad |= a.max_req > 0 || a.hit;
+        a = aeb_run("mode 1: we 40, a car crosses 25 m ahead for 2 s", 3, 26000, 140); bad |= a.max_req > 0 || a.max_st > AEB_WARN;
+        a = aeb_run("mode 1: following 25 m at 80, the lead brakes 5 m/s2 to 0", 7, 26000, 140); bad |= a.hit;
+        a = aeb_run("mode 1: slow truck 40 km/h at 80", 1, 26000, 140); bad |= a.hit;
+        // where it does not work (informational): late means no reserve. A hard cut-in closer than the stopping distance, and an
+        // evasive lane change that starts at the warning when the warning comes only 1.8 s before the impact (low closing speed)
+        printf("--- aeb_mode 1, where it falls short (not pass/fail)\n");
+        for (int m = 0; m < 2; m++) {
+            p_aeb_mode = (float)m;
+            char nm[96]; snprintf(nm, sizeof nm, "mode %d: cut-in 20 m at 30 km/h (we 60), it brakes to 0", m);
+            a = aeb_run(nm, 2, 26000, 140);
+            if (a.hit) printf("   hit: we 60 km/h, impact closing speed %.0f km/h\n", a.hit_kmh);
+            snprintf(nm, sizeof nm, "mode %d: slow truck, at the warning: indicator + steer left", m);
+            a = aeb_run(nm, 10, 26000, 140);
+            printf("   request 0.8-1.5 s after the evasion: %.2f\n", a.after_kd);
+        }
+        p_aeb_mode = 0; g_aeb_v0 = 80;
+        printf("AEB distance mode test: %s\n", bad ? "FAIL" : "ok");
+        if (bad) return 1;
+    }
     return 0;
 }
