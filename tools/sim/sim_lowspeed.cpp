@@ -390,6 +390,56 @@ static void s1_latch()
     printf("   higher start gear (%d -> %d) before the clutch opened: it opens %d tick(s) after the grade change, preselected gear at rest %d\n", a1, a0, opened - flat_at, g_low.would_gear);
 }
 
+// ---------------------------------------------------------------- S2: a pause at 4 km/h and the resume (a SOFT reset): the state is derived again
+// Braking to a stop, the pause menu opens at 4 km/h. The game puts the box in neutral meanwhile. After the resume the owner derives
+// its state from the telemetry alone: it must not remember a timer or a latch, and it must not ask for a gear that fits the speed
+// (the old 'engage at 4 km/h: gear 12'): the start gear, with the clutch open.
+static void s2(int pedal_after, int level)
+{
+    world(8, 30, 0);
+    M.gear = gear_for(30, 1300); M.rpm = rpm_of(M.gear, M.v);
+    for (int i = 0; i < 60 * 12 && fabs(M.v) * 3.6 > 4; i++) { if (i == 60) g_brake = 0.3f; hold_if_stopped(); tick(); }
+    float kmh = (float)(fabs(M.v) * 3.6);
+    int before = g_low.state, sg = ts_start_gear(0.3f);
+    // the pause: nothing moves, the frame sees no time; the game drops the box to neutral and the plugin gets the reset on the resume
+    T.paused = 1;
+    m_lowspeed.frame();
+    T.paused = 0;
+    M.gear = 0; M.clutch = 1; M.launching = 0;
+    sim_reset(level, "sim: resumed after a pause");
+    g_thr = pedal_after ? 0.4f : 0;
+    g_brake = pedal_after ? 0 : 0.3f;
+    int fresh_before = g_fresh;
+    tick();
+    int expect = pedal_after ? LOW_LAUNCH : LOW_STOPPING;
+    check(fresh_before == 1 && g_fresh == 0, "S2: the state was not derived again on the first frame after the reset");
+    check(g_low.state == expect, "S2: after the resume the state is %s, expected %s", low_state_name(g_low.state), low_state_name(expect));
+    check(g_low.would_gear == sg, "S2: it would have gear %d after the resume, the start gear is %d", g_low.would_gear, sg);
+    check(pedal_after || g_low.would_clutch == 1, "S2: the clutch would not be open at once (%.1f)", g_low.would_clutch);
+    int st1 = g_low.state, wg1 = g_low.would_gear; float wc1 = g_low.would_clutch;
+    for (int i = 0; i < 60 * 3; i++) tick();   // and on: no gear that fits the speed shows up later either
+    bool sane = true;
+    for (int i = 0; i < n_rec; i++) sane = sane && rec[i].would_gear <= sg + 1;
+    check(sane, "S2: a gear above the start gear was asked for");
+    check(n_engage_lines == 0, "S2: %d 'engage' log lines", n_engage_lines);
+    printf("   pause at %.1f km/h in %s, resumed %s: first frame %s, gear to ask for %d (start gear %d), clutch %.1f; 'engage' lines %d\n", kmh, low_state_name(before),
+           pedal_after ? "on the pedal" : "braking", low_state_name(st1), wg1, sg, wc1, n_engage_lines);
+}
+
+// A teleport (HARD reset) in the middle of a launch: the truck stands afterwards, nothing of the launch is left.
+static void s2_teleport()
+{
+    world(0, 0, 0);
+    g_thr = 0.4f;
+    for (int i = 0; i < 60 * 2 && fabs(M.v) * 3.6 < 2; i++) tick();
+    int before = g_low.state;
+    g_thr = 0; M.v = 0; M.gear = 0; M.clutch = 1; M.launching = 0;
+    sim_reset(RESET_HARD, "sim: teleport");
+    tick();
+    check(before == LOW_LAUNCH && g_low.state == LOW_STOPPED_FREE, "S2 teleport: %s before, %s after", low_state_name(before), low_state_name(g_low.state));
+    printf("   teleport during a launch: %s -> %s\n", low_state_name(before), low_state_name(g_low.state));
+}
+
 // ---------------------------------------------------------------- off: with trace 0 the module does nothing at all
 static void s_off()
 {
@@ -420,6 +470,10 @@ int main(int argc, char **argv)
     s1_stop(0.15f);
     s1_stop(0.5f);
     s1_latch();
+    printf("== S2 pause at 4 km/h, resume: the state is derived again, no gear for the speed\n");
+    s2(0, RESET_SOFT);
+    s2(1, RESET_SOFT);
+    s2_teleport();
     printf("\n%d checks, %d failed\n", n_checks, n_failed);
     return n_failed ? 1 : 0;
 }
