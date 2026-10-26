@@ -5,6 +5,12 @@
 // hook, so `[cruise] enabled=0` or `smooth=0` silently switched off the crawl brake, the rollover guard, Auto Hold, hill
 // start, the AEB and the pedal curves).
 //
+// The tick is the game's cruise fn call (cruise-re notes): the game calls cruise_fn(game_actor, dt, pedal) every physics step,
+// cruise on or off, and stores what it returns as the merged throttle (inner+0x1424). Our stub runs the modules' ACT_PRE hooks
+// (inputs the game's controller must see), the game's own controller, the rollover guard, the ACT_POST hooks (the modules post
+// their wishes; Cruise may replace the base throttle with its own controller's), writes the brake request, merges the
+// throttle (base, then floors, then caps, then scales) and hands the result to the ACT_DONE hooks (traces).
+//
 // Brake wishes are in the game's own request unit (game_actor+0x17c, 0..1: the game slews to it and uses the engine brake and
 // retarder first), not in m/s2. A hold at a standstill (hill start, Auto Hold) has no deceleration to express, and the only
 // conversion the code knows is the AEB's fit on 26-30 t logs (0.4 + 10 r / (mass / 30 t) m/s2, trimmed by a slow loop on
@@ -123,6 +129,43 @@ static void release_request()
     s_thr_pass = 0;
 }
 
+// ---------------------------------------------------------------- the tick: the game's cruise fn call
+typedef float (*cruise_fn)(void *ga, float dt, float pedal);
+static cruise_fn o_cruise;         // the game's own cruise controller (returns its throttle, or the pedal with cruise off)
+static int s_hooked;
+static float s_base = NAN;         // this tick's base throttle from an ACT_POST hook (NAN = the game's)
+enum { ACT_MAX_HOOKS = 4 };
+static void (*s_fn[3][ACT_MAX_HOOKS])(act_tick *);
+static int s_n[3];
+
+void act_hook(int phase, void (*fn)(act_tick *))
+{
+    if (phase < 0 || phase > ACT_DONE || !fn || s_n[phase] >= ACT_MAX_HOOKS) return;
+    for (int i = 0; i < s_n[phase]; i++) if (s_fn[phase][i] == fn) return;
+    s_fn[phase][s_n[phase]++] = fn;
+}
+int act_hooked() { return s_hooked; }
+void act_thr_base(float v) { s_base = v; }
+
+static float act_stub(void *ga, float dt, float pedal)
+{
+    act_tick a = { (char *)ga, dt, pedal, NAN, NAN };
+    s_base = NAN;
+    for (int i = 0; i < s_n[ACT_PRE]; i++) s_fn[ACT_PRE][i](&a);
+    a.stock = o_cruise(ga, dt, pedal);
+    rsc_step(dt);   // the rollover guard (core/rsc.cpp) decides from the telemetry alone and posts its brake wish and throttle cap
+    for (int i = 0; i < s_n[ACT_POST]; i++) s_fn[ACT_POST][i](&a);
+    if (ga) act_brake_write((char *)ga);
+    // the throttle: the base (the game's, or what Cruise posted), then every floor, then every cap, then every scale
+    float r = s_base == s_base ? s_base : a.stock;
+    for (int o = 0; o < ACT_N; o++) if (W[o].floor > 0 && W[o].floor > r) r = W[o].floor;
+    for (int o = 0; o < ACT_N; o++) if (W[o].cap < 1) r = fminf(r, W[o].cap);
+    for (int o = 0; o < ACT_N; o++) if (W[o].scale != 1) r *= W[o].scale;
+    a.thr = r;
+    for (int i = 0; i < s_n[ACT_DONE]; i++) s_fn[ACT_DONE][i](&a);
+    return r;
+}
+
 // ---------------------------------------------------------------- hooks (m_core, config.cpp)
 
 static int s_gate_in, s_haz_in;
@@ -130,6 +173,17 @@ int act_gate_ok() { return s_gate_in; }
 
 void act_start()
 {
+    // The cruise fn call in the game's pedal code (cruise-re notes; the pattern ends at the E8 of the call).
+    uintptr_t h = game_scan("48 8B CB F3 44 0F 11 83 E4 1C 00 00 F3 45 0F 5F C3 41 0F 28 D0 E8");
+    uintptr_t site = h ? h + 21 : 0;
+    if (site) o_cruise = (cruise_fn)(site + 5 + (intptr_t) * (const int32_t *)(site + 1));
+    if (site && game_patch_call(site, (void *)act_stub)) {
+        s_hooked = 1;
+        logline("Actuator: throttle hook in place at %p (the game's cruise fn %p)", (void *)site, (void *)o_cruise);
+    } else {
+        logline("Actuator: cruise throttle call not found: no throttle or brake of ours (cruise, Auto Hold, hill start, AEB, crawl brake, rollover guard)");
+        return;
+    }
     // Our brake request (bends, hill start, crawl) is > 0 for a while; the game's auto-hazard rule (neutral-exit-re notes § 3)
     // would switch the hazards on every time (ts3d). Its compare is skipped while only we ask.
     uintptr_t hz = game_scan("85 C0 74 17 F6 87 D0 01 00 00 10 75 0E 44 0F 2F 8F 7C 01 00 00 73 04 B2 01");
@@ -159,7 +213,8 @@ void act_reset(int level, const char *why)
 
 const char *act_status()
 {
-    static char b[160];
-    snprintf(b, sizeof b, "brake request: one writer; hazard rule %s, Auto Hold throttle gate %s", s_haz_in ? "patched" : "not found", s_gate_in ? "patched" : "not found");
+    static char b[200];
+    snprintf(b, sizeof b, "throttle hook %s (%d/%d/%d module hooks), brake request: one writer, hazard rule %s, Auto Hold throttle gate %s",
+             s_hooked ? "in" : "NOT in", s_n[ACT_PRE], s_n[ACT_POST], s_n[ACT_DONE], s_haz_in ? "patched" : "not found", s_gate_in ? "patched" : "not found");
     return b;
 }

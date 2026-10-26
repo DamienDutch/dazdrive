@@ -20,7 +20,6 @@ volatile double g_rb_cancel_at = -1e9;
 volatile int g_pcc_on;
 volatile int g_pedal_mapped;
 volatile int g_lcx;
-volatile float g_lcx_cap = 1;
 volatile float g_overspeed_cap = 5;
 volatile float g_pcc_need_kmh = NAN;
 int g_log_level = 2;
@@ -36,7 +35,7 @@ void incident(const char *kind, const char *fmt, ...)
 }
 const char *g_truck_unsupported;
 volatile char g_dash_flash, g_dash_status;
-volatile float g_creep_thr;
+static float sim_add_thr;   // the added throttle the truck model sees (what Creep posted the tick before, as a floor on the merged throttle)
 volatile float g_clutch_ours = __builtin_nanf("");
 int input_held(int) { return 0; }
 void play_cue(int) {}
@@ -63,6 +62,7 @@ uintptr_t game_scan(const char *) { return 0; }
 int game_patch_tail(uintptr_t, void *) { return 0; }
 int game_patch_clutch_floor(uintptr_t, clutch_floor *) { return 0; }
 int game_patch_cf0_if(uintptr_t, int, const unsigned char *) { return 0; }
+int game_patch_call(uintptr_t, void *) { return 0; }
 int game_engage_init() { return 0; }
 void *game_gearbox() { return NULL; }
 char *game_actor_safe() { return NULL; }
@@ -74,6 +74,7 @@ void gb_set_target(void *, int) {}
 int gb_engage(void *, int) { return 0; }
 
 #include "modules/creep.cpp"
+#include "core/rsc.cpp"
 #include "core/actuate.cpp"
 
 // ---- truck
@@ -121,7 +122,7 @@ static void step(double dt)
     float vl = vlock(M.gear ? M.gear : 1);
     float R = rtot(M.gear ? M.gear : 1);
     if (M.gear != 0 && vd < vl) F = dir * Tc * R / RW * 0.5f;                 // slipping clutch: half of Tmax at idle
-    if (M.gear != 0 && g_f < 0.3f) F += dir * g_creep_thr * 2000.f * R / RW;   // closed clutch: the added throttle on top
+    if (M.gear != 0 && g_f < 0.3f) F += dir * sim_add_thr * 2000.f * R / RW;   // closed clutch: the added throttle on top
     float res = MASS * 9.81f * (0.012f + g_grade_pct / 100) * (M.v >= 0 ? 1.f : -1.f);
     if (fabsf(M.v) < 0.02f && fabsf(F) < fabsf(res) + 1) res = fabsf(F - 0) < fabsf(res) ? F : res;
     float fb = fmaxf(g_brake, g_cbrake) * MASS * 5 * (M.v > 0 ? -1.f : (M.v < 0 ? 1.f : 0.f));
@@ -134,7 +135,7 @@ static void step(double dt)
     g_rpm = IDLE;
     if (M.gear != 0 && g_f < 0.08f && vd < vl && F * dir < fabsf(res) * 1.0f - 1) g_rpm = IDLE * 0.8f;
     if (M.gear != 0 && vd > vl && g_f < 0.5f) g_rpm = IDLE * fminf(vd / vl, 2.5f) * (1 - g_f);  // wheels drive the engine
-    T.speed = M.v; g_creep_thr = g_cthr; T.in_thr = g_thr; T.in_brake = g_brake; T.eff_brake = g_brake; T.rpm = g_rpm;
+    T.speed = M.v; sim_add_thr = g_cthr; T.in_thr = g_thr; T.in_brake = g_brake; T.eff_brake = g_brake; T.rpm = g_rpm;
     T.parking_brake = g_parking; T.cruise = g_cruise ? 10.f : 0.f; T.engine_on = g_engine;
     t_now += dt;
 }
@@ -148,7 +149,7 @@ static void reset(int gear, float v, int armed, float grade, float mass = 18000)
     memset(&T, 0, sizeof T);
     T.fwd_gears = 12; T.diff = DIFF; T.wheels = 1; T.wheel_powered[0] = 1; T.wheel_radius[0] = RW;
     for (int i = 0; i < 12; i++) T.ratio[i] = RATIO[i];
-    g_cthr = 0; g_creep_thr = 0; g_mass = mass;
+    g_cthr = 0; sim_add_thr = 0; g_mass = mass;
     p_enabled = 1;
 }
 

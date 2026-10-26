@@ -147,7 +147,6 @@ extern volatile double g_rb_cancel_at;   // Cruise: wall time it cancelled itsel
 // OFF = lane keeping off (the game does not call the law); WAIT_* = on, but no request of ours: under min_kmh, the cruise is off
 // (needs_cruise), an indicator pause, no lane seen; ACTIVE = steering; RUNAWAY = the runaway guard handed the game's own law the wheel
 enum LaneState { LANE_OFF, LANE_WAIT_SLOW, LANE_WAIT_NO_CRUISE, LANE_WAIT_INDICATOR, LANE_WAIT_NO_LANE, LANE_ACTIVE, LANE_RUNAWAY };
-extern volatile float g_creep_thr;     // Creep asks the merged throttle for this much (0..~0.15): Cruise's stub maxes it in
 extern volatile float g_clutch_ours;  // the clutch value Creep puts on the drivetrain (launch or crawl), NAN when the game's own applies
 static inline float clutch_seen() { float c = g_clutch_ours; return c == c ? c : T.eff_clutch; }  // what the drivetrain sees: use instead of T.eff_clutch for 'is the clutch closed'
 extern volatile float g_pcc_need_kmh;  // TrueShift: extra speed over the set speed the next climb on the route needs (NAN = unknown)
@@ -179,12 +178,10 @@ static inline float overspeed_room(float set_ms)
     return r > 0 ? r : 0;
 }
 extern volatile int g_rsc_level;         // rollover guard: 0 off, 1 alert (tone, no throttle), 2 soft brake, 3 firm brake
-extern volatile float g_rsc_thr_cap;     // what Cruise applies for it: a throttle cap 0..1 (its brake wish goes to the actuator)
 extern float g_rsc_mode;                 // ini rollover_guard: 0 off, 1 tone only, 2 + no throttle, 3 + brake
 extern float g_rsc_bend;                 // ini rollover_bend: 1 = also the single-bend thresholds (off: only the swing check)
-void rsc_step(float dt);                // core/rsc.cpp, called from the cruise throttle stub
+void rsc_step(float dt);                // core/rsc.cpp, called by the actuator every tick; posts its brake wish and throttle cap (ACT_RSC)
 extern volatile int g_lcx;               // Creep: launch control phase, 0 off, 1 armed (brake + flat pedal at a standstill), 2 launching
-extern volatile float g_lcx_cap;       // Creep asks Cruise to cap the engine's throttle at this while launch control holds the revs (1 = no cap)
 extern volatile int g_pedal_mapped;     // Cruise: the throttle the engine gets is the pedal through the Eco / Power curve this frame
 extern volatile int g_pcc_on;         // Cruise: predictive cruise (PCC) is switched on
 extern volatile int g_cruise_smooth;  // the Cruise module drives the cruise throttle itself
@@ -196,16 +193,25 @@ float wheel_radius();    // powered wheels, meters (0 if unknown)
 // ---------------------------------------------------------------- actuate.cpp
 // The actuator: one layer moves the pedals for every module. A module posts a wish under its owner tag; the wish is held
 // until the owner changes it (so a wish from frame_end lasts until the next frame); the layer merges all wishes once per
-// game tick and writes them. Brake wishes are in the game's request unit 0..1 (the top of actuate.cpp says why not m/s2).
+// game tick (the game's cruise fn call, hooked by core whatever the ini says) and writes them. The throttle is the base (the
+// game's cruise output, or what Cruise posts from its own controller), then every floor, then every cap, then every scale.
+// Brake wishes are in the game's request unit 0..1 (the top of actuate.cpp says why not m/s2).
 enum { ACT_CRUISE, ACT_HILL, ACT_HOLD, ACT_BEND, ACT_ACC, ACT_AEB, ACT_RSC, ACT_CREEP, ACT_LCX, ACT_N };
 struct act_wish { float brake, floor, cap, scale; };  // brake request 0..1; throttle at least floor (0 = none), at most cap (1 = none), times scale (1 = none)
 void act_brake(int owner, float want);
 void act_thr_floor(int owner, float v);
 void act_thr_cap(int owner, float v);
 void act_thr_scale(int owner, float k);
+void act_thr_base(float v);      // this tick's base throttle in place of the game's cruise output (Cruise, from its ACT_POST hook only)
 const act_wish *act_wishes();    // [ACT_N]: what every owner holds now (traces, sims)
 float act_request();             // the brake request we hold in game_actor+0x17c now (0 = none)
 void act_brake_write(char *ga);  // merge the brake wishes and write the request (the tick does it; sims)
+// Per-tick hooks for a module that works inside the cruise fn call: ACT_PRE runs before the game's own cruise controller (its
+// inputs), ACT_POST after it (stock = what it returned: post the wishes), ACT_DONE after the merge (thr = what the engine gets).
+struct act_tick { char *ga; float dt, pedal, stock, thr; };
+enum { ACT_PRE, ACT_POST, ACT_DONE };
+void act_hook(int phase, void (*fn)(act_tick *));
+int act_hooked();                // the throttle hook (the cruise fn call) is in
 int act_gate_ok();               // the Auto Hold throttle gate is patched: the pedal reaches the engine while only the hold asks
 extern float g_air_min_psi;      // [cruise] air_min_psi: below it our brake requests pause (holds and the AEB excepted)
 void act_start();                // m_core (config.cpp): hooks before the modules start

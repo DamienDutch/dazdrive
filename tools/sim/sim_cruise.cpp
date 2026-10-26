@@ -23,7 +23,6 @@ volatile double g_rb_cancel_at = -1e9;
 volatile int g_pcc_on;
 volatile int g_pedal_mapped;
 volatile int g_lcx;
-volatile float g_lcx_cap = 1;
 volatile float g_overspeed_cap = 5;
 volatile float g_pcc_need_kmh = NAN;
 int g_log_level = 2;
@@ -38,7 +37,6 @@ void incident(const char *kind, const char *fmt, ...)
     printf("   INCIDENT %s: %s\n", kind, b);
 }
 volatile char g_dash_flash, g_dash_status;
-volatile float g_creep_thr;
 volatile float g_clutch_ours = __builtin_nanf("");
 double g_dash_flash_until;
 static double t_now;
@@ -166,7 +164,7 @@ static result run(const char *name, int ours, float set_kmh, double secs, void (
         int shifting = t_now < M.shift_end;
         T.eff_clutch = shifting ? 1 : 0;
         *(float *)(GA + GA_BRAKE_REQ) = 0;  // the game rewrites it every tick (stock ACC: 0 unless emergency)
-        float u = ours ? stub_cruise(GA, 1 / 60.0f, 0) : stock_cruise(GA, 1 / 60.0f, 0);
+        float u = ours ? act_stub(GA, 1 / 60.0f, 0) : stock_cruise(GA, 1 / 60.0f, 0);
         float brake = *(float *)(GA + GA_BRAKE_REQ);
         if (M.lead) {  // the game's ACC brakes itself when closing in (cruise-re notes § 2)
             float gap = M.lead_x - (float)g_s, want = fmaxf(4, 2.0f * M.v);
@@ -398,7 +396,7 @@ static float jn_run(const char *name, int roundabout, float set_kmh, float d0, d
         *(float *)(GA + GA_LEAD_M) = lead ? 15 + 1.0f * kmh : 0;   // the lead keeps 15 m at a standstill, more at speed
         *(float *)(GA + GA_ACC_TARGET) = lead ? kmh : set_kmh;
         *(float *)(GA + GA_BRAKE_REQ) = 0;
-        stub_cruise(GA, 1 / 60.0f, 0);
+        act_stub(GA, 1 / 60.0f, 0);
         if (g_sg_hold) held++;
         if (!*(unsigned char *)(GA + GA_ON)) { cancel_m = g_sim_jn.dist_m; *kmh_at = kmh; break; }
         g_sim_jn.dist_m = fmaxf(0.5f, g_sim_jn.dist_m - kmh / 3.6f / 60);   // standing: the entrance stays where it is
@@ -511,7 +509,7 @@ static ahres ah_run(const char *name, float grade_pct, int hard, int gate, float
         rpm += (700 + 1300 * T.eff_thr - rpm) * (float)(dt / 0.25); T.rpm = rpm;
         *(float *)(GA + GA_BRAKE_REQ) = 0;                 // AEB option off would leave it; our writer puts back what it wrote
         if (s_req_ours > 0) *(float *)(GA + GA_BRAKE_REQ) = s_req_ours;   // (what we left there last tick)
-        float u = stub_cruise(GA, (float)dt, 0);
+        float u = act_stub(GA, (float)dt, 0);
         float req = *(float *)(GA + GA_BRAKE_REQ);
         // the game's throttle gate now (this tick's flag)
         if (!(req <= 0 || s_thr_pass)) T.eff_thr = 0;
@@ -621,7 +619,7 @@ static accres acc_run(const char *name, int own, int scen)
         *(float *)(GA + GA_ACC_TARGET) = acc_t;
         float game_target = acc_t;
         *(float *)(GA + GA_BRAKE_REQ) = 0;
-        float u = stub_cruise(GA, (float)dt, 0);
+        float u = act_stub(GA, (float)dt, 0);
         float T_used = *(float *)(GA + GA_ACC_TARGET);
         // brakes (pedal fn): overspeed vs the target the game now reads (+0x1a0), skipped while the driver throttle is on
         float kmh = (float)v * 3.6f, Aov = T_used + 0.25f;
@@ -719,7 +717,7 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
         radar_stub(GA, g_fake_radar);
         float req_before = *(float *)(GA + GA_BRAKE_REQ);
         (void)req_before;
-        float u = stub_cruise(GA, (float)dt, pedal);
+        float u = act_stub(GA, (float)dt, pedal);
         float req = *(float *)(GA + GA_BRAKE_REQ);
         r.max_req = fmaxf(r.max_req, req);
         int dir = req > prev_req + 1e-4f ? 1 : req < prev_req - 1e-4f ? -1 : 0;
@@ -760,6 +758,7 @@ int main(int argc, char **argv)
 {
     verbose = argc > 1;
     for (int i = 0; i < m_cruise.n_params; i++) *m_cruise.params[i].val = m_cruise.params[i].def;
+    cr_attach();   // the module's three phases in the actuator's tick (cr_start does this in the game)
     keys_test();
     g_keys_ok = 0; g_ret_ok = 0;
     memset(GA, 0, sizeof GA);

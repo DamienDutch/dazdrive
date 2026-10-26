@@ -138,9 +138,9 @@ static int junc_on() { return p_curve > 0 && (p_junc > 0 || p_own_acc > 0); }
 
 
 // ---------------------------------------------------------------- smooth controller
+// The module works inside the actuator's tick (core/actuate.cpp, the game's cruise fn call): cr_pre before the game's own
+// controller, cr_post after it (our controller, Auto Hold, the AEB, the pedal curve: posted as wishes), cr_done for the trace.
 
-typedef float (*cruise_fn)(void *ga, float dt, float pedal);
-static cruise_fn o_cruise;
 static double s_cb_on_since, s_jn_cancel_at;  // cruise_body: when the cruise came on, when we last cancelled it for a junction
 static int s_cb_was_on;
 static struct { float i, u; int on; } C;
@@ -587,7 +587,7 @@ static void keys_tick(char *ga)
     s_prev_on = on;
 }
 
-static float cruise_body(void *ga, float dt, float pedal);
+static float cruise_body(void *ga, float dt, float pedal, float stock);
 static void own_acc(char *g, float dt);
 static float lead_rel_speed(char *g, float lead, float dt);
 static void cruise_trace(char *g, float u);
@@ -614,44 +614,56 @@ static float own_limit_k(float kmh, float accel)
     float proj = kmh + accel * 3.6f * 1.0f;
     return fmaxf(0.0f, fminf(1.0f, (p_own_lim - proj) / 1.5f));
 }
-static float stub_cruise(void *ga, float dt, float pedal)
+// Before the game's own cruise controller runs: the keys, and our ACC target into +0x1a0 (the game's controller and its
+// overspeed braking read it right after).
+static void cr_pre(act_tick *a)
 {
-    if (ga) keys_tick((char *)ga);
+    char *ga = a->ga;
+    if (ga) keys_tick(ga);
     s_want_curve = 0;
-    if (ga) own_acc((char *)ga, dt);  // our ACC target goes into +0x1a0 before the game's controller and its overspeed braking read it
-    float r = cruise_body(ga, dt, pedal);
-    if (ga) aeb((char *)ga, dt);
-    rsc_step(dt);                                  // rollover guard (core/rsc.cpp): posts its own brake wish
+    if (ga) own_acc(ga, a->dt);
+}
+// After it: our controller and the holds (cruise_body), the AEB, the pedal curve; the brake wishes and the base throttle go to
+// the actuator, which merges them with the other modules' (Creep's crawl throttle, the rollover guard's and launch control's
+// caps) and writes once. Our own speed limiter is a scale on the merged throttle, applied last.
+static void cr_post(act_tick *a)
+{
+    char *ga = a->ga; float pedal = a->pedal;
+    float r = cruise_body(ga, a->dt, pedal, a->stock);
+    if (ga) aeb(ga, a->dt);
     if (AE.st > 0 && r > pedal) r = pedal;  // AEB warns or brakes: no cruise throttle
     // The driver's gas always wins over our own braking (Damien, ts4w: full gas near a stop did nothing until he
     // switched cruise off; the game zeroes the throttle while a brake request is set). Auto Hold lets go by itself.
     if (pedal > 0.1f) { s_want_curve = 0; s_want_acc = 0; }  // (the AEB has its own override: kick-down)
     if ((s_want_acc > 0.04f || s_want_curve > 0.04f) && r > pedal) r = pedal;  // we brake: no throttle of ours against it (ts4r 213 s, ts4w 532 s)
-    // our brake wishes to the actuator, which merges them with the other modules' and writes the one request
     act_brake(ACT_HILL, s_want_hill); act_brake(ACT_HOLD, s_want_hold); act_brake(ACT_BEND, s_want_curve);
     act_brake(ACT_ACC, s_want_acc); act_brake(ACT_AEB, s_want_aeb);
-    if (ga) act_brake_write((char *)ga);
     // Eco: flatter pedal, Power: front-loaded pedal (Damien 25-10). Only the throttle the engine gets; not under cruise, not crawling,
     // not at parking speed; M and Normal stay linear
     g_pedal_mapped = 0;
-    if (ga && !*(unsigned char *)((char *)ga + GA_ON) && !g_crawl_on && fabsf(T.speed) * 3.6f >= p_pc_from && r > 0.01f && r < 0.999f) {
+    if (ga && !*(unsigned char *)(ga + GA_ON) && !g_crawl_on && fabsf(T.speed) * 3.6f >= p_pc_from && r > 0.01f && r < 0.999f) {
         int md = mode_of(game_adaptive());
         float y = pedal_blend(md, r);  // M: the sober, direct pedal (Power curve)
         if (y != r) { r = y; g_pedal_mapped = 1; }
     }
-    float c = g_creep_thr;  // Creep (heavy loads): a little throttle on top, also with cruise off (stored in inner+0x1424)
-    if (c > 0 && c < 0.3f && c > r) r = c;
-    if (g_rsc_thr_cap < 1) r = fminf(r, g_rsc_thr_cap);  // rollover guard: no throttle
-    if (g_lcx_cap < 1) r = fminf(r, g_lcx_cap);  // launch control holds the revs with a throttle cap
+    act_thr_base(r);
     // our own speed limiter (the game's is switched off): the throttle fades out over the last 3 km/h
-    if (p_own_lim > 0) r *= own_limit_k(fabsf(T.speed) * 3.6f, T.accel);
-    if (ga) cruise_trace((char *)ga, r);
-    return r;
+    act_thr_scale(ACT_CRUISE, p_own_lim > 0 ? own_limit_k(fabsf(T.speed) * 3.6f, T.accel) : 1.0f);
+}
+// After the merge: the trace sees the throttle the engine gets.
+static void cr_done(act_tick *a)
+{
+    if (a->ga) cruise_trace(a->ga, a->thr);
+}
+static void cr_attach()
+{
+    act_hook(ACT_PRE, cr_pre);
+    act_hook(ACT_POST, cr_post);
+    act_hook(ACT_DONE, cr_done);
 }
 
-static float cruise_body(void *ga, float dt, float pedal)
+static float cruise_body(void *ga, float dt, float pedal, float stock)
 {
-    float stock = o_cruise(ga, dt, pedal);
     char *g = (char *)ga;
     if (g) { if (p_ah > 0 && g_low_ok) auto_hold(g, dt); else { s_want_hold = 0; hill_start(g); } }
     if (p_smooth <= 0 || !g || !*(unsigned char *)(g + GA_ON) || !(dt > 0 && dt < 0.5f)) {
@@ -1295,22 +1307,18 @@ static void cr_start()
     }
     g_pcc_on = p_predict > 0;
     g_overspeed_cap = p_os_cap;
-    if (p_smooth > 0) {
-        uintptr_t h = game_scan("48 8B CB F3 44 0F 11 83 E4 1C 00 00 F3 45 0F 5F C3 41 0F 28 D0 E8");
-        uintptr_t site = h ? h + 21 : 0;
-        if (site) o_cruise = (cruise_fn)(site + 5 + (intptr_t) * (const int32_t *)(site + 1));
-        if (site && game_patch_call(site, (void *)stub_cruise)) {
-            g_cruise_smooth = 1;
-            logline("Cruise: own smooth cruise throttle in place");
-        } else logline("Cruise: cruise throttle call not found, the game's cruise stays");
-    }
+    // The module runs inside the actuator's tick (core hooks the game's cruise fn call whatever this section says); our own
+    // smooth controller replaces the game's throttle only with smooth = 1.
+    cr_attach();
+    g_cruise_smooth = p_smooth > 0 && act_hooked();
+    if (p_smooth > 0) logline(g_cruise_smooth ? "Cruise: own smooth cruise throttle on" : "Cruise: no throttle hook (see the Actuator lines): the game's cruise stays");
     // Auto Hold: the actuator patches the game's throttle gate (the merged throttle is zeroed while the brake request is > 0)
     // so the pedal builds torque against the brake while only the hold asks, and the release can follow it (autohold-acc notes).
-    if (p_ah > 0 && g_cruise_smooth && g_low_ok) {
+    if (p_ah > 0 && act_hooked() && g_low_ok) {
         s_gate_ok = act_gate_ok();
         if (s_gate_ok) logline("Cruise: Auto Hold in place (throttle passes while it holds, hold %.2f, release %.2f-%.2f s)", p_ah_req, p_ah_hard, p_ah_gentle);
         else logline("Cruise: Auto Hold: throttle gate not found, the release is paced by the pedal only (no drive feedback)");
-    } else if (p_ah > 0) logline("Cruise: Auto Hold needs the minimum-speed patch and our cruise throttle: off (hill start stays)");
+    } else if (p_ah > 0) logline("Cruise: Auto Hold needs the 1.60 cruise code and the actuator's throttle hook: off (hill start stays)");
     // Lead speed: wrap the radar call in the ACC fn (the game keeps the lead's speed in a local only).
     if (L && !strcmp(L->name, "1.60")) {
         uintptr_t rh = game_scan("48 8D 54 24 50 48 8B CB C6 83 21 01 00 00 01 E8 ?? ?? ?? ?? 0F 10 00 8B 40 10 89 44 24 48");
@@ -1323,8 +1331,8 @@ static void cr_start()
             } else logline("Cruise: lead speed hook failed: ACC target and cut-in test stay the game's / d(gap)/dt");
         } else logline("Cruise: radar call in the ACC fn not found: ACC target and cut-in test stay the game's / d(gap)/dt");
         // Own AEB (aeb notes): the ACC's emergency part sees no lead (its gap load becomes 0) and the game's AEB stores of
-        // 1.0 into +0x17c are skipped while ours runs. Needs our cruise fn hook (that is where the AEB runs) and the radar.
-        if (p_aeb > 0 && g_radar_ok && g_cruise_smooth && g_low_ok) {
+        // 1.0 into +0x17c are skipped while ours runs. Needs the actuator's hook in the cruise fn (that is where the AEB runs) and the radar.
+        if (p_aeb > 0 && g_radar_ok && act_hooked() && g_low_ok) {
             uintptr_t ae = game_scan("80 BE 99 01 00 00 00 0F 84 ?? ?? ?? ?? 48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 0F 2F C6 0F 86 ?? ?? ?? ?? 0F 2F 3D ?? ?? ?? ?? 0F 87 ?? ?? ?? ?? 48 8B 46 18 F3 0F 10 BE A8 01 00 00");
             uintptr_t s1 = game_scan("41 0F 2F F8 73 14 44 0F 2F 8B 0C 01 00 00 73 0A C7 83 7C 01 00 00 00 00 80 3F");
             uintptr_t s2 = game_scan("84 C0 75 0D 83 8B 14 01 00 00 10 EB 1A 84 C0 74 16 C7 83 7C 01 00 00 00 00 80 3F");
@@ -2103,7 +2111,7 @@ static const char *cr_status()
     const char *acc = g_acc ? (g_radar_ok && p_own_acc > 0 ? "own" : "game") : "off";
     snprintf(b, sizeof b, "smooth %s, ACC %s (gap %s), ISA %s (+%.0f), Auto Hold %s, Stop&Go %s, curves %s, junctions %s, descent %s, hazards %s, AEB %s; hooks: min-speed %s, keys %s, radar %s",
              g_cruise_smooth ? "on" : "off", acc, g_acc ? level_name[g_level + 1] : "-", p_isa > 0 ? "on" : "off", p_isa_off,
-             p_ah > 0 && g_low_ok && g_cruise_smooth ? "on" : "off", g_sg_ok ? "on" : "off",
+             p_ah > 0 && g_low_ok && act_hooked() ? "on" : "off", g_sg_ok ? "on" : "off",
              p_curve > 0 && g_cruise_smooth ? "on" : "off", junc_on() ? (p_junc > 0 ? "on" : "on (own ACC)") : "off", g_smart ? "on" : "off",
              p_ess > 0 && g_low_ok ? "on" : "off", s_aeb_owns ? (p_aeb_manual > 0 ? "own (also without cruise)" : "own (with cruise)") : "game's", g_low_ok ? "yes" : "no", g_keys_ok ? "yes" : "no", g_radar_ok ? "yes" : "no");
     return b;

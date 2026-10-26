@@ -14,7 +14,8 @@
 //  - The automatic selects neutral at a standstill when no pedal is down, and in neutral waits for
 //    throttle. A tail hook (chained behind TrueShift's) holds gear 1 (or R) at rest while we crawl, and
 //    after a stop engages gear 1 by itself once both pedals have been free for a moment.
-//  - v2: light loads crawl in a higher gear (clutch only), heavy loads in gear 1-2 with a little throttle (g_creep_thr, via Cruise's stub).
+//  - v2: light loads crawl in a higher gear (clutch only), heavy loads in gear 1-2 with a little throttle (a throttle floor posted
+//    to the actuator, core/actuate.cpp, like the descent brake and launch control's throttle cap).
 //  - Hand back: the floor ramps to 0 over release_s whenever the mode ends.
 #define LOG_BOOST 1  // experimental: more detail in the log by default
 #include "../core/suite.h"
@@ -256,7 +257,9 @@ static float launch_aim(float thr, float idle, int heavy)
 
 static float lcx_aim() { return fminf(fmaxf(T.rpm_limit, 1900.0f) * 0.82f, 1700.0f); }
 
-static void lcx_off() { g_lcx = 0; g_lcx_cap = 1; }   // launch control off and its throttle cap released (every path that drops g_ln)
+static float g_lcx_cap = 1;   // launch control's throttle cap (1 = none), posted to the actuator as ACT_LCX
+static void lcx_cap(float v) { g_lcx_cap = v; act_thr_cap(ACT_LCX, v); }
+static void lcx_off() { g_lcx = 0; lcx_cap(1); }   // launch control off and its throttle cap released (every path that drops g_ln)
 
 static void launch_end(const char *why, int normal)
 {
@@ -278,7 +281,7 @@ static void launch_tick(const launch_in &in)
             lcx_t += in.dt;
             if (lcx_t > 0.7f) {
                 lcx_t = 0; g_ln = 1; g_lcx = 1; g_ln_t = g_ln_rel = g_ln_shut = g_ln_rate = 0; g_ln_rpm0 = in.rpm; g_ln_up = 1; g_lc = 1.0f;
-                g_ln_ra = lcx_aim(); g_lcx_cap = 0.5f;
+                g_ln_ra = lcx_aim(); lcx_cap(0.5f);
                 logline("Launch control: armed, holding %.0f rpm (gear %d)", g_ln_ra, in.gear);
                 return;
             }
@@ -298,11 +301,11 @@ static void launch_tick(const launch_in &in)
     if (g_lcx == 1) {  // armed: the clutch stays open, the throttle cap holds the revs, the brake holds the truck
         g_lc = 1.0f;
         float aim = lcx_aim();
-        g_lcx_cap = clampv(g_lcx_cap + (aim - in.rpm) / 100 * 0.4f * in.dt, 0.08f, 1.0f);
+        lcx_cap(clampv(g_lcx_cap + (aim - in.rpm) / 100 * 0.4f * in.dt, 0.08f, 1.0f));
         g_ln_rpm0 = in.rpm;   // keep the rate estimate's reference fresh: a stale one made the first "go" frame see thousands of rpm/s and slam the clutch
         if (in.blocked || in.gear <= 0 || in.thr < 0.5f || g_ln_t > 25 || vk > 2.0f) { launch_end("launch control cancelled", 0); return; }
         if (in.brake < 0.15f) {  // brake released: launch with the held revs as the aim
-            g_lcx = 2; g_lcx_cap = 1; g_ln_t = 0; g_ln_up = 0; g_lc = p_l_bite; g_ln_ra = aim; g_ln_rate = 0;
+            g_lcx = 2; lcx_cap(1); g_ln_t = 0; g_ln_up = 0; g_lc = p_l_bite; g_ln_ra = aim; g_ln_rate = 0;
             logline("Launch control: go, %.0f rpm", in.rpm);
         }
         return;
@@ -494,7 +497,7 @@ static void ck_reset(int level, const char *why)
         g_last_dir = 1;
         g_cf.floor = 0;
         g_cf.inner = NULL;
-        g_creep_thr = 0;
+        act_thr_floor(ACT_CREEP, 0);
         act_brake(ACT_CREEP, 0);
         if (g_dash_status == 'C') g_dash_status = 0;
     }
@@ -513,7 +516,7 @@ static void ck_frame()
     char *inner = self ? gb_inner(self) : NULL;
     g_self = self;
     g_cf.inner = NULL;  // set below only while crawling: our clutch value then replaces the game's
-    if (!inner) { g_cf.floor = 0; g_f = 0; g_cthr = 0; g_creep_thr = 0; act_brake(ACT_CREEP, 0); g_cbrake = 0; g_on = 0; g_hold = 0; g_ln = 0; g_clutch_ours = NAN; lcx_off(); return; }
+    if (!inner) { g_cf.floor = 0; g_f = 0; g_cthr = 0; act_thr_floor(ACT_CREEP, 0); act_brake(ACT_CREEP, 0); g_cbrake = 0; g_on = 0; g_hold = 0; g_ln = 0; g_clutch_ours = NAN; lcx_off(); return; }
     if (dt > 0.5f) ck_reset(RESET_SOFT, "long frame");
     if (dt <= 0 || dt > 0.5f) return;  // paused or a long hitch: no time step
 
@@ -581,8 +584,10 @@ static void ck_frame()
     }
     g_cf.floor = g_ln ? g_lc : g_f;
     g_cf.inner = g_on || g_ln ? inner : NULL;
-    g_creep_thr = g_cthr;
-    act_brake(ACT_CREEP, g_on ? g_cbrake : 0);   // the descent brake, through the one writer (core/actuate.cpp)
+    // heavy loads: a little throttle on top of the pedal (a floor on the merged throttle, 0..heavy_throttle; anything odd above 0.3 is
+    // not posted), and the descent brake: both through the actuator (core/actuate.cpp), also with the Cruise module off
+    act_thr_floor(ACT_CREEP, g_cthr > 0 && g_cthr < 0.3f ? g_cthr : 0);
+    act_brake(ACT_CREEP, g_on ? g_cbrake : 0);
     if (p_letter > 0 && g_on) g_dash_status = 'C';
     else if (g_dash_status == 'C') g_dash_status = 0;
 
@@ -634,7 +639,7 @@ static void ck_stop()
 {
     g_cf.floor = 0;  // give everything back
     g_ln = 0; g_clutch_ours = NAN; lcx_off();
-    g_creep_thr = 0;
+    act_thr_floor(ACT_CREEP, 0);
     act_brake(ACT_CREEP, 0);
     g_hold = 0;
     if (g_csv) fflush(g_csv);

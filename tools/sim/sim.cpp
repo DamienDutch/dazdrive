@@ -19,7 +19,6 @@ volatile double g_rb_cancel_at = -1e9;
 volatile int g_pcc_on;
 volatile int g_pedal_mapped;
 volatile int g_lcx;
-volatile float g_lcx_cap = 1;
 volatile float g_overspeed_cap = 5;
 volatile float g_pcc_need_kmh = NAN;
 int g_log_level = 2;

@@ -2,8 +2,8 @@
 // guard that also works when you drive by hand. It does not use a real-truck stability threshold (those are lower than what the
 // game's trucks survive), it looks for the growing sideways swing that preceded the 24-10 rollover: two opposite lateral peaks
 // within 2.5 s. The lateral acceleration is speed x yaw rate. Levels: 1 = a tone and no throttle, 2 = also a soft brake,
-// 3 = a firm brake when the swing grows. This file only decides: the brake wish goes to the actuator (core/actuate.cpp, owner
-// ACT_RSC, it rides on the AEB's fast request path there), Cruise applies g_rsc_thr_cap.
+// 3 = a firm brake when the swing grows. This file only decides: the brake wish and the throttle cap go to the actuator
+// (core/actuate.cpp, owner ACT_RSC; the brake rides on the AEB's fast request path there), which calls rsc_step every tick.
 // The single-bend thresholds (one bend taken too fast, no swing) sit behind rollover_bend, off by default: every physics mod
 // has its own tipping point, so those limits never calibrate for everyone (Damien 25-10). The swing check does not need one.
 #include "suite.h"
@@ -12,8 +12,7 @@
 
 float g_rsc_mode = 3, g_rsc_bend = 0;
 volatile int g_rsc_level;
-volatile float g_rsc_thr_cap = 1;
-static float s_brake;   // the brake wish, slewed here (0..0.35)
+static float s_brake, s_cap = 1;   // the brake wish (0..0.35) and the throttle cap (1 = none), both slewed here
 
 struct lobe { int s; float peak; double t; };
 
@@ -41,8 +40,8 @@ void rsc_step(float dt)
     // not forward (reverse), paused, a hitch, too slow: nothing to watch. Neutral counts (an eco-roll at 85 km/h can sway like any gear)
     if (g_rsc_mode < 0.5f || T.paused || !(dt > 0 && dt < 0.5f) || T.gear < 0 || kmh < 40) {
         level = 0; cur = prev = prev2 = lobe(); lp = lps = 0; calm_since = high_since = warn_since = 0;
-        g_rsc_level = 0; s_brake = 0; g_rsc_thr_cap = 1;
-        act_brake(ACT_RSC, 0);
+        g_rsc_level = 0; s_brake = 0; s_cap = 1;
+        act_brake(ACT_RSC, 0); act_thr_cap(ACT_RSC, 1);
         return;
     }
     float a = v * T.yaw * 6.2831853f;
@@ -91,5 +90,6 @@ void rsc_step(float dt)
     s_brake = clampf_(tgt, s_brake - down * dt, s_brake + up * dt);
     act_brake(ACT_RSC, s_brake);
     float cap_tgt = level >= 1 && g_rsc_mode >= 1.5f ? 0.0f : 1.0f;
-    g_rsc_thr_cap = clampf_(cap_tgt, g_rsc_thr_cap - 4.0f * dt, g_rsc_thr_cap + 1.0f * dt);
+    s_cap = clampf_(cap_tgt, s_cap - 4.0f * dt, s_cap + 1.0f * dt);
+    act_thr_cap(ACT_RSC, s_cap);
 }
