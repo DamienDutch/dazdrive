@@ -132,6 +132,7 @@ static void params_default()
         for (int i = 0; i < m->n_params; i++) *m->params[i].val = m->params[i].def;
     set_param(m_trueshift, "idle_rpm", IDLE);
     p_wish = 1;
+    p_ref_kwt = 0;   // the exponents as the ini has them; the per-truck scaling has its own test (D2)
 }
 
 // The truck at a speed in a gear, clutch closed, locked. mode: MODE_*.
@@ -488,6 +489,34 @@ static void passthrough_checks()
 }
 
 // ---------------------------------------------------------------- F: wish 0 and a fuzz (never a NaN)
+// ---------------------------------------------------------------- D2: the exponent per truck (curve_ref_kw_t)
+static void truck_curve_checks()
+{
+    printf("== D2 the exponent per truck: power per tonne against curve_ref_kw_t (12), sqrt, clamped to x0.8 ... x1.15\n");
+    p_ref_kwt = 12;
+    float prev = 2;
+    for (float mass : { 10000.0f, 17000.0f, 25000.0f, 33000.0f, 40000.0f, 60000.0f }) {
+        float q[3];
+        for (int i = 0; i < 3; i++) {
+            int md = i == 0 ? MODE_ECO : i == 1 ? MODE_NORMAL : MODE_POWER;
+            world(9, 45, md, mass);
+            steady(0.5f);
+            float base = md == MODE_ECO ? p_exp_eco : md == MODE_POWER ? p_exp_pw : p_exp_norm;
+            float k = fminf(1.15f, fmaxf(0.8f, sqrtf(peak_power() / mass / 12))), want = powf(0.5f, base * k);
+            q[i] = S.q;
+            check(fabsf(S.q - want) < 1e-5f, "D2 %.0f t %s: pedal 0.5 wishes %.4f, %.4f expected (x%.3f)", mass / 1000, mode_text(md), S.q, want, k);
+        }
+        check(q[0] <= q[1] && q[1] <= q[2], "D2 %.0f t: Eco %.4f <= Normal %.4f <= Power %.4f", mass / 1000, q[0], q[1], q[2]);
+        check(q[1] >= prev - 1e-6f || prev > 1, "D2 %.0f t: a heavier truck wishes no less at the same pedal (%.4f after %.4f)", mass / 1000, q[1], prev);
+        printf("   %2.0f t (%.1f kW/t): pedal 0.5 wishes Eco %.3f, Normal %.3f, Power %.3f\n", mass / 1000, peak_power() / mass, q[0], q[1], q[2]);
+        prev = q[1];
+    }
+    p_ref_kwt = 0;
+    world(9, 45, MODE_NORMAL, 33000);
+    steady(0.5f);
+    check(fabsf(S.q - 0.5f) < 1e-6f, "D2 curve_ref_kw_t 0: Normal pedal 0.5 wishes %.4f, 0.5 expected", S.q);
+}
+
 static void zero_and_fuzz()
 {
     printf("== F wish 0 = the pedal unchanged; random inputs never give a NaN or a value outside 0..1\n");
@@ -538,6 +567,7 @@ int main(int argc, char **argv)
     rise_checks();
     kick_checks();
     passthrough_checks();
+    truck_curve_checks();
     params_default();
     zero_and_fuzz();
     printf("\n%d checks, %d failed\n", n_checks, n_failed);
