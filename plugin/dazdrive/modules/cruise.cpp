@@ -302,7 +302,8 @@ static int s_gate_ok;
 static float s_ah_k = 1;  // learned: how much of the estimated drive force really arrives (the clutch and the engine model are rough)
 
 // Force (N) at the wheels the engine and clutch deliver right now; NAN if the data is not there. The engine at its
-// real rpm with the clutch slipping, so not the model's force_at (that is a closed clutch at the driveline rpm).
+// real rpm with the clutch slipping, so not the model's force_at (that is a closed clutch at the driveline rpm); the
+// driveline efficiency is the model's (V.eta, [trueshift] efficiency).
 static float ah_drive_force()
 {
     int g = T.gear;
@@ -311,7 +312,7 @@ static float ah_drive_force()
     float couple = 1 - clutch_seen();
     couple = couple < 0 ? 0 : couple > 1 ? 1 : couple;
     float te = V.eng.torque * curve_factor(&V.eng, T.rpm) * T.eff_thr;
-    return s_ah_k * te * T.ratio[g - 1] * T.diff * 0.9f * couple / r;
+    return s_ah_k * te * T.ratio[g - 1] * T.diff * V.eta * couple / r;
 }
 
 // Force (N) that gets the truck going: the grade force plus a small push (0.25 m/s2 with rolling resistance).

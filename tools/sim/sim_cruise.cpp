@@ -1018,6 +1018,11 @@ int main(int argc, char **argv)
             a = ah_run("  mass unknown, 5% gentle", 5, 0, 1, NAN, 0, 0); bad |= a.req_end != 0 || a.roll_m > 0.3f;
             vehicle_reset(RESET_HARD); s_ah_k = k;
         }
+        {   // the drive estimate takes the model's driveline efficiency ([trueshift] efficiency, 0.9 here otherwise)
+            float k = s_ah_k, e = V.eta; V.eta = 0.8f;
+            a = ah_run("  efficiency 0.8, 10% gentle", 10, 0, 1, 1.0f, 0, 0); bad |= a.req_end != 0 || a.roll_m > 0.3f;
+            V.eta = e; s_ah_k = k;
+        }
         printf("--- Auto Hold 10%% gentle, trace after the stop\n");
         ah_run("  trace", 10, 0, 1, 1.0f, 0, 1);
         ah_run("  trace 0% gentle", 0, 0, 1, 1.0f, 0, 1);
