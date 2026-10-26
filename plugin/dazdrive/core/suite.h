@@ -215,6 +215,11 @@ extern low_owner g_low;
 const char *low_state_name(int state);
 int ts_start_gear(float thr);   // TrueShift: the start gear by physics (mass, grade, engine) for this pedal, whether or not TrueShift has the truck; 0 = unknown
 float ts_idle_rpm();            // TrueShift: the idle rpm (learned at a standstill, else the ini's)
+int ts_mode();                  // TrueShift: the driving mode (MODE_ECO / MODE_NORMAL / MODE_POWER) of an automatic truck it can read; -1 = manual box, M, or an unsupported truck
+// Pedal (modules/pedal.cpp): the wish pedal. The driver's pedal p becomes a wish for power; the throttle that delivers it in the gear
+// the truck is in. Returns 1 and the throttle in *out where it applies, else 0 and *out = p (pass-through: the old pedal path).
+// other = the caller knows something else drives the throttle (cruise, ACC, AEB). dt = the tick's seconds.
+int pedal_wish(float p, float dt, int other, float *out);
 extern volatile int g_pedal_mapped;     // Cruise: the throttle the engine gets is the pedal through the Eco / Power curve this frame
 extern volatile int g_pcc_on;         // Cruise: predictive cruise (PCC) is switched on
 extern volatile int g_cruise_smooth;  // the Cruise module drives the cruise throttle itself

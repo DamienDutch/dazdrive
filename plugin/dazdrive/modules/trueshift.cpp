@@ -1694,6 +1694,13 @@ int ts_start_gear(float thr)
     return launch_pick(T.trailer ? 1 : (n < 4 ? n : 4), clampf(thr, 0, 1), true);
 }
 float ts_idle_rpm() { return idle_rpm(); }
+// For the wish pedal (suite.h): the mode from the game's cvar, as the module reads it, so it is also right where our hooks are not in.
+int ts_mode()
+{
+    if (S.unsupported || manual_box()) return -1;
+    int m = mode_from_cvar(game_adaptive());
+    return m == MODE_M ? -1 : m;
+}
 
 // ---------------------------------------------------------------- module
 

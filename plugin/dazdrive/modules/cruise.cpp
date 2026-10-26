@@ -627,7 +627,11 @@ static void cr_post(act_tick *a)
     // Eco: flatter pedal, Power: front-loaded pedal (Damien 25-10). Only the throttle the engine gets; not under cruise, not crawling,
     // not at parking speed; M and Normal stay linear
     g_pedal_mapped = 0;
-    if (ga && !*(unsigned char *)(ga + GA_ON) && !g_crawl_on && fabsf(T.speed) * 3.6f >= p_pc_from && r > 0.01f && r < 0.999f) {
+    // The wish pedal (modules/pedal.cpp, [pedal] wish) takes this stage over where it applies; elsewhere, and with wish 0, the curves below
+    float wish;
+    if (ga && pedal_wish(r, a->dt, *(unsigned char *)(ga + GA_ON) || g_crawl_on || AE.st > 0 || fabsf(r - pedal) > 1e-4f, &wish)) {
+        if (wish != r) { r = wish; g_pedal_mapped = 1; }
+    } else if (ga && !*(unsigned char *)(ga + GA_ON) && !g_crawl_on && fabsf(T.speed) * 3.6f >= p_pc_from && r > 0.01f && r < 0.999f) {
         int md = mode_of(game_adaptive());
         float y = pedal_blend(md, r);  // M: the sober, direct pedal (Power curve)
         if (y != r) { r = y; g_pedal_mapped = 1; }
