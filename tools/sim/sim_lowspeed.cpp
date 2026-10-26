@@ -120,6 +120,7 @@ void cruise_info_get(cruise_info *o) { *o = CU; }
 extern module m_trueshift;
 
 static float rpm_of(int g, double v) { return g > 0 ? (float)(v / RADIUS * RATIO[g - 1] * DIFF * 9.5493) : 0; }
+static float kmh_of(int g, float rpm) { return rpm / (RATIO[g - 1] * DIFF * 9.5493f) * RADIUS * 3.6f; }   // the speed where gear g turns the engine at rpm
 
 // ---- the plant: one step of dt seconds. What the truck does by itself (game + TrueShift + Creep), set into the telemetry.
 static void plant(double dt)
@@ -128,8 +129,8 @@ static void plant(double dt)
     double kmh = fabs(M.v) * 3.6;
     // the stop: the box goes to neutral when the engine would fall under idle + 150 rpm (+ the brake term); never while crawling
     if (M.gear > 0 && thr < 0.01f && !CI.crawl && rpm_of(M.gear, M.v) < idle + 150 + brk * brk * idle) { M.gear = 0; M.launching = 0; }
-    // braking pulls the engine near idle: one gear down (TrueShift's braking downshift), at most every 0.7 s
-    if (M.gear > 1 && thr < 0.01f && brk > 0.05f && rpm_of(M.gear, M.v) < idle + 250 + brk * brk * idle && t_now - M.down_at > 0.7) { M.gear--; M.down_at = t_now; }
+    // braking pulls the engine near idle: one gear down (TrueShift's braking downshift), at most every 0.25 s
+    if (M.gear > 1 && thr < 0.01f && brk > 0.05f && rpm_of(M.gear, M.v) < idle + 250 + brk * brk * idle && t_now - M.down_at > 0.25) { M.gear--; M.down_at = t_now; }
     // a pedal at a standstill or in neutral: the start gear by physics
     if (M.gear == 0 && thr > 0.01f && !CI.crawl) { M.gear = ts_start_gear(fmaxf(thr, 0.3f)); M.launching = 1; }
     if (M.gear > 0 && M.launching && thr < 0.01f && M.v < 0.05) M.launching = 0;
@@ -181,7 +182,9 @@ static void sim_reset(int level, const char *why)   // as core/telemetry.cpp ses
     m_lowspeed.reset(level, why);
 }
 
-struct tick_rec { int state, would_gear; float would_clutch, would_brake, kmh; };
+struct tick_rec { int state, would_gear, gear; float would_clutch, would_brake, kmh; };
+static tick_rec rec[60 * 60];        // what the owner would command, per tick of a scenario
+static int n_rec;
 static int trans[64], n_trans;       // the state changes of a run, in order
 static int last_state;
 
@@ -192,6 +195,7 @@ static void tick(double dt = 1.0 / 60)
     plant(dt);
     vehicle_frame();
     m_lowspeed.frame();
+    if (n_rec < (int)(sizeof rec / sizeof rec[0])) rec[n_rec++] = { g_low.state, g_low.would_gear, M.gear, g_low.would_clutch, g_low.would_brake, (float)(fabs(M.v) * 3.6) };
     if (g_low.state != last_state) {
         if (n_trans < 64) trans[n_trans++] = g_low.state;
         if (verbose) printf("   [%7.2f] %s  %.2f km/h gear %d: %s\n", t_now, low_state_name(g_low.state), fabs(M.v) * 3.6, M.gear, g_low.reason);
@@ -210,7 +214,7 @@ static void world(int gear, double kmh, float grade, float mass = 36000)
     memset(&CI, 0, sizeof CI); memset(&CU, 0, sizeof CU);
     CI.brake_off = 0.30f;
     g_crawl_on = 0; g_lcx = 0; g_rolling = 0;
-    n_trans = 0; n_engage_lines = 0;
+    n_trans = 0; n_engage_lines = 0; n_rec = 0;
     sim_reset(RESET_HARD, "sim: new scenario");
     vehicle_mass_stale();
     g_low.state = LOW_GAME; last_state = LOW_GAME; g_fresh = 1;
@@ -287,6 +291,105 @@ static void s0()
     printf("   S0 %s\n", same ? "ok" : "FAIL");
 }
 
+// ---------------------------------------------------------------- S1: the stop point comes from the start gear, the open clutch is a latch
+// The driver lifts at 30 km/h and brakes; the Auto Hold stand-in holds at a standstill.
+static void hold_if_stopped() { CU.hold = fabs(M.v) * 3.6 < 0.5 && g_brake > 0.1f ? 1 : 0; CU.hold_req = CU.hold ? 0.6f : 0; }
+
+static float start_at(float grade)   // the start gear (gentle pedal) at a road grade
+{
+    g_grade_pct = grade;
+    vehicle_update(game_gearbox());
+    return (float)ts_start_gear(0.3f);
+}
+
+static int entries(int state) { int n = 0; for (int i = 0; i < n_trans; i++) n += trans[i] == state; return n; }
+static int first_open() { for (int i = 0; i < n_rec; i++) if (rec[i].state == LOW_STOPPING && rec[i].would_clutch > 0.5f) return i; return -1; }
+
+static void s1_stop(float brake)
+{
+    world(8, 30, 0);
+    M.gear = gear_for(30, 1300);
+    M.rpm = rpm_of(M.gear, M.v);
+    int sg = ts_start_gear(0.3f);
+    float want = kmh_of(sg, IDLE + 150 + brake * brake * IDLE);   // the sim's own arithmetic: the start gear at idle + 150 rpm + the brake term
+    for (int i = 0; i < 60 * 12; i++) {
+        if (i == 60) g_brake = brake;
+        hold_if_stopped();
+        tick();
+        if (i > 60 && M.v == 0 && i > 60 * 2 + 30) { if (g_low.since_s > 1) break; }
+    }
+    int o = first_open();
+    bool before_closed = true, after_open = true, gear_const = true;
+    int plant_changes = 0;
+    for (int i = 0; i < n_rec; i++) {
+        if (rec[i].state != LOW_STOPPING) continue;
+        if (o < 0 || i < o) before_closed = before_closed && rec[i].would_clutch == 0;
+        else { after_open = after_open && rec[i].would_clutch == 1; gear_const = gear_const && rec[i].would_gear == rec[o].would_gear; plant_changes += i > o && rec[i].gear != rec[i - 1].gear; }
+    }
+    float dv = (brake * 6 + 0.12f) * 3.6f / 60;   // the speed one tick covers
+    check(entries(LOW_STOPPING) == 1, "S1 %.2f: %d STOPPING states instead of one", brake, entries(LOW_STOPPING));
+    check(o > 0, "S1 %.2f: the clutch never opens", brake);
+    if (o > 0) {
+        check(rec[o].kmh <= want + 0.05f && rec[o].kmh > want - dv - 0.05f, "S1 %.2f: the clutch opens at %.2f km/h, the start gear %d sits at idle+150+brake term at %.2f", brake, rec[o].kmh, sg, want);
+        check(before_closed && after_open, "S1 %.2f: would_clutch is not closed before the point and open after it", brake);
+        check(gear_const && rec[o].would_gear == sg, "S1 %.2f: the gear to ask for changes after the point (start gear %d, at the point %d)", brake, sg, rec[o].would_gear);
+        printf("   brake %.2f: one STOPPING, clutch opens at %.2f km/h (start gear %d, expected %.2f), gear to ask for %d until the stop (the truck itself changes gear %d time(s) meanwhile), ends %s\n",
+               brake, rec[o].kmh, sg, want, rec[o].would_gear, plant_changes, low_state_name(g_low.state));
+    }
+    check(g_low.state == LOW_STOPPED_HELD, "S1 %.2f: ends in %s", brake, low_state_name(g_low.state));
+    check(g_low.would_gear == sg && g_low.would_clutch == 1, "S1 %.2f: at rest it would have gear %d clutch %.1f", brake, g_low.would_gear, g_low.would_clutch);
+}
+
+// The start gear changes with the grade at the last metre. Lower after the clutch opened: it stays open. Higher before it opens: it opens at once.
+static void s1_latch()
+{
+    float g_flat = 0, g_steep = -1;
+    world(8, 30, 0);
+    int a0 = (int)start_at(g_flat);
+    for (float g = 1; g <= 25 && g_steep < 0; g += 0.5f) if ((int)start_at(g) < a0) g_steep = g;
+    check(g_steep > 0, "S1 latch: no grade gives a lower start gear than %d", a0);
+    if (g_steep < 0) return;
+    int a1 = (int)start_at(g_steep);
+    float v0 = kmh_of(a0, IDLE + 150 + 0.09f * IDLE), v1 = kmh_of(a1, IDLE + 150 + 0.09f * IDLE);   // idle points of both at brake 0.3
+    printf("   start gear %d flat and %d at %.1f %%; at brake 0.3 their idle points are %.2f and %.2f km/h\n", a0, a1, g_steep, v0, v1);
+    // lower: flat, the clutch opens at v0; three ticks later the grade steepens (the new gear's own point v1 is lower: it would still have the clutch closed)
+    world(8, 30, g_flat);
+    M.gear = gear_for(30, 1300); M.rpm = rpm_of(M.gear, M.v);
+    int open_at = -1, changed_at = -1; float kmh_changed = 0;
+    for (int i = 0; i < 60 * 12; i++) {
+        if (i == 60) g_brake = 0.3f;
+        hold_if_stopped();
+        if (open_at < 0 && n_rec > 0 && rec[n_rec - 1].would_clutch > 0.5f && rec[n_rec - 1].state == LOW_STOPPING) open_at = i;
+        if (open_at >= 0 && changed_at < 0 && i == open_at + 3) { changed_at = i; g_grade_pct = g_steep; kmh_changed = (float)(fabs(M.v) * 3.6); }
+        tick();
+        if (i > 60 * 2 && M.v == 0 && g_low.since_s > 1) break;
+    }
+    bool stays = true; int n_open = 0;
+    for (int i = 0; i < n_rec; i++) if (rec[i].state == LOW_STOPPING && rec[i].would_clutch > 0.5f) n_open++;
+    for (int i = 0; i < n_rec; i++) if (i >= open_at && (rec[i].state == LOW_STOPPING || rec[i].state == LOW_STOPPED_HELD)) stays = stays && rec[i].would_clutch == 1;
+    check(open_at > 0 && kmh_changed > v1 && kmh_changed < v0 + 0.5f, "S1 latch lower: the grade changed at %.2f km/h, the new gear's point is %.2f", kmh_changed, v1);
+    check(stays && entries(LOW_STOPPING) == 1 && g_low.state == LOW_STOPPED_HELD, "S1 latch lower: the clutch closed again or the stop was not clean (%s, %d STOPPING)", low_state_name(g_low.state), entries(LOW_STOPPING));
+    check(g_low.would_gear == a1, "S1 latch lower: preselected gear at rest %d, the start gear of the end grade is %d", g_low.would_gear, a1);
+    printf("   lower start gear (%d -> %d) after the clutch opened (grade change at %.2f km/h): clutch stays open for %d ticks, preselected gear at rest %d\n", a0, a1, kmh_changed, n_open, g_low.would_gear);
+    // higher: steep, the clutch would open at v1; before it does, between v1 and v0 the grade flattens: the new gear's point is above us: open at once
+    world(8, 30, g_steep);
+    M.gear = gear_for(30, 1300); M.rpm = rpm_of(M.gear, M.v);
+    int flat_at = -1, opened = -1; bool closed_before = true;
+    for (int i = 0; i < 60 * 12; i++) {
+        if (i == 60) g_brake = 0.3f;
+        hold_if_stopped();
+        if (flat_at < 0 && i > 60 && fabs(M.v) * 3.6 < 0.5 * (v0 + v1) + 0.1 && fabs(M.v) * 3.6 > v1 + 0.2) { flat_at = i; g_grade_pct = g_flat; }
+        if (flat_at < 0 && n_rec > 0 && rec[n_rec - 1].would_clutch > 0.5f) closed_before = false;
+        tick();
+        if (flat_at >= 0 && opened < 0 && g_low.would_clutch > 0.5f) opened = i;
+        if (i > 60 * 2 && M.v == 0 && g_low.since_s > 1) break;
+    }
+    check(flat_at > 0 && closed_before, "S1 latch higher: the grade change did not come between the two points (or the clutch opened before it)");
+    check(opened >= 0 && opened <= flat_at + 1, "S1 latch higher: the clutch opened %d ticks after the grade change, not at once", opened - flat_at);
+    check(entries(LOW_STOPPING) == 1 && g_low.state == LOW_STOPPED_HELD && g_low.would_gear == a0, "S1 latch higher: ends %s, %d STOPPING, preselected gear %d (start gear %d)", low_state_name(g_low.state), entries(LOW_STOPPING), g_low.would_gear, a0);
+    printf("   higher start gear (%d -> %d) before the clutch opened: it opens %d tick(s) after the grade change, preselected gear at rest %d\n", a1, a0, opened - flat_at, g_low.would_gear);
+}
+
 // ---------------------------------------------------------------- off: with trace 0 the module does nothing at all
 static void s_off()
 {
@@ -313,6 +416,10 @@ int main(int argc, char **argv)
     m_lowspeed.start();
     s_off();
     s0();
+    printf("== S1 stop from 30 km/h: the clutch opens at the idle point of the start gear\n");
+    s1_stop(0.15f);
+    s1_stop(0.5f);
+    s1_latch();
     printf("\n%d checks, %d failed\n", n_checks, n_failed);
     return n_failed ? 1 : 0;
 }

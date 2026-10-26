@@ -41,11 +41,14 @@ static const float LS_LAUNCH_END_S = 0.15f; // locked this long ends a launch
 static const float LS_HANDOFF_S = 0.5f;     // locked this long, with the rpm below, is the hand-off to TrueShift
 static const float LS_HANDOFF_RPM = 150;    // the hand-off needs the engine at least this far over idle (rpm)
 static const float LS_PEDAL_REL_S = 0.4f;   // a pedal released this long ends a launch
+static const float LS_STOP_MARGIN = 150;    // the clutch opens when the start gear would sit this far over idle (rpm), as the stop threshold does
+static const float LS_ASSIST_REQ = 0.15f;   // the brake request of the stop assist, a placeholder until it is measured (request unit 0..1)
+static const float LS_HOLD_REQ = 0.6f;      // the brake request of a hold when Auto Hold does not say (its own default)
 
 // What one frame sees: telemetry, the vehicle model and the other modules' states, gathered in one place (the sim sets the same
 // fields through the real accessors).
 struct low_in {
-    float dt, kmh, thr, brake, rpm, idle, accel, clutch;
+    float dt, kmh, thr, brake, eff_brake, rpm, idle, accel, clutch;
     int gear, cruise, rolling, crawl_toggle, parking, hill;
     int start_gear;          // ts_start_gear for a gentle pull-away, 0 = unknown
     float top_kmh;           // the top of the owner's world: where the start gear reaches the end of the low-gear shift window
@@ -62,6 +65,11 @@ static double g_last;        // sim_s() of the last frame
 static float g_lock_s;       // how long the clutch has been locked
 static float g_rel_s;        // how long the pedal has been released during a launch
 static int g_n_trans;
+static int g_latch;          // the clutch is commanded open (STOPPING and the standstill); only the driver's pedal ends it
+static int g_assist;         // stop assist: 0 not asked, 1 running, 2 cancelled by the driver or not wanted this stop
+static int g_pre_gear;       // the gear preselected with the open clutch
+static float g_open_kmh;     // the speed where the start gear sits at the clutch-open rpm now
+static int g_dis_clutch, g_dis_gear;   // frames where what it would command differs from what the truck does (clutch open or closed, gear)
 
 static void to_state(int s, const char *why)
 {
@@ -82,7 +90,7 @@ static int rolling_state(const low_in &in)
 
 static int held_now(const low_in &in)
 {
-    return in.brake > LS_BRAKE_HOLD || in.cu.hold == 1 || in.cu.sg_hold || in.act_req > 0.01f || in.parking || in.hill;
+    return in.brake > LS_BRAKE_HOLD || in.cu.hold == 1 || in.cu.sg_hold || in.act_req > 0.01f || in.parking || in.hill || g_assist == 1;
 }
 
 static int settle(const low_in &in, const char **why)
@@ -141,9 +149,9 @@ static void low_step(const low_in &in)
         else if (g_lock_s >= LS_HANDOFF_S && in.rpm >= in.idle + LS_HANDOFF_RPM) { s = LOW_HANDED; why = "hand-off: clutch locked and engine over idle"; }
         break;
     case LOW_STOPPING:
-        if (in.kmh >= in.top_kmh) { s = LOW_HANDED; why = "above the top of the low-speed range"; }
+        if (in.kmh >= in.top_kmh && !g_latch) { s = LOW_HANDED; why = "above the top of the low-speed range"; }   // an open clutch is ours until the pedal
         else if (in.thr > LS_PEDAL_GO) {
-            if (in.clutch > 0.5f || in.gear == 0) { s = LOW_LAUNCH; why = "pedal before the stop with the clutch open"; }
+            if (g_latch || in.clutch > 0.5f || in.gear == 0) { s = LOW_LAUNCH; why = "pedal before the stop with the clutch open"; }
             else { s = rolling_state(in); why = "pedal before the stop with the clutch still closed"; }
         } else if (stopped) { s = held_now(in) ? LOW_STOPPED_HELD : LOW_STOPPED_FREE; why = "standstill"; }
         break;
@@ -183,6 +191,7 @@ static void gather(low_in *in, float dt)
     in->kmh = fabsf(T.speed) * 3.6f;
     in->thr = T.in_thr;
     in->brake = T.in_brake;
+    in->eff_brake = T.eff_brake;
     in->rpm = T.rpm;
     in->idle = ts_idle_rpm();
     in->accel = T.accel;
@@ -206,6 +215,82 @@ static void gather(low_in *in, float dt)
     in->game_why = !self ? "no gearbox" : !act_hooked() ? "no actuator hook" : fallback(*in);
 }
 
+// The speed where the start gear sits at the rpm the clutch opens at. Like the stop threshold: idle + 150 rpm and the game's own term
+// for the brake (brake squared times idle); with the pedals free the box opens by itself only with crawl off and no cruise, else at the
+// stock 0.8 idle.
+static float open_point_kmh(const low_in &in)
+{
+    float brake = fminf(fmaxf(in.brake, in.eff_brake), 1.0f);
+    float margin = brake >= LS_BRAKE_ON || (!in.crawl_toggle && !in.cruise) ? LS_STOP_MARGIN + brake * brake * in.idle : -0.2f * in.idle;
+    return vehicle_kmh_idle(in.start_gear, in.idle, margin);
+}
+
+// What the owner would command in this state. The clutch is a latch: once it is open (the start gear sat at its idle point, or the
+// box had it open) it stays open whatever the start gear does after that: a lower start gear is too late to matter, a higher one has its
+// idle point at a higher speed, so we are already under it and the clutch opens at once. Only the pedal ends it.
+static void low_command(const low_in &in)
+{
+    static int was;
+    int st = g_low.state, entered = st != was;
+    was = st;
+    float pedal = fmaxf(in.thr, in.cu.feed);
+    g_open_kmh = 0;
+    if (st != LOW_STOPPING && st != LOW_STOPPED_HELD && st != LOW_STOPPED_FREE) { g_latch = 0; g_assist = 0; }
+    g_low.would_gear = 0; g_low.would_clutch = NAN; g_low.would_brake = 0; g_low.would_thr = NAN;
+    switch (st) {
+    case LOW_STOPPING: {
+        g_open_kmh = open_point_kmh(in);
+        if (!g_latch && (in.kmh <= g_open_kmh || in.gear == 0)) {
+            g_latch = 1;
+            g_pre_gear = in.start_gear;
+            // the box opened the clutch by itself with both pedals free: it finishes the stop (the pedal and the brake always win)
+            g_assist = in.thr < LS_PEDAL_FREE && in.brake < LS_BRAKE_ON && !in.cruise && !in.crawl_toggle ? 1 : 2;
+            logv(2, "LowSpeed: clutch open at %.1f km/h (start gear %d, its idle point %.1f km/h, brake %.2f)%s", in.kmh, in.start_gear, g_open_kmh,
+                 g_assist == 1 ? ", stop assist" : "");
+        }
+        if (g_assist == 1 && (in.thr >= LS_PEDAL_FREE || in.brake >= LS_BRAKE_ON || in.cruise)) g_assist = 2;
+        g_low.would_gear = g_latch ? g_pre_gear : in.gear;
+        g_low.would_clutch = g_latch ? 1.0f : 0.0f;
+        g_low.would_brake = g_assist == 1 ? LS_ASSIST_REQ : 0;
+        g_low.would_thr = 0;
+        break;
+    }
+    case LOW_STOPPED_HELD: case LOW_STOPPED_FREE: {
+        g_latch = 1;
+        // held by us (Auto Hold, Stop&Go, the stop assist) the owner asks for the hold; the driver's brake, the parking brake and the game's
+        // hill hold hold without a request of ours
+        int by_us = in.cu.hold == 1 || in.cu.sg_hold || g_assist == 1;
+        g_low.would_gear = in.start_gear;
+        g_low.would_clutch = 1;
+        g_low.would_brake = st == LOW_STOPPED_HELD && by_us ? (in.cu.hold_req > 0 ? in.cu.hold_req : LS_HOLD_REQ) : 0;
+        g_low.would_thr = 0;
+        break;
+    }
+    case LOW_LAUNCH:
+        if (entered) g_pre_gear = in.kmh < LS_MOVE_KMH || in.gear < 1 ? in.start_gear : in.gear;   // the start gear for this pedal, held until the clutch is locked
+        g_low.would_gear = g_pre_gear;
+        g_low.would_clutch = in.cr.launch ? in.cr.launch_clutch : NAN;
+        g_low.would_thr = pedal;
+        break;
+    case LOW_ROLLING_LOW:
+        g_low.would_gear = in.gear;
+        g_low.would_clutch = 0;
+        g_low.would_thr = pedal;
+        break;
+    case LOW_CRAWL: case LOW_MANEUVER:
+        g_low.would_gear = in.gear;
+        g_low.would_clutch = in.cr.floor;
+        g_low.would_brake = st == LOW_CRAWL ? in.cr.brake : 0;
+        g_low.would_thr = st == LOW_CRAWL ? in.cr.add_thr : in.thr;
+        break;
+    default:   // GAME, HANDED, REVERSE: the game's and TrueShift's own: no wish
+        break;
+    }
+    // the shadow's account: how often the truck does something else than the owner would
+    if (g_low.would_clutch == g_low.would_clutch && (st == LOW_STOPPING || st == LOW_STOPPED_HELD || st == LOW_STOPPED_FREE) && (g_low.would_clutch > 0.5f) != (in.clutch > 0.5f)) g_dis_clutch++;
+    if (g_low.would_gear > 0 && (g_latch || st == LOW_LAUNCH) && g_low.would_gear != in.gear) g_dis_gear++;
+}
+
 static void ls_frame()
 {
     if (p_trace <= 0) return;
@@ -219,17 +304,14 @@ static void ls_frame()
     g_lock_s = in.locked ? g_lock_s + in.dt : 0;
     g_low.since_s += in.dt;
     low_step(in);
-    // what the owner would command (pass 1: the gear that is in; the clutch and the brake follow the state)
-    g_low.would_gear = in.gear;
-    g_low.would_clutch = NAN;
-    g_low.would_brake = 0;
-    g_low.would_thr = NAN;
+    low_command(in);
     static double csv_at;
     if (g_csv && now - csv_at >= 0.1) {
         csv_at = now;
-        fprintf(g_csv, "%.2f,%s,%.2f,%d,%.3f,%.3f,%.0f,%.0f,%.3f,%d,%.2f,%.2f,%.3f,%.3f,%d,%d,%d,%d,%.2f,%.2f,%.3f,%.1f,%s\n", wall_s(), low_state_name(g_low.state), in.kmh, in.gear,
-                in.thr, in.brake, in.rpm, in.idle, in.clutch, in.start_gear, in.top_kmh, g_low.would_clutch, g_low.would_brake, g_low.would_thr, in.cr.crawl, in.cr.launch,
-                in.cu.hold, in.cu.sg_hold, in.cu.feed, in.accel, in.act_req, g_low.since_s, g_low.reason);
+        fprintf(g_csv, "%.2f,%s,%.2f,%d,%.3f,%.3f,%.0f,%.0f,%.3f,%d,%.2f,%d,%.2f,%d,%d,%.2f,%.3f,%.3f,%d,%d,%d,%d,%.2f,%.2f,%.3f,%d,%d,%.1f,%s\n", wall_s(), low_state_name(g_low.state),
+                in.kmh, in.gear, in.thr, in.brake, in.rpm, in.idle, in.clutch, in.start_gear, in.top_kmh, g_low.would_gear, g_open_kmh, g_latch, g_assist,
+                g_low.would_clutch, g_low.would_brake, g_low.would_thr, in.cr.crawl, in.cr.launch, in.cu.hold, in.cu.sg_hold, in.cu.feed, in.accel, in.act_req,
+                g_dis_clutch, g_dis_gear, g_low.since_s, g_low.reason);
     }
     static double flushed;
     if (g_csv && wall_s() - flushed > 2) { flushed = wall_s(); fflush(g_csv); csv_cap(&g_csv, "lowspeed.csv"); }
@@ -239,6 +321,8 @@ static void ls_frame()
 static void ls_reset(int level, const char *why)
 {
     g_fresh = 1;
+    g_latch = g_assist = 0;   // derived again too: a stop that is already under the start gear's idle point opens the clutch at once
+    g_lock_s = g_rel_s = 0;
     g_low.since_s = 0;
 }
 
@@ -250,7 +334,7 @@ static void ls_start()
     if (p_owner > 0) logline("lowspeed owner: not wired yet");
     if (p_trace <= 0) { snprintf(g_status, sizeof g_status, "off (ini)"); return; }
     g_csv = open_out("lowspeed.csv", "w");
-    if (g_csv) fputs("t,state,kmh,gear,thr,brake,rpm,idle,clutch,start_gear,top_kmh,would_clutch,would_brake,would_thr,crawl,launch,ah,sg_hold,feed,accel,act_req,since_s,reason\n", g_csv);
+    if (g_csv) fputs("t,state,kmh,gear,thr,brake,rpm,idle,clutch,start_gear,top_kmh,would_gear,open_kmh,latch,assist,would_clutch,would_brake,would_thr,crawl,launch,ah,sg_hold,feed,accel,act_req,dis_clutch,dis_gear,since_s,reason\n", g_csv);
     snprintf(g_status, sizeof g_status, "shadow: watches and decides, applies nothing%s", g_csv ? "" : " (no csv)");
 }
 
