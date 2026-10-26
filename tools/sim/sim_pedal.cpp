@@ -500,6 +500,7 @@ static void truck_curve_checks()
         for (int i = 0; i < 3; i++) {
             int md = i == 0 ? MODE_ECO : i == 1 ? MODE_NORMAL : MODE_POWER;
             world(9, 45, md, mass);
+            { float sp = T.speed; T.speed = 0; truck_curve(); T.speed = sp; }   // the factor is taken at a standstill only
             steady(0.5f);
             float base = md == MODE_ECO ? p_exp_eco : md == MODE_POWER ? p_exp_pw : p_exp_norm;
             float k = fminf(1.15f, fmaxf(0.8f, sqrtf(peak_power() / mass / 12))), want = powf(0.5f, base * k);
@@ -511,6 +512,20 @@ static void truck_curve_checks()
         printf("   %2.0f t (%.1f kW/t): pedal 0.5 wishes Eco %.3f, Normal %.3f, Power %.3f\n", mass / 1000, peak_power() / mass, q[0], q[1], q[2]);
         prev = q[1];
     }
+    // the factor never changes while driving, and falls back to 1 when the truck is not known or after a new load
+    world(9, 45, MODE_NORMAL, 17000);
+    { float sp = T.speed; T.speed = 0; truck_curve(); T.speed = sp; }
+    float k17 = S.truck_k;
+    V.mass = 40000; truck_curve();
+    check(S.truck_k == k17, "D2 moving: the mass changing to 40 t leaves the factor at x%.3f (was x%.3f)", S.truck_k, k17);
+    T.speed = 0; V.mass_ok = 0; truck_curve();
+    check(S.truck_k == 1, "D2 standing, mass unknown: factor x%.3f, 1 expected", S.truck_k);
+    V.mass_ok = 1; V.electric = 1; truck_curve();
+    check(S.truck_k == 1, "D2 standing, electric: factor x%.3f, 1 expected", S.truck_k);
+    V.electric = 0; truck_curve();
+    check(S.truck_k != 1, "D2 standing, known diesel at 40 t: factor x%.3f, not 1", S.truck_k);
+    m_pedal.reset(RESET_LOAD, "sim");
+    check(S.truck_k == 1, "D2 after a new load: factor x%.3f, 1 until the next standstill", S.truck_k);
     p_ref_kwt = 0;
     world(9, 45, MODE_NORMAL, 33000);
     steady(0.5f);
