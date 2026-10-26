@@ -492,6 +492,29 @@ static int test_lane_state()
     return bad;
 }
 
+// cruise_switches_on: the cruise coming on (Set, later Resume) switches lane keeping on only with the key at 1; at 0 its state stays
+static int test_cruise_lane_on()
+{
+    int bad = 0;
+    for (int key : { 0, 1 }) {
+        apply({ "mode 2", 2 }); p_needs_cc = 1; p_cc_lka = key; p_min_kmh = 20; g_pause = 0; T.speed = 80 / 3.6f;
+        memset(GA, 0, sizeof GA);
+        auto run = [&](float cc, double s) { T.cruise = cc; for (int i = 0; i < s * 60; i++) { t_now += 1.0 / 60; cruise_lane_on(); } };
+        run(0, 1); run(80 / 3.6f, 1);
+        int on_set = (GA[0x1d1] & 0x20) != 0;
+        run(0, 1); GA[0x1d1] &= ~0x20; run(80 / 3.6f, 1);   // off again by its key while the cruise was off, then Resume
+        int on_resume = (GA[0x1d1] & 0x20) != 0;
+        GA[0x1d1] |= 0x20; run(0, 1); run(80 / 3.6f, 1);   // on by its key: the cruise never switches it off
+        int on_kept = (GA[0x1d1] & 0x20) != 0;
+        int b = on_set != key || on_resume != key || !on_kept;
+        printf("Cruise switches lane keeping on, cruise_switches_on = %d: after Set %s, after Resume %s, on by its key and Resume %s -> %s\n", key,
+               on_set ? "on" : "off", on_resume ? "on" : "off", on_kept ? "on" : "off", b ? "FAILED" : "ok");
+        bad |= b;
+    }
+    T.cruise = 0; p_needs_cc = 0; p_cc_lka = 0; memset(GA, 0, sizeof GA);
+    return bad;
+}
+
 // ts5b 387.4 s: the game's law saturated at -1, the same as our clamped output, so the hook took it for "not run", filter_a then
 // thought lane keeping was off and released the wheel in the bend. Saturated with the lane-keeping bit on: A must keep building;
 // with the bit off our law must not keep a stale -1 going (what the game does with its own stale u is the game's).
@@ -802,5 +825,5 @@ int main(int argc, char **argv)
             double pk, opp, os, late; run_driver(c, nom, kmh, &pk, &opp, &os, &late);
             printf("  %-14s %2.0f km/h  peak A %.4f  mean A opposing the driver %.4f  overshoot after letting go %.2f m  |o1| at 14-32 s after %.2f\n", c.name, kmh, pk, opp, os, late);
         }
-    return test_indicator() | test_indicator_key() | test_ffb() | test_saturation() | test_lane_state();
+    return test_indicator() | test_indicator_key() | test_ffb() | test_saturation() | test_lane_state() | test_cruise_lane_on();
 }

@@ -26,7 +26,7 @@
 static float *g_minp, p_on_kmh, p_a_max, p_a_leak, p_min_kmh, p_mode, p_gain, p_dead, p_tone;
 static float p_runaway, p_bend_out, p_bias, p_blend, p_blend_max, p_f_pull, p_follow, p_f_act, p_f_hold, p_f_win, p_f_max, p_f_tau, p_f_ret, p_f_rate, p_f_back, p_f_bend;   // shared steering
 static float p_edge_look, p_edge_from, p_edge_full, p_backoff, p_drv_rate, p_drv_follow, p_drv_attack, p_drv_release, p_drv_leak;
-static float p_needs_cc, p_rb_off, p_umax, p_ind_pause, p_ind_resume, p_ind_off, p_keep_on, p_nonffb, p_slow_resume;
+static float p_needs_cc, p_cc_lka, p_rb_off, p_umax, p_ind_pause, p_ind_resume, p_ind_off, p_keep_on, p_nonffb, p_slow_resume;
 static float p_sway, p_sw_cut, p_sw_rec, p_sw_amp;
 static float p_learn, p_l_rate, p_l_min, p_l_max, p_l_update, p_l_save;
 static float p_head_ref, p_k_off, p_k_head, p_k_afb, p_bend_a, p_edge_boost, p_rate2, p_i2, p_i2max;
@@ -95,7 +95,8 @@ static param g_params[] = {
     { "on_kmh", &p_on_kmh, 39, "keep_on = 0: after dropping below min_kmh it only comes back from this speed" },
     { "indicator_pause", &p_ind_pause, 1, "1 = an indicator (one side, not the hazards) pauses the assist: the wheel is yours for the lane change; after the indicator goes off and a lane is found again (or 4 s) it comes back gently over 1 s. 0 = only no steering back against the indicator" },
     { "indicator_off", &p_ind_off, 1, "with indicator_pause: the indicator also switches the game's lane keeping itself off (silently), and it is switched on again after the lane change. Not when you switch it back on yourself meanwhile" },
-    { "needs_cruise", &p_needs_cc, 1, "1 = lane centering steers only while the cruise control is on, and switching the cruise on switches lane keeping on (like a travel assist); without the cruise only the game's warning stays. 0 = also without the cruise" },
+    { "needs_cruise", &p_needs_cc, 1, "1 = lane centering steers only while the cruise control is on; without the cruise only the game's warning stays. 0 = also without the cruise" },
+    { "cruise_switches_on", &p_cc_lka, 0, "with needs_cruise: 1 = switching the cruise on (also Resume) switches lane keeping on (like a travel assist); 0 = the cruise leaves lane keeping as it is (roundabout_off still switches it back on at the Resume after a roundabout)" },
     { "roundabout_off", &p_rb_off, 1, "1 = when the cruise control cancels itself for a roundabout, lane keeping goes off with it (a roundabout is yours to steer), and comes back on when the cruise is resumed (within 90 s). Junctions: use your indicator" },
     { "indicator_resume", &p_ind_resume, 0, "with indicator_pause: lane keeping that went off during the lane change (above min_kmh) is switched on again afterwards (sets the game's lane-keeping flag). Off by default: the game does not switch it off for an indicator, and with keep_on not for speed, so it would mostly undo your own key press" },
     { "non_ffb_mode", &p_nonffb, 0, "without a force-feedback wheel (keyboard, gamepad, mouse steering: the game adds the assist to the steering angle instead of turning the wheel; recognized from the steering data in ~1 s): 0 = the game's own law (mode 2 is fitted on FFB wheels), 2 = mode 2 anyway (not tuned)" },
@@ -1114,7 +1115,7 @@ static void roundabout_off()
     }
 }
 
-// The cruise coming on switches lane keeping on (needs_cruise): the lane toggle then only decides while the cruise runs
+// The cruise coming on switches lane keeping on (needs_cruise and cruise_switches_on): the lane toggle then only decides while the cruise runs
 static void cruise_lane_on()
 {
     static int prev_cc; static double cc_on_at;
@@ -1123,7 +1124,7 @@ static void cruise_lane_on()
     if (cc && !prev_cc) cc_on_at = now;
     prev_cc = cc;
     static double done_at = -1;
-    if (p_needs_cc > 0 && cc && cc_on_at > 0 && now - cc_on_at > 0.3 && done_at < cc_on_at && !g_pause) {
+    if (p_needs_cc > 0 && p_cc_lka > 0 && cc && cc_on_at > 0 && now - cc_on_at > 0.3 && done_at < cc_on_at && !g_pause) {
         char *ga = game_actor_safe();
         float kmh = fabsf(T.speed) * 3.6f;
         if (!ga || kmh <= fmaxf(p_min_kmh, 5) + 2) return;   // too slow yet (a Resume in a jam): try again when the speed is there

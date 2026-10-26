@@ -290,6 +290,7 @@ SETUP_GROUPS = [
      "about": ["How lane centering behaves."],
      "knobs": [
         {"kind": "toggle", "label": "Off at a roundabout", "help": "When the cruise cancels itself for a roundabout, lane centering goes off too, and back on at the next Resume.", "keys": [["lane", "roundabout_off", 1, 0]]},
+        {"kind": "toggle", "label": "Cruise switches it on", "help": "Switching the cruise on (also Resume) switches lane centering on. Off: the cruise leaves it as it is.", "keys": [["lane", "cruise_switches_on", 1, 0]]},
         {"kind": "toggle", "label": "Tones when it switches on, off or pauses", "help": "Rising for on, falling for off.", "keys": [["lane", "tone", 1, 0]]}]},
     {"id": "crawl", "off_when": ["creep", "enabled", "0"], "title": "Crawl mode", "section": "creep",
      "tuning": [{"name": "Standard", "desc": "5 km/h", "over": {}},
