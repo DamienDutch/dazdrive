@@ -431,6 +431,36 @@ static void junction_test()
     if (bad) exit(1);
 }
 
+// ======================================================================= session reset (cr_reset): nothing timed or filtered carries over
+// The body's timers and filters that used to be function-local statics (and so lived through a teleport or a load) are module state now.
+static void reset_test()
+{
+    int bad = 0;
+    memset(GA, 0, sizeof GA); g_low_ok = 1;
+    s_steer_until = s_jn_ignore_until = t_now + 5; s_stuck_since = t_now - 1; s_acc_f = 3; s_acc_init = 1; s_desc_braking = 1;
+    s_cr_prev = 40; s_cr_rate = -2; s_cr_since = t_now - 1;
+    cr_reset(RESET_SOFT, "sim");
+    int soft_ok = s_steer_until == 0 && s_jn_ignore_until == 0 && s_stuck_since == 0 && s_acc_init == 0 && s_desc_braking == 0 &&
+                  s_cr_prev != s_cr_prev && s_cr_rate != s_cr_rate && s_cr_since < 0;
+    printf("reset SOFT: steer / junction-ignore / stuck timers, acceleration filter, descent hysteresis, crossing filter cleared: %s\n", soft_ok ? "yes" : "NO");
+    bad |= !soft_ok;
+    // the pedal curve blend after a mode change: a SOFT reset (pause menu) keeps a blend that is under way, a HARD one (other truck, teleport) drops it
+    float se = p_pc_eco, sp = p_pc_pw, st = p_pc_travel; p_pc_eco = 1.35f; p_pc_pw = 1.6f; p_pc_travel = 1.0f;
+    s_pb.from = s_pb.to = -1; s_pb.travel = 0; s_pb.prev = -1; s_pb.b = 1;
+    pedal_blend(MODE_ECO, 0.5f);
+    float held = pedal_blend(MODE_POWER, 0.5f);        // switched to Power, pedal held: still the Eco curve (0.39)
+    cr_reset(RESET_SOFT, "sim");
+    float after_soft = pedal_blend(MODE_POWER, 0.5f);  // still blending: Eco
+    cr_reset(RESET_HARD, "sim");
+    float after_hard = pedal_blend(MODE_POWER, 0.5f);  // no blend in progress any more: the Power curve (0.67)
+    printf("reset and the pedal blend: held %.2f, after SOFT %.2f (both 0.39, the blend goes on), after HARD %.2f (0.67, Power at once)\n", held, after_soft, after_hard);
+    bad |= fabsf(held - 0.39f) > 0.01f || fabsf(after_soft - 0.39f) > 0.01f || fabsf(after_hard - 0.67f) > 0.01f;
+    p_pc_eco = se; p_pc_pw = sp; p_pc_travel = st;
+    s_pb.from = s_pb.to = -1; s_pb.travel = 0; s_pb.prev = -1; s_pb.b = 1;
+    printf("reset test: %s\n", bad ? "FAIL" : "ok");
+    if (bad) exit(1);
+}
+
 // ======================================================================= Auto Hold
 // Truck stops with the brake, the driver lets go, waits, then launches (gentle / hard). Signed speed, static brake,
 // engine with a clutch that bites 0.15 s after the pedal (box engages when the throttle gate lets the pedal through)
@@ -729,7 +759,6 @@ int main(int argc, char **argv)
     for (int i = 0; i < m_cruise.n_params; i++) *m_cruise.params[i].val = m_cruise.params[i].def;
     keys_test();
     g_keys_ok = 0; g_ret_ok = 0;
-    junction_test();
     memset(GA, 0, sizeof GA);
     g_road = road_flat;
     for (int ours = 0; ours <= 1; ours++) run("accelerate 20 -> 80 km/h, flat (shift bursts?)", ours, 80, 60, c_none, 20);
@@ -889,5 +918,8 @@ int main(int argc, char **argv)
         printf("Auto Hold test: %s\n", bad ? "FAIL" : "ok");
         if (bad) return 1;
     }
+    // last: these leave controller state behind (the stock PI's memory, our brake slew), which would shift the runs above
+    junction_test();
+    reset_test();
     return 0;
 }

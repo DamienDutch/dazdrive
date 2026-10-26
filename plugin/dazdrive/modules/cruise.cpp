@@ -167,6 +167,13 @@ static int s_haz_ours;                                  // emergency hazards we 
 static double s_haz_hard_at, s_haz_go_at;
 static double s_gacc_at;                                // g_acc poll clock
 static float s_gacc_seen = NAN;
+static double s_steer_until;                            // cruise_body: no gas while the wheel is turned, until
+static double s_jn_ignore_until;                        // cruise_body: junctions left alone after the gas pedal, until
+static float s_acc_f; static int s_acc_init;            // cruise_body: filtered acceleration (km/h/s) for the approach look-ahead
+static int s_desc_braking;                              // cruise_body: descent service-brake hysteresis
+static double s_stuck_since;                            // cruise_body: full throttle without moving since (0 = not)
+static struct { int from, to; float travel, prev, b; } s_pb = { -1, -1, 0, -1, 1 };   // pedal_blend: the curve blend after a mode change
+static float s_cr_prev = NAN, s_cr_rate = NAN; static double s_cr_since = -1, s_cr_said;   // own_acc: crossing-traffic gap filter
 
 // Fields of game_actor (1.60, cruise-re notes § 4).
 enum { GA_ON = 0x199, GA_SET = 0x19c, GA_ACC_TARGET = 0x1a0, GA_LEAD_M = 0x1a8, GA_BRAKE_REQ = 0x17c };
@@ -222,17 +229,16 @@ static float pedal_shape(int md, float r)
 // stays until the pedal has travelled pedal_curve_switch_travel/4, then it blends into the new one over the rest of that travel.
 static float pedal_blend(int md, float r)
 {
-    static int from = -1, to = -1; static float travel, prev = -1, b = 1;
-    if (to < 0) { from = to = md; }
-    if (md != to) { from = b > 0.5f ? to : from; to = md; travel = 0; b = p_pc_travel > 0 ? 0 : 1; }
-    if (prev >= 0 && b < 1) {
-        travel += fabsf(r - prev);
+    if (s_pb.to < 0) { s_pb.from = s_pb.to = md; }
+    if (md != s_pb.to) { s_pb.from = s_pb.b > 0.5f ? s_pb.to : s_pb.from; s_pb.to = md; s_pb.travel = 0; s_pb.b = p_pc_travel > 0 ? 0 : 1; }
+    if (s_pb.prev >= 0 && s_pb.b < 1) {
+        s_pb.travel += fabsf(r - s_pb.prev);
         float T0 = fmaxf(p_pc_travel, 0.01f);
-        b = fminf(1.0f, fmaxf(0.0f, (travel - 0.25f * T0) / (0.75f * T0)));
-        if (b >= 1) from = to;
+        s_pb.b = fminf(1.0f, fmaxf(0.0f, (s_pb.travel - 0.25f * T0) / (0.75f * T0)));
+        if (s_pb.b >= 1) s_pb.from = s_pb.to;
     }
-    prev = r;
-    return from == to || b >= 1 ? pedal_shape(to, r) : pedal_shape(from, r) + (pedal_shape(to, r) - pedal_shape(from, r)) * b;
+    s_pb.prev = r;
+    return s_pb.from == s_pb.to || s_pb.b >= 1 ? pedal_shape(s_pb.to, r) : pedal_shape(s_pb.from, r) + (pedal_shape(s_pb.to, r) - pedal_shape(s_pb.from, r)) * s_pb.b;
 }
 static float band_up()
 {
@@ -757,12 +763,11 @@ static float cruise_body(void *ga, float dt, float pedal)
         // 3-4 side entrances, the route turned there, he drove straight on and we braked to 20 for each). Leave junctions and roundabouts alone
         // for 6 s (Damien 12-10: first 12); the bends of the road itself still count.
         {
-            static double ignore_until;
             if (vj == vj && T.in_thr > 0.3f && kmh < 60 && ji.dist_m < 250 && (kmh > ji.limit_ms * 3.6f - 5)) {
-                if (wall_s() >= ignore_until) logv(1, "Cruise: gas pedal at a junction ahead (%.0f m, %.0f\xc2\xb0 \xe2\x86\x92 %.0f km/h): junctions are left alone for 6 s", ji.dist_m, ji.turn_deg, ji.limit_ms * 3.6f);
-                ignore_until = wall_s() + 6;
+                if (wall_s() >= s_jn_ignore_until) logv(1, "Cruise: gas pedal at a junction ahead (%.0f m, %.0f\xc2\xb0 \xe2\x86\x92 %.0f km/h): junctions are left alone for 6 s", ji.dist_m, ji.turn_deg, ji.limit_ms * 3.6f);
+                s_jn_ignore_until = wall_s() + 6;
             }
-            if (wall_s() < ignore_until) vj = NAN;
+            if (wall_s() < s_jn_ignore_until) vj = NAN;
             // a gentle route turn without an indicator: you are going straight on (Damien 25-10: crossings, 548 s and 1455 s)
             if (vj == vj && p_jn_signal > 0 && !ji.roundabout && ji.turn_deg < p_jn_signal) {
                 unsigned char fl = *(unsigned char *)(g + 0x1d0);   // game_actor lights: bit 4 left, bit 8 right (both = hazards)
@@ -863,22 +868,20 @@ static float cruise_body(void *ga, float dt, float pedal)
     // No gas while the wheel is turned (Damien 12-10: on a roundabout it gave gas with the wheel still round): hold the speed
     // until it is straight again (+ 0.8 s)
     {
-        static double steer_until;
         float st_abs = fabsf(T.in_steer);  // a keyboard or gamepad tap sits at full lock: only an analog wheel counts
-        if (st_abs > (kmh > 60 ? 0.25f : 0.15f) && st_abs < 0.95f) steer_until = wall_s() + 0.8;
-        if (wall_s() < steer_until && kmh > 8 && target > kmh) target = kmh;
+        if (st_abs > (kmh > 60 ? 0.25f : 0.15f) && st_abs < 0.95f) s_steer_until = wall_s() + 0.8;
+        if (wall_s() < s_steer_until && kmh > 8 && target > kmh) target = kmh;
     }
     float e = target - kmh;
     // Overshoot (Damien 13-10: a resume from 68 to 90 gave full throttle for 12 s into a descent, 92.5 km/h): the P term looks at the
     // error we will have in approach_s seconds at the speed we gain now, so the throttle eases off before the set speed is reached.
-    static float acc_f; static int acc_init;
     float ep = e;
     {
         float acc_kmhs = T.accel * 3.6f;
-        if (!acc_init || !C.on) { acc_f = acc_kmhs; acc_init = 1; }
-        else acc_f += (acc_kmhs - acc_f) * fminf(1.0f, dt / 0.5f);
+        if (!s_acc_init || !C.on) { s_acc_f = acc_kmhs; s_acc_init = 1; }
+        else s_acc_f += (acc_kmhs - s_acc_f) * fminf(1.0f, dt / 0.5f);
         float tau = p_approach_s * (md == MODE_ECO ? 1.2f : (md == MODE_POWER ? 0.6f : 1.0f));
-        if (tau > 0 && acc_f > 0) ep = e - tau * acc_f;
+        if (tau > 0 && s_acc_f > 0) ep = e - tau * s_acc_f;
     }
     // Too fast for a bend and the throttle is already off: a gentle brake request
     // (game_actor+0x17c, 0..1; the game slews it and uses engine brake/retarder first).
@@ -899,12 +902,11 @@ static float cruise_body(void *ga, float dt, float pedal)
     // over what the cruise itself grants (set, or a higher target from a dip, momentum or a roll boost), with hysteresis: it starts when
     // the truck is not slowing and holds until it is clearly slowing or back inside the allowance, so its own braking does not switch
     // it off every second (pulsing). Not while rolling in neutral (the roll ends on a brake).
-    static int desc_braking;
     if (s_down_now && T.cruise > 0.5f && !g_rolling) {
         float allow = fmaxf(0.0f, p_desc_kmh) * band_scale(T.cruise) + 2.0f, over = kmh - (fmaxf(set, target) + allow);
-        desc_braking = desc_braking ? (over > -1.0f && T.accel > -0.15f) : (over > 0 && T.accel > -0.05f);
-        if (desc_braking) s_want_curve = fmaxf(s_want_curve, fminf(0.4f, 0.06f * fmaxf(over, 0.5f)));
-    } else desc_braking = 0;
+        s_desc_braking = s_desc_braking ? (over > -1.0f && T.accel > -0.15f) : (over > 0 && T.accel > -0.05f);
+        if (s_desc_braking) s_want_curve = fmaxf(s_want_curve, fminf(0.4f, 0.06f * fmaxf(over, 0.5f)));
+    } else s_desc_braking = 0;
     float kp = 0.25f, ki = 0.08f, rate = 0.6f;               // Normal / M (per km/h, per km/h·s, per s)
     if (md == MODE_ECO) { kp = 0.18f; ki = 0.05f; rate = 0.4f; }        // Eco: gentle, lets it sag a bit
     else if (md == MODE_POWER) { kp = 0.35f; ki = 0.12f; rate = 1.0f; }  // Power: keen
@@ -955,12 +957,11 @@ static float cruise_body(void *ga, float dt, float pedal)
     // cruise gave full throttle for 14 s, engine racing in neutral): low air, or full throttle without moving for 2 s
     // → our throttle 0 and the integrator reset, until the truck moves again.
     {
-        static double stuck_since;
         int air_bad = T.air_warning || (T.air_psi > 1 && T.air_psi < p_air_min);
         int stuck = u > 0.5f && kmh < 2 && T.in_thr < 0.02f;
-        if (!stuck) stuck_since = 0;
-        else if (!stuck_since) stuck_since = wall_s();
-        if (air_bad || (stuck_since && wall_s() - stuck_since > 4)) { C.u = 0; C.i = 0; g_feed = 0; u = 0; }
+        if (!stuck) s_stuck_since = 0;
+        else if (!s_stuck_since) s_stuck_since = wall_s();
+        if (air_bad || (s_stuck_since && wall_s() - s_stuck_since > 4)) { C.u = 0; C.i = 0; g_feed = 0; u = 0; }
     }
     return u > pedal ? u : pedal;
 }
@@ -1159,22 +1160,21 @@ static void own_acc(char *g, float dt)
     // Crossing traffic (friend 11-10: cruise at ~40 km/h into roundabouts, down to a stop 3-4 times): the radar's lead
     // speed is absolute, so a car crossing in front drives at ~25 km/h while the gap closes at our own speed. Following
     // it is wrong; it is gone in a moment. Measured gap rate (0.4 s filter) against what the lead's speed explains.
-    static float cr_prev = NAN, cr_rate = NAN; static double cr_since = -1, cr_said;
-    if (cr_prev == cr_prev && fabsf(lead - cr_prev) < 10) {
-        float r = (lead - cr_prev) / dt;
-        cr_rate = cr_rate == cr_rate ? cr_rate + (r - cr_rate) * fminf(1, dt / 0.4f) : r;
-    } else cr_rate = NAN;
-    cr_prev = lead;
+    if (s_cr_prev == s_cr_prev && fabsf(lead - s_cr_prev) < 10) {
+        float r = (lead - s_cr_prev) / dt;
+        s_cr_rate = s_cr_rate == s_cr_rate ? s_cr_rate + (r - s_cr_rate) * fminf(1, dt / 0.4f) : r;
+    } else s_cr_rate = NAN;
+    s_cr_prev = lead;
     int crossing = 0;
-    if (p_acc_cross > 0 && cr_rate == cr_rate && lv > 3.0f && v > 3.0f && opening - cr_rate > fmaxf(2.5f, 0.5f * lv)) {
-        if (cr_since < 0) cr_since = wall_s();
-        crossing = wall_s() - cr_since > 0.4;
-        if (crossing && wall_s() - cr_said > 10) {
-            cr_said = wall_s();
+    if (p_acc_cross > 0 && s_cr_rate == s_cr_rate && lv > 3.0f && v > 3.0f && opening - s_cr_rate > fmaxf(2.5f, 0.5f * lv)) {
+        if (s_cr_since < 0) s_cr_since = wall_s();
+        crossing = wall_s() - s_cr_since > 0.4;
+        if (crossing && wall_s() - s_cr_said > 10) {
+            s_cr_said = wall_s();
             logv(1, "Cruise: own ACC passes crossing traffic at %.0f m (it drives %.0f km/h, the gap closes at %.0f km/h; we %.0f), junction ahead %.0f m",
-                    lead, lv * 3.6f, -cr_rate * 3.6f, kmh, route_junction_m());
+                    lead, lv * 3.6f, -s_cr_rate * 3.6f, kmh, route_junction_m());
         }
-    } else cr_since = -1;
+    } else s_cr_since = -1;
     if (crossing) want = fmaxf(want, fminf(kmh, set));
     // level 1: the own ACC slowing hard for a lead (friend 11-10: cruise at ~40 km/h into roundabouts, 3-4 times down
     // to a stop with no pedal; with log_level 1 nothing showed why)
@@ -1184,7 +1184,7 @@ static void own_acc(char *g, float dt)
         if (want < fmaxf(10, 0.4f * kmh) && kmh > 15 && now_s - said_slow > 10) {
             said_slow = now_s;
             logv(1, "Cruise: own ACC slows for a lead at %.0f m, %.0f km/h (we %.0f, set %.0f, gap %+.1f m/s, from its speed %+.1f): "
-                    "target %.0f km/h, junction ahead %.0f m", lead, lv * 3.6f, kmh, set, cr_rate, lv - v, want, route_junction_m());
+                    "target %.0f km/h, junction ahead %.0f m", lead, lv * 3.6f, kmh, set, s_cr_rate, lv - v, want, route_junction_m());
         }
     }
     if (!OA.on) {
@@ -2146,10 +2146,13 @@ static void cr_reset(int level, const char *why)
     s_lead_v = s_acc_game = s_acc_own = s_dstar = NAN;
     s_radar.at = 0;
     OA.on = 0;
-    // PI: bumpless restart; stop&go and descent/curve hysteresis
+    // PI: bumpless restart; stop&go and descent/curve hysteresis; the body's timers and filters
     C.on = 0; C.u = C.i = 0;
     g_sg_hold = 0; g_feed = 0; g_stopped_at = 0;
-    s_curve_braking = 0;
+    s_curve_braking = 0; s_desc_braking = 0;
+    s_acc_f = 0; s_acc_init = 0;
+    s_steer_until = s_jn_ignore_until = 0; s_stuck_since = 0;
+    s_cr_prev = s_cr_rate = NAN; s_cr_since = -1; s_cr_said = 0;
     s_down_now = 0; s_dip = 0; s_dip_spent = 0; s_dip_at = 0; s_flat_since = 0; s_desc_at = 0;
     s_gacc_at = 0;
     // emergency hazards: ours go off
@@ -2165,6 +2168,7 @@ static void cr_reset(int level, const char *why)
         g_smart_ours = NAN;
         if (g_acc && g_acc_player == g_acc_player && g_acc_ours == g_acc_ours) game_cvar_set(g_acc, g_acc_player);
         g_acc_ours = NAN;
+        s_pb.from = s_pb.to = -1; s_pb.travel = 0; s_pb.prev = -1; s_pb.b = 1;   // pedal curve: another truck / place, no blend in progress
     }
 }
 

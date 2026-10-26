@@ -185,6 +185,9 @@ static struct {
     const char *unsupported; // why this truck is left to the game's own automatic (NULL = fine)
     float rpm_odd_s;        // seconds the rpm did not follow the speed model at all (torque converter?)
     int manual_logged;
+    float pk;               // decide_gear: the steepest grade (%) of the last seconds, fading 0.15 %/s (the climb the upshift reckons with)
+    double pk_at;           // when it was last updated
+    double gap_since;       // tail_pre: parked in the gearbox's gap state (gear 0, a target, clutch open) while moving since; 0 = not
 } S;
 
 enum { ROLL = 100 };        // decide_gear: "put it in neutral" (eco-roll)
@@ -482,6 +485,7 @@ static void ts_reset(int level, const char *why)
     S.ours_at = S.shift_at = none;          // dwell and take-over timers must not hold a shift back after a pause
     S.top_at = none; S.crest_ref = 0; S.crest_said = 0;  // no "over the top" hold across a teleport
     S.blocked_log_at = 0;
+    S.gap_since = 0;                        // a pause in the gap state is not a stuck shift (the timer starts again)
     S.pedal_prev = clampf(T.in_thr, 0, 1);
     if (level >= RESET_LOAD) {
         S.mass_at = none;                   // read the mass again at once
@@ -504,6 +508,7 @@ static void ts_reset(int level, const char *why)
         S.rpm_odd_s = 0;
         S.unsupported = NULL;
         memset(S.grade_hist, 0, sizeof S.grade_hist);
+        S.pk = -99; S.pk_at = 0;            // the grade peak belongs to the road we left
         S.letter_state = -1;
         S.cc_thr = 0;
         S.demand = 0;
@@ -1198,10 +1203,9 @@ static int decide_gear(void *self, const char **why)
     // On a climb the grade that counts is the steepest of now, the last seconds (a peak that fades 0.15 %/s) and the route
     // ahead (Damien 11-10, ride 3 at 400 s: 8 -> 9 in a 4.1 % dip of a 5-6 % climb at 54 km/h, back to 8 after 1.6 s, lugging).
     // The speed lost in the shift is reckoned with that grade too, and a climb asks a real margin, not 0.02-0.05 m/s2.
-    static double pk_at; static float pk = -99;
     float gp = grade_pct();
-    pk = fmaxf(gp, pk - 0.15f * (float)clampf((float)(now - pk_at), 0, 60)); pk_at = now;
-    float g_up = gp > 1.5f ? fmaxf(gp, pk) : gp;   // the peak only while still climbing (over the crest it is the route's job)
+    S.pk = fmaxf(gp, S.pk - 0.15f * (float)clampf((float)(now - S.pk_at), 0, 60)); S.pk_at = now;
+    float g_up = gp > 1.5f ? fmaxf(gp, S.pk) : gp;   // the peak only while still climbing (over the crest it is the route's job)
     if (g_ahead == g_ahead) g_up = fmaxf(g_up, g_ahead);
     float f_up = fmaxf(f_res, resist_grade(v, g_up));
     float v2u = fmaxf(0.5f, v - f_up / S.mass * S.eng.shift_time);
@@ -1463,18 +1467,17 @@ static void tail_pre(void *self)
     // left gear 0 and the clutch open for 11 s at 38 -> 25 km/h: our cruise throttle waits for the shift to end, the
     // gearbox waits for throttle). After 1.5 s we do its engage step, as at the end of a roll.
     {
-        static double gap_since;
         int tgt = gb_target(self);
         if (st == 1 && g == 0 && tgt > 0 && !S.rolling && !g_crawl_on && fabsf(T.speed) * 3.6f > p_off_kmh) {
-            if (!gap_since) gap_since = sim_s();
+            if (!S.gap_since) S.gap_since = sim_s();
             // right after a pause the gap state is the pause's, not a shift's (pre.6 ride 609/1716 s: 1.5 s in neutral at 45-50 km/h)
-            else if (sim_s() - gap_since > (sim_s() - g_reset_at < 5 ? 0.3 : 1.5) && gb_engage(self, tgt)) {
-                logline("stuck in neutral for %.1f s at %.0f km/h: engaged gear %d", sim_s() - gap_since, fabsf(T.speed) * 3.6f, tgt);
+            else if (sim_s() - S.gap_since > (sim_s() - g_reset_at < 5 ? 0.3 : 1.5) && gb_engage(self, tgt)) {
+                logline("stuck in neutral for %.1f s at %.0f km/h: engaged gear %d", sim_s() - S.gap_since, fabsf(T.speed) * 3.6f, tgt);
                 if (sim_s() - g_reset_at >= 5)  // right after a pause the gap state is normal: no incident
-                    incident("neutral", "stuck in neutral for %.1f s at %.0f km/h, engaged gear %d", sim_s() - gap_since, fabsf(T.speed) * 3.6f, tgt);
-                gap_since = 0;
+                    incident("neutral", "stuck in neutral for %.1f s at %.0f km/h, engaged gear %d", sim_s() - S.gap_since, fabsf(T.speed) * 3.6f, tgt);
+                S.gap_since = 0;
             }
-        } else gap_since = 0;
+        } else S.gap_since = 0;
     }
     if (st != 0) return;
     if (S.rolling && g > 0) { gb_set_target(self, 0); S.commanded = 0; S.cmd_why = "eco-roll"; return; }
@@ -1560,6 +1563,7 @@ static const char *ts_status() { return g_status; }
 static void ts_start()
 {
     if (p_enabled <= 0) { logline("TrueShift disabled in the ini"); snprintf(g_status, sizeof g_status, "off (ini)"); return; }
+    S.pk = -99;
     o_window = (window_fn)G.window_fn;
     o_choose = (gear_fn)G.chooser_fn;
     o_start = (gear_fn)G.start_fn;

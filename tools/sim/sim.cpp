@@ -51,10 +51,12 @@ double wall_s() { return t_now; }
 double sim_s() { return t_now; }
 void csv_cap(FILE **, const char *) {}
 FILE *open_out(const char *name, const char *mode) { return NULL; }  // no trace file
-static int verbose, n_failed;
+static int verbose, n_failed, g_x_failed;
+static float g_stuck_s = -1;   // the last 'stuck in neutral for N s' line (tail_pre's gap-state timer)
 void logline(const char *fmt, ...)
 {
     if (strstr(fmt, "no pull after")) n_failed++;
+    if (!strncmp(fmt, "stuck in neutral for", 20)) { va_list ap; va_start(ap, fmt); g_stuck_s = (float)va_arg(ap, double); va_end(ap); }
     int shift = !strncmp(fmt, "shift", 5) || strstr(fmt, "no pull after") || !strncmp(fmt, "load changed", 12);
     if (!verbose && !shift) return;
     va_list ap; va_start(ap, fmt);
@@ -91,6 +93,19 @@ static void use_ato()  // Renault T, Optidriver ATO2612F R (12 speeds, no crawl 
     memcpy(RANGES, g, sizeof g);
     TORQUE = 2700; CDA = 6; LIMIT = 1900; DIFF = 3.08f; RADIUS = 0.538f; NG = 12;
     T.fwd_gears = 12; T.diff = DIFF;
+    for (int i = 0; i < 16; i++) T.ratio[i] = RATIO[i];
+}
+static float RATIO0[16], CURVE0[8][2], RANGES0[4][2], CDA0, TORQUE0, LIMIT0, DIFF0, RADIUS0; static int NG0;   // the Volvo as the file starts
+static void save_volvo()
+{
+    memcpy(RATIO0, RATIO, sizeof RATIO); memcpy(CURVE0, CURVE, sizeof CURVE); memcpy(RANGES0, RANGES, sizeof RANGES);
+    CDA0 = CDA; TORQUE0 = TORQUE; LIMIT0 = LIMIT; DIFF0 = DIFF; RADIUS0 = RADIUS; NG0 = NG;
+}
+static void use_volvo()
+{
+    memcpy(RATIO, RATIO0, sizeof RATIO); memcpy(CURVE, CURVE0, sizeof CURVE); memcpy(RANGES, RANGES0, sizeof RANGES);
+    CDA = CDA0; TORQUE = TORQUE0; LIMIT = LIMIT0; DIFF = DIFF0; RADIUS = RADIUS0; NG = NG0;
+    T.fwd_gears = NG; T.diff = DIFF;
     for (int i = 0; i < 16; i++) T.ratio[i] = RATIO[i];
 }
 static void use_car()  // a pickup-like car: 6 speeds, 450 Nm
@@ -485,6 +500,17 @@ static void c_m_limiter(double t)
     if (t > 8 && done < 3 && !M.state && fmod(t, 3) < 0.06) { done++; M.hint = 1; printf("  (hint up at %.1f s, rpm %.0f)\n", t, rpm_now()); }
 }
 
+// X4: full pedal up a 6 % climb, at t = 20 s a teleport (HARD reset) onto a 2 % climb at the same speed. The grade peak decide_gear
+// reckons the next upshift with belongs to the road we left: the upshift must come soon on the 2 % road, not ~27 s later when a 6 % peak
+// has faded (it used to be a function-local static that lived through the reset).
+static int g_tp_done, g_tp_ups; static double g_tp_up_at;
+static void c_teleport(double t)
+{
+    M.pedal = 1; M.grade_pct = t < 20 ? 6 : 2;
+    if (t >= 20 && !g_tp_done) { g_tp_done = 1; g_tp_ups = ups; m_trueshift.reset(RESET_HARD, "sim: teleport onto a 2 % climb"); printf("  (teleport: 6 %% -> 2 %%)\n"); }
+    if (g_tp_done && g_tp_up_at < 0 && ups > g_tp_ups) g_tp_up_at = t;
+}
+
 static void run_m()
 {
     run("M1 M mode, 40 t, full throttle from 50 in 8", {40000, 50, 8, 40, 0}, c_m_full);
@@ -502,6 +528,7 @@ int main(int argc, char **argv)
     for (int i = 0; i < m_trueshift.n_params; i++) *m_trueshift.params[i].val = m_trueshift.params[i].def;
     T.fwd_gears = 12; T.diff = 2.85f; T.wheels = 4; T.retarder_steps = 5;
     for (int i = 0; i < 12; i++) T.ratio[i] = RATIO[i];
+    save_volvo();
     G.tail_site = 5; G.decide_site = 1; G.n_choose = 1; G.choose_sites[0] = 2; G.n_start = 1; G.start_sites[0] = 4;
     G.window_fn = (uintptr_t)f_window; G.chooser_fn = (uintptr_t)f_choose; G.start_fn = (uintptr_t)f_start;
     m_trueshift.start();
@@ -714,5 +741,29 @@ int main(int argc, char **argv)
     run("CAR1 2.5 t pickup, light 0.35 from 15 km/h", {2500, 15, 2, 40}, c_car_light);
     run("CAR2 2.5 t pickup, full throttle from 15", {2500, 15, 2, 25}, c_car_full);
     run("CAR3 2.5 t pickup holds 100", {2500, 100, 6, 60}, c_car_100);
-    return 0;
+    // Reset scenarios, last: they move the clock and the module's once-a-second polls, which would shift the runs above a little.
+    use_volvo();
+    m_trueshift.reset(RESET_HARD, "sim: the Volvo again");
+    g_tp_done = 0; g_tp_up_at = -1;
+    run("X4 40 t full pedal on 6 %, at 20 s a teleport (HARD reset) onto 2 % at the same speed", {40000, 45, 8, 60}, c_teleport);
+    printf("  first upshift after the teleport: %s (must be within 10 s: the 6 %% peak is gone)\n", g_tp_up_at < 0 ? "none" : "");
+    if (g_tp_up_at >= 0) printf("  first upshift %.1f s after the teleport\n", g_tp_up_at - 20);
+    if (!(g_tp_up_at >= 0 && g_tp_up_at - 20 < 10)) { printf("  X4 FAIL\n"); g_x_failed = 1; }
+    // X5: the gearbox parked in its gap state (gear 0, a target, clutch open) at 40 km/h, a pause (SOFT reset) 1.0 s into it. The stuck-in-neutral
+    // timer must start again at the reset: the engage then comes 0.3 s after the pause (the pause's gap is normal), not at once as 'stuck for 1.0 s'.
+    {
+        memset(&M, 0, sizeof M); M.mass = 40000; M.shift_time = 0.5f; M.cvar = 3; M.v = 40 / 3.6f; M.gear = 0; M.target = 8; M.parked = 1;
+        t_now += 10;
+        g_stuck_s = -1; int i0 = g_n_incidents; double t0 = t_now;
+        for (int k = 0; k < 120 && M.parked; k++) {
+            t_now += 1 / 60.0; T.sim_time = (scs_timestamp_t)(t_now * 1e6);
+            T.speed = M.v; T.gear = 0; T.dgear = 0; T.in_thr = 0; T.eff_thr = 0; T.eff_clutch = 1; T.engine_on = 1; T.rpm = 600;
+            if (k == 60) m_trueshift.reset(RESET_SOFT, "sim: pause menu");
+            s_tail(SELF);
+        }
+        printf("\nX5 gap state at 40 km/h, a pause 1.0 s into it: engaged %.2f s after the pause as 'stuck for %.1f s' (expect ~0.3 and 0.3), incidents %d (expect 0)\n",
+               t_now - t0 - 1.0, g_stuck_s, g_n_incidents - i0);
+        if (!(g_stuck_s >= 0 && g_stuck_s < 0.5f && g_n_incidents == i0 && !M.parked)) { printf("  X5 FAIL\n"); g_x_failed = 1; }
+    }
+    return g_x_failed;
 }
