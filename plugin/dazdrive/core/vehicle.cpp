@@ -49,7 +49,7 @@ void vehicle_update(void *gb)
                 logv(1, "mass %.1f t (trailer %s, cargo %.1f t)", m / 1000, T.trailer ? "yes" : "no", T.cargo_mass / 1000);
             V.mass = m;
             V.mass_ok = 1;
-        } else if (!(V.mass > 0)) V.mass = 20000;
+        } else if (!(V.mass > 0)) V.mass = VEHICLE_MASS_FALLBACK;
         V.mass_at = now;
     }
     if (gb && (!V.eng_ok || now - V.eng_at > 5.0 || now < V.eng_at)) {

@@ -8,11 +8,15 @@
 #pragma once
 #include "game.h"
 
+// The one mass (kg) the model assumes while the game cannot tell. A module that needs a cautious answer then decides it
+// by V.mass_ok (unknown counts as heavy, the drive estimate is not trusted, ...), not with a mass figure of its own.
+static const float VEHICLE_MASS_FALLBACK = 20000;
+
 struct vehicle {
     void *self;          // the gearbox object last seen (another one = another truck: everything starts over)
     // mass
-    float mass;          // kg, truck + trailers, the game's figure, read every 0.5 s; 0 until the first read, 20000 when the game cannot tell
-    int mass_ok;         // 1 = the game has told (mass is its figure, not the 20 t fallback)
+    float mass;          // kg, truck + trailers, the game's figure, read every 0.5 s; 0 until the first read, VEHICLE_MASS_FALLBACK when the game cannot tell
+    int mass_ok;         // 1 = the game has told (mass is its figure, not the fallback)
     double mass_at;
     // grade
     float grade_deg;     // the game's road grade for the gearbox (positive uphill), 0 when unknown; TrueShift decides on it

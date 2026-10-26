@@ -347,6 +347,9 @@ static void keys_test()
       float w0 = at(0), w1 = at(-1.5f), w2 = at(-3), w3 = at(+2);
       printf("smart overspeed: flat %.2f, -1.5 %% %.2f, -3 %% %.2f, uphill %.2f (expect 3.2, between, 2.0, 3.2)\n", w0, w1, w2, w3);
       bad |= !(w0 > 3.0f && w0 < 3.4f) || !(w1 < w0 && w1 > w2) || !(w2 > 1.9f && w2 < 2.2f) || fabsf(w3 - w0) > 0.01f;
+      float sm = g_sim_mass; g_sim_mass = NAN; vehicle_reset(RESET_HARD); float wu = at(-3); g_sim_mass = sm; vehicle_reset(RESET_HARD);
+      printf("smart overspeed, mass unknown: -3 %% %.2f (%.0f t known %.2f; expect not more)\n", wu, sm / 1000, w2);
+      bad |= !(wu <= w2 + 0.001f);
       T.place.orientation.pitch = 0; vehicle_frame(); p_smart_kmh = sp; p_desc_kmh = dc; T.cruise = cr; }
     // pedal curve after a mode change: stays while the pedal is held, blends with the pedal travel
     { float se = p_pc_eco, sp = p_pc_pw, st = p_pc_travel; p_pc_eco = 1.35f; p_pc_pw = 1.6f; p_pc_travel = 1.0f;
@@ -1008,6 +1011,13 @@ int main(int argc, char **argv)
         s_ah_k = 1;
         g_true_k = 1.0f;
         a = ah_run("  mass under-estimated /1.5, 5% gentle", 5, 0, 1, 0.6667f, 0, 0); bad |= a.req_end != 0;
+        {   // the game cannot tell the mass (V.mass_ok 0): the drive estimate is not used, the pedal paces the release
+            float k = s_ah_k; vehicle_reset(RESET_HARD);
+            a = ah_run("  mass unknown, 10% gentle", 10, 0, 1, NAN, 0, 0); bad |= a.req_end != 0 || a.roll_m > 0.3f;
+            a = ah_run("  mass unknown, 10% hard", 10, 1, 1, NAN, 0, 0); bad |= a.req_end != 0 || a.roll_m > 0.3f;
+            a = ah_run("  mass unknown, 5% gentle", 5, 0, 1, NAN, 0, 0); bad |= a.req_end != 0 || a.roll_m > 0.3f;
+            vehicle_reset(RESET_HARD); s_ah_k = k;
+        }
         printf("--- Auto Hold 10%% gentle, trace after the stop\n");
         ah_run("  trace", 10, 0, 1, 1.0f, 0, 1);
         ah_run("  trace 0% gentle", 0, 0, 1, 1.0f, 0, 1);

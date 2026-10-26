@@ -202,8 +202,9 @@ static float pitch_grade() { return V.pitch_pct; }
 // answer: scaled by mass as before (full at 40 t, 40 % at 12 t).
 static float s_mom_up;   // km/h over the set speed the PCC momentum aims for now (the game's overspeed braking must allow it)
 static int s_lead_near;  // a vehicle within ~4 s ahead (cruise_body): no PCC momentum, it would only be braked away
-// gross weight (kg) from the vehicle model; 30 t until the game tells
-static float load_mass() { return V.mass_ok ? V.mass : 30000; }
+// gross weight (kg) from the vehicle model; its fallback until the game tells (no extra ease-off before a top, the mass-scaled
+// PCC band small, ACC and AEB plan as for 30 t and less); the descent allowance (smart_dynamic) treats unknown as heavy
+static float load_mass() { return V.mass_ok ? V.mass : VEHICLE_MASS_FALLBACK; }
 // 1 in Normal, eco_k in Eco, power_k in Power (the adaptive mode of the game)
 static float mode_k(float eco_k, float power_k)
 {
@@ -300,9 +301,6 @@ static struct { int st, released; float r; double launch_t, grab_until, roll_m; 
 static int s_gate_ok;
 static float s_ah_k = 1;  // learned: how much of the estimated drive force really arrives (the clutch and the engine model are rough)
 
-// Total mass (kg) from the vehicle model; 26 t until the game tells.
-static float ah_mass() { return V.mass_ok ? V.mass : 26000; }
-
 // Force (N) at the wheels the engine and clutch deliver right now; NAN if the data is not there. The engine at its
 // real rpm with the clutch slipping, so not the model's force_at (that is a closed clutch at the driveline rpm).
 static float ah_drive_force()
@@ -319,7 +317,7 @@ static float ah_drive_force()
 // Force (N) that gets the truck going: the grade force plus a small push (0.25 m/s2 with rolling resistance).
 static float ah_need()
 {
-    float gr = pitch_grade() / 100, m = ah_mass();
+    float gr = pitch_grade() / 100, m = V.mass;
     float f_grade = m * 9.81f * gr / sqrtf(1 + gr * gr);
     float need = 1.1f * f_grade + m * 0.25f;
     return need < m * 0.12f ? m * 0.12f : need;
@@ -370,7 +368,7 @@ static void auto_hold(char *g, float dt)
         AH.r = AH.r > 0 ? fmaxf(0, AH.r - 3 * dt) : 0;   // fade out, ~0.2 s
         if (!blocked && ah_stopped(kmh) && T.in_brake > 0.1f) {
             AH.st = AH_HOLD; AH.roll_m = 0;
-            logv(2, "Auto Hold: holding at %.1f%% (mass %.0f kg, request %.2f)", grade, ah_mass(), h);
+            logv(2, "Auto Hold: holding at %.1f%% (mass %.0f kg, request %.2f)", grade, V.mass, h);
         }
         break;
     case AH_HOLD:
@@ -391,8 +389,8 @@ static void auto_hold(char *g, float dt)
         if (T.in_thr < 0.03f && kmh < 1.0f && T.speed > -0.05f) { AH.st = AH_HOLD; logv(2, "Auto Hold: pedal released again, holding"); break; }
         if (T.in_brake > 0.1f && kmh < 1.0f) { AH.st = AH_HOLD; break; }
         if (T.in_brake > 0.1f) { AH.st = AH_OFF; break; }
-        float need = ah_need(), drive = s_gate_ok ? ah_drive_force() : NAN;
-        float target = drive == drive ? h * fmaxf(0, 1 - drive / need) : 0;   // no drive data / no throttle gate: only the pedal rate paces it
+        float need = ah_need(), drive = s_gate_ok && V.mass_ok ? ah_drive_force() : NAN;
+        float target = drive == drive ? h * fmaxf(0, 1 - drive / need) : 0;   // no drive data / no throttle gate / mass unknown: only the pedal rate paces it
         int moving = T.speed > 0.3f / 3.6f;
         if (moving || AH.launch_t > p_ah_max) target = 0;
         // Flat or downhill: nothing to hold against, let go at the pedal's pace (ts4n: on 0 % it held ~2.2 s because
@@ -942,7 +940,7 @@ static float smart_dynamic()
     float w = base + (fminf(desc, base) - base) * f;
     float jn = route_ok() && junc_on() ? route_junction_m() : -1;
     if (route_ok() && ((s_bend_coast_kmh == s_bend_coast_kmh && s_bend_coast_kmh < T.cruise * 3.6f + 3) || (jn >= 0 && jn < 300))) w = 0;
-    w -= 0.5f * fminf(1.0f, fmaxf(0.0f, (load_mass() - 20000) / 20000));
+    w -= 0.5f * (V.mass_ok ? fminf(1.0f, fmaxf(0.0f, (load_mass() - 20000) / 20000)) : 1.0f);
     return fmaxf(0.0f, w);
 }
 static float g_acc_player = NAN;  // the player's own setting, restored on exit
