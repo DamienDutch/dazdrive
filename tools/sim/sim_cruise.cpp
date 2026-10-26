@@ -1210,6 +1210,7 @@ int main(int argc, char **argv)
                 bad |= r.t_stop < 0 || r.held_min < 0.3f || r.drop > 0.1f || r.roll_m > 0.05f || r.req_end != 0 || r.t_move < 0;
             }
         lvres r;
+        r = lever_run("lever stop 36 t -10%, weak brake (2.5 m/s2 at 1.0)", -10, 36, 1, 1, 0, 0, 2.5f); bad |= r.held_min < 0.3f || r.drop > 0.1f || r.roll_m > 0.05f || r.req_end != 0 || r.t_move < 0;
         r = lever_run("lever stop 36 t +6%, engine brake alone", 6, 36, 1, 1, 1, 0); bad |= r.held_min < 0.3f || r.drop > 0.1f || r.roll_m > 0.05f || r.req_end != 0 || r.t_move < 0;
         r = lever_run("lever stop 36 t +6%, owner's standstill 0.15 s late", 6, 36, 1, 1, 0, 1); bad |= r.held_min < 0.3f || r.drop > 0.1f || r.roll_m > 0.05f || r.req_end != 0 || r.t_move < 0;
         printf("--- the same with auto_hold 0 and with auto_hold_lever 0: no Auto Hold, the truck rolls back (as before)\n");

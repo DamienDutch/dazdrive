@@ -56,7 +56,7 @@ static param g_params[] = {
     { "speed_limit_offset_kmh", &p_isa_off, 3, "set speed = limit plus this (3: 80 -> 83)" },
     { "auto_hold", &p_ah, 1, "1 = Auto Hold: after stopping with the brake the truck stays held when you release the pedal (any slope, no timer) until you give gas; it lets go smoothly as the engine pulls. Not with crawl on, the parking brake, reverse or Stop&Go. With auto_hold on, hill_start is not used" },
     { "auto_hold_request", &p_ah_req, 0.6f, "how hard the hold brakes (brake request 0..1)" },
-    { "auto_hold_lever", &p_ah_lever, 1, "1 = Auto Hold also holds after a stop with only the retarder or engine-brake lever on, or with the deceleration assist braking; 0 = only after a stop with the brake pedal" },
+    { "auto_hold_lever", &p_ah_lever, 1, "1 = Auto Hold also holds after a stop with only the retarder or engine-brake lever on, or with the deceleration assist braking; it takes over from the assist's brake without a gap. 0 = only after a stop with the brake pedal" },
     { "auto_hold_gentle_s", &p_ah_gentle, 0.5f, "letting go after a gentle launch (light pedal) takes about this long (s)" },
     { "auto_hold_hard_s", &p_ah_hard, 0.15f, "after a hard launch (pedal 0.8+) about this long (s), still ramped" },
     { "auto_hold_park_s", &p_ah_park, 60, "Auto Hold: after standing held this long (s) the parking brake goes on and the service brake lets go (no air spent, like a real truck); gas or Resume releases it, with the hold taken over for the pull-away. The plugin checks that the game really shows the parking brake and switches this off for the session if not. 0 = off" },
@@ -295,12 +295,14 @@ static void hill_start(char *g)
 //    and never up again, except when the truck starts to roll back: then it grabs again;
 //  - moving off (speed > 0.3 km/h): target 0 at the pedal's own pace; after 2.5 s of launch: the hard rate at least.
 // With auto_hold_lever a stop with only the retarder / engine-brake lever on, or with the deceleration assist (modules/decel.cpp)
-// braking, arms it the same way.
+// braking, arms it the same way. The assist keeps its request at the standstill until the hold has risen to it (s_ah_take, read
+// through cruise_info_get): the actuator merges by the biggest wish, so the hand-over has no gap.
 // Without the patch (pattern not found) the throttle is dead while we hold, so the request just ramps with
 // the pedal (the old hill-start behavior, but ramped).
 enum { AH_OFF, AH_HOLD, AH_LAUNCH };
 static struct { int st, released; float r; double launch_t, grab_until, roll_m; } AH;
 static int s_gate_ok;
+static float s_ah_take;   // the request Auto Hold would hold after a stop by the lever now (0 = it would not take one)
 static float s_ah_k = 1;  // learned: how much of the estimated drive force really arrives (the clutch and the engine model are rough)
 
 // Total mass (kg) from the vehicle model; 26 t until the game tells.
@@ -356,6 +358,7 @@ static void auto_hold(char *g, float dt)
         if (AH.st != AH_OFF) logv(1, "Auto Hold: off (%s)", !T.engine_on ? "engine off" : T.parking_brake ? "parking brake" : T.gear < 0 || T.dgear < 0 ? "reverse" : g_crawl_on ? "crawl on" : "Stop&Go holds");
         AH.st = AH_OFF;
     }
+    s_ah_take = p_ah_lever > 0 && !blocked ? h : 0;
     float grade = pitch_grade();
     if (AH.st == AH_HOLD) { if (!s_ah_hold_since) s_ah_hold_since = now; } else s_ah_hold_since = 0;
     if (s_park_on) {
@@ -669,7 +672,7 @@ static void cr_attach()
 static float cruise_body(void *ga, float dt, float pedal, float stock)
 {
     char *g = (char *)ga;
-    if (g) { if (p_ah > 0 && g_low_ok) auto_hold(g, dt); else { s_want_hold = 0; hill_start(g); } }
+    if (g) { if (p_ah > 0 && g_low_ok) auto_hold(g, dt); else { s_want_hold = 0; s_ah_take = 0; hill_start(g); } }
     if (p_smooth <= 0 || !g || !*(unsigned char *)(g + GA_ON) || !(dt > 0 && dt < 0.5f)) {
         C.on = 0;
         s_cb_was_on = 0;
@@ -2077,7 +2080,7 @@ static void cr_frame()
 static void cr_stop()
 {
     if (s_inc) { fclose(s_inc); s_inc = NULL; }
-    AH.r = 0; s_want_hold = 0; act_brake(ACT_HOLD, 0);   // (the actuator's own stop puts the request back to 0)
+    AH.r = 0; s_want_hold = 0; s_ah_take = 0; act_brake(ACT_HOLD, 0);   // (the actuator's own stop puts the request back to 0)
     if (g_csv) fflush(g_csv);
     if (g_smart && g_smart_player == g_smart_player) game_cvar_set(g_smart, g_smart_player);
     if (g_acc && g_acc_player == g_acc_player && g_acc_ours == g_acc_ours) {
@@ -2105,7 +2108,7 @@ static void cr_reset(int level, const char *why)
     s_btn_held = 0;
     // Auto Hold / hill start / our brake wishes back to 0 (the actuator's own reset puts the request back to 0)
     AH.st = AH_OFF; AH.r = 0; AH.released = 0; AH.launch_t = 0; AH.grab_until = 0; AH.roll_m = 0;
-    s_want_hill = s_want_hold = s_want_curve = s_want_aeb = 0;
+    s_want_hill = s_want_hold = s_want_curve = s_want_aeb = 0; s_ah_take = 0;
     act_brake(ACT_HILL, 0); act_brake(ACT_HOLD, 0); act_brake(ACT_BEND, 0); act_brake(ACT_AEB, 0);
     memset(&AE, 0, sizeof AE); AE.gap_prev = AE.rate = AE.vl_prev = NAN;  // AEB: no event spans a reset
     s_hs_armed = 0; s_hs_until = 0;
@@ -2162,6 +2165,7 @@ void cruise_info_get(cruise_info *o)
 {
     o->hold = AH.st;
     o->hold_req = AH.r;
+    o->lever_take = s_ah_take;
     o->sg_hold = g_sg_hold;
     o->feed = g_feed;
 }
