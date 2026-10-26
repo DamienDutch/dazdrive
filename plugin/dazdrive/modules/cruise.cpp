@@ -275,11 +275,10 @@ static void hill_start(char *g)
     if (kmh < 0.5f && T.in_brake > 0.1f && on_slope && !T.parking_brake) s_hs_armed = 1;
     if (s_hs_armed && T.in_brake < 0.05f && !s_hs_until) s_hs_until = now + p_hill_s;
     int release = T.in_thr > 0.05f || kmh > 2 || T.parking_brake || !on_slope || (s_hs_until && now > s_hs_until);
-    if (s_hs_until && release) { s_hs_until = 0; s_hs_armed = 0; if (g_dash_status == 'B') g_dash_status = 0; return; }
+    if (s_hs_until && release) { s_hs_until = 0; s_hs_armed = 0; disp_post(DISP_CRUISE, DISP_STATUS, 0, 0); return; }
     if (s_hs_until) s_want_hill = 0.6f;
     // B on the dashboard while the hill-start brake holds
-    if (s_hs_until) g_dash_status = 'B';
-    else if (g_dash_status == 'B') g_dash_status = 0;
+    disp_post(DISP_CRUISE, DISP_STATUS, s_hs_until ? 'B' : 0, 0);
 }
 
 
@@ -434,8 +433,7 @@ static void auto_hold(char *g, float dt)
         break; }
     }
     s_want_hold = AH.r;
-    if (AH.r > 0 || s_sg_wait || s_rearm_active) g_dash_status = 'B';
-    else if (g_dash_status == 'B') g_dash_status = 0;
+    disp_post(DISP_CRUISE, DISP_STATUS, AH.r > 0 || s_sg_wait || s_rearm_active ? 'B' : 0, 0);
 }
 
 
@@ -1923,8 +1921,7 @@ static void cr_frame()
                 s_isa_last = -1;
                 state_write();  // remembered
                 play_cue(p_isa > 0 ? CUE_ON : CUE_OFF);
-                g_dash_flash = p_isa > 0 ? 'I' : 'X';  // I = ISA, following the speed signs, X = off (1.5 s); S is Power now
-                g_dash_flash_until = wall_s() + 1.5;
+                disp_post(DISP_CRUISE, DISP_FLASH, p_isa > 0 ? 'I' : 'X', 1.5);  // I = ISA, following the speed signs, X = off (1.5 s); S is Power now
                 logline("Cruise: speed limit following %s", p_isa > 0 ? "on" : "off");
             }
         }
@@ -2054,8 +2051,7 @@ static void cr_frame()
             if (s_acc_saved != g_level) { s_acc_saved = g_level; state_write(); }
             level_tone(g_level);
             // Damien 11-10: 1 close, 2 medium, 3 far, C = plain cruise (ACC off); or A (ACC) with the tones only
-            g_dash_flash = p_acc_letter > 0 && g_level >= 0 ? 'A' : "C123"[g_level + 1];
-            g_dash_flash_until = wall_s() + 1.5;
+            disp_post(DISP_CRUISE, DISP_FLASH, p_acc_letter > 0 && g_level >= 0 ? 'A' : "C123"[g_level + 1], 1.5);
         }
         g_acc_player = cur;
         g_acc_ours = NAN;
@@ -2115,7 +2111,7 @@ static void cr_reset(int level, const char *why)
     s_rearm_active = 0; s_dstar_sm = NAN;
     if (s_park_on && ga) park_release(ga, "reset");   // a parking brake we set does not outlive a teleport, truck change or load
     s_park_on = s_park_ok = 0; s_ah_hold_since = 0;
-    if (g_dash_status == 'B') g_dash_status = 0;
+    disp_post(DISP_CRUISE, DISP_STATUS, 0, 0);
     s_ahead_ours = NAN; s_ahead_ignore = s_ahead_logged = -1;
     // calm cut-in / own-ACC filters
     s_lead_prev = -1; s_gap_rate = 0;

@@ -30,8 +30,6 @@ volatile int g_pedal_mapped;
 volatile int g_lcx;
 volatile float g_overspeed_cap = 5;
 volatile float g_pcc_need_kmh = NAN;
-volatile char g_dash_flash, g_dash_status;
-double g_dash_flash_until;
 int g_log_level = 2;
 incident_ctx g_inc = { 0, 0, 0, NAN, NAN };
 double g_incident_mb = 0;

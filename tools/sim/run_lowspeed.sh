@@ -8,5 +8,6 @@ inc=(-I"$here/shim" -I"$suite" -I"$suite/../sdk/include")
 g++ -O1 -std=c++17 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers "${inc[@]}" -c -o "$obj/sim_lowspeed.o" "$here/sim_lowspeed.cpp"
 g++ -O1 -std=c++17 -w "${inc[@]}" -c -o "$obj/ts.o" "$suite/modules/trueshift.cpp"
 g++ -O1 -std=c++17 -w "${inc[@]}" -c -o "$obj/veh.o" "$suite/core/vehicle.cpp"
-g++ -o "$here/sim_lowspeed" "$obj/sim_lowspeed.o" "$obj/ts.o" "$obj/veh.o"
+g++ -O1 -std=c++17 -w "${inc[@]}" -c -o "$obj/disp.o" "$suite/core/display.cpp"
+g++ -o "$here/sim_lowspeed" "$obj/sim_lowspeed.o" "$obj/ts.o" "$obj/veh.o" "$obj/disp.o"
 "$here/sim_lowspeed" "$@"

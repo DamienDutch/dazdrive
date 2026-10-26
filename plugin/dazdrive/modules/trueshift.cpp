@@ -1786,20 +1786,22 @@ static void ts_start()
 // Dashboard: the mode letter, also stopped and in N (Damien 11-10 prefers a
 // steady letter over "A" flashing in at every stop); A in reverse. Runs outside
 // the gearbox update, so the gearbox comes from game_actor, not a cached pointer.
+// The mode letter is the lowest wish of the dashboard letter (core/display.cpp); the writer runs here, at this rate, and shows
+// the modules' status (B hill-start brake, C crawl) and flashes (e.g. the new ACC distance for 1.5 s) over it.
 static void dash_letter()
 {
     static double at;
     double now = wall_s();
-    if (p_letter <= 0 || !g_active || S.unsupported || manual_box() || now - at < 0.25) return;
+    if (p_letter <= 0 || !g_active || S.unsupported || manual_box()) { disp_post(DISP_TS, DISP_MODE, 0, 0); return; }
+    if (now - at < 0.25) return;
     at = now;
     // Only the gearbox the hooks have seen (never a stale or menu object).
     void *gb = game_gearbox();
     if (!gb || gb != S.self) return;
     mode_update();  // 4x/s, also while stopped
-    char c = T.gear < 0 ? 'A' : mode_letter[S.mode];  // reverse: plain A (Damien 11-10)
-    if (g_dash_status) c = g_dash_status;                            // B hill-start brake, K creep
-    if (g_dash_flash && now < g_dash_flash_until) c = g_dash_flash;  // e.g. the new ACC distance for 1.5 s
-    int r = game_letter(gb, c);
+    disp_post(DISP_TS, DISP_MODE, T.gear < 0 ? 'A' : mode_letter[S.mode], 0);  // reverse: plain A (Damien 11-10)
+    char c;
+    int r = disp_write(gb, &c);
     if (r != S.letter_state) {
         if (r > 0) logline("dashboard letter works (%c)", c);
         else logline("dashboard letter: auto_mode_name string not found");

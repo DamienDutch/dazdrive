@@ -34,7 +34,7 @@ void incident(const char *kind, const char *fmt, ...)
     printf("   INCIDENT %s: %s\n", kind, b);
 }
 const char *g_truck_unsupported;
-volatile char g_dash_flash, g_dash_status;
+int game_letter(void *, char) { return 1; }   // the dashboard letter's writer (core/display.cpp)
 static float sim_add_thr;   // the added throttle the truck model sees (what Creep posted the tick before, as a floor on the merged throttle)
 int input_held(int) { return 0; }
 void play_cue(int) {}
@@ -44,7 +44,6 @@ void game_cvar_set(void *, float) {}
 static float g_mass = 18000;
 float game_mass() { return g_mass; }
 float wheel_radius() { return 0.5f; }
-double g_dash_flash_until;
 static double t_now;
 double wall_s() { return t_now; }
 double sim_s() { return t_now; }
@@ -78,6 +77,7 @@ float game_grade_deg(void *) { return NAN; }
 float curve_factor(const engine_info *, float) { return 1; }
 
 #include "modules/creep.cpp"
+#include "core/display.cpp"
 #include "core/rsc.cpp"
 #include "core/actuate.cpp"
 #include "core/vehicle.cpp"

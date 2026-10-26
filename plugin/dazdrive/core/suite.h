@@ -234,9 +234,6 @@ float pedal_wish_force(float v);   // the driver's wish as a force (N) at speed 
 extern volatile int g_pedal_mapped;     // Cruise: the throttle the engine gets is the pedal through the Eco / Power curve this frame
 extern volatile int g_pcc_on;         // Cruise: predictive cruise (PCC) is switched on
 extern volatile int g_cruise_smooth;  // the Cruise module drives the cruise throttle itself
-extern volatile char g_dash_flash;    // a letter to show on the dashboard for a moment (ACC C/N/F/O, limit S/X, lane L/X)
-extern volatile char g_dash_status;   // a letter shown while something holds (B hill-start brake, K creep); 0 = none
-extern double g_dash_flash_until;     // wall_s() until which it shows
 float wheel_radius();    // powered wheels, meters (0 if unknown)
 
 // ---------------------------------------------------------------- actuate.cpp
@@ -277,6 +274,16 @@ void act_start();                // m_core (config.cpp): hooks before the module
 void act_stop();
 void act_reset(int level, const char *why);
 const char *act_status();
+
+// ---------------------------------------------------------------- display.cpp
+// The dashboard letter: a module posts a wish (letter, priority, duration) under its owner tag, held until the owner changes it
+// or its time runs out; one writer shows a flash over a status over the mode letter, the latest post within a priority.
+enum { DISP_TS, DISP_CRUISE, DISP_LANE, DISP_CREEP, DISP_N };   // owners
+enum { DISP_MODE, DISP_STATUS, DISP_FLASH, DISP_LEVELS };       // priorities, lowest first
+int disp_post(int owner, int level, char c, double secs);       // c 0 = withdraw; secs > 0 = shown that long, 0 = until changed; 0 = refused (c not in disp_letters())
+char disp_pick();                // the letter the writer would show now (0 = nobody posts)
+int disp_write(void *gb, char *shown);   // write the picked letter (the mode owner calls it at its own rate): 1 done, 0 buffer not found, -1 nothing to show
+const char *disp_letters();      // every letter that may be shown (game.cpp's check of the buffer uses it)
 
 // ---------------------------------------------------------------- optional local build extras
 // A local build may add core/dev.cpp + core/dev.h (build.sh then defines DAZDRIVE_DEV). A release never has them: there

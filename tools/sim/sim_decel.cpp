@@ -46,8 +46,6 @@ double g_incident_mb = 0;
 void logring(const char *, ...) {}
 void incident(const char *, const char *, ...) {}
 const char *g_truck_unsupported;
-volatile char g_dash_flash, g_dash_status;
-double g_dash_flash_until;
 void play_cue(int) {}
 static double t_now;
 double wall_s() { return t_now; }

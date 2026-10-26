@@ -41,8 +41,7 @@ void incident(const char *kind, const char *fmt, ...)
     printf("   INCIDENT %s: %s\n", kind, b);
 }
 const char *g_truck_unsupported;
-volatile char g_dash_flash, g_dash_status;
-double g_dash_flash_until;
+int game_letter(void *, char) { return 1; }   // the dashboard letter's writer (core/display.cpp)
 static double t_now;
 double wall_s() { return t_now; }
 double sim_s() { return t_now; }
@@ -73,6 +72,7 @@ char *gb_inner(void *) { return VEH; }
 int mem_readable(const void *, size_t) { return 1; }
 
 #include "modules/lane.cpp"
+#include "core/display.cpp"
 
 // ---- plant
 struct pl { double o1, o2, w, A, tr; };

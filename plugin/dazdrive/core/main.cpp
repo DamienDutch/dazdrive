@@ -29,8 +29,6 @@ volatile float g_roll_boost_kmh;
 volatile double g_rb_cancel_at = -1e9;
 volatile float g_overspeed_cap = 5;
 volatile float g_pcc_need_kmh = __builtin_nanf("");
-volatile char g_dash_flash, g_dash_status;
-double g_dash_flash_until;
 
 static SCSAPI_VOID ev_frame_end(const scs_event_t, const void *const, const scs_context_t)
 {

@@ -15,6 +15,7 @@ tools/sim/sim_lowspeed
 tools/sim/sim_pedal
 tools/sim/sim_retarder
 tools/sim/sim_decel
+tools/sim/sim_display
 tools/sim-0.2/
 __pycache__/
 

@@ -478,8 +478,7 @@ static void crawl_toggle()
         if (cv) game_cvar_set(cv, mode_before);
     }
     play_cue(g_user_on ? CUE_ON : CUE_OFF);
-    g_dash_flash = g_user_on ? 'C' : 'X';
-    g_dash_flash_until = wall_s() + 1.5;
+    disp_post(DISP_CREEP, DISP_FLASH, g_user_on ? 'C' : 'X', 1.5);
     logline("Creep: crawl switched %s", g_user_on ? "on" : "off");
 }
 
@@ -500,7 +499,7 @@ static void ck_reset(int level, const char *why)
         act_clutch(NULL, 0, 0);
         act_thr_floor(ACT_CREEP, 0);
         act_brake(ACT_CREEP, 0);
-        if (g_dash_status == 'C') g_dash_status = 0;
+        disp_post(DISP_CREEP, DISP_STATUS, 0, 0);
     }
 }
 
@@ -583,8 +582,7 @@ static void ck_frame()
     // not posted), and the descent brake: both through the actuator (core/actuate.cpp), also with the Cruise module off
     act_thr_floor(ACT_CREEP, g_cthr > 0 && g_cthr < 0.3f ? g_cthr : 0);
     act_brake(ACT_CREEP, g_on ? g_cbrake : 0);
-    if (p_letter > 0 && g_on) g_dash_status = 'C';
-    else if (g_dash_status == 'C') g_dash_status = 0;
+    disp_post(DISP_CREEP, DISP_STATUS, p_letter > 0 && g_on ? 'C' : 0, 0);
 
     if (g_csv && (g_on || was_on || g_f > 0 || g_ln) && now - csv_at >= 0.1) {
         csv_at = now;

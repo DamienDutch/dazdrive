@@ -36,8 +36,7 @@ void incident(const char *kind, const char *fmt, ...)
     char b[300]; va_list ap; va_start(ap, fmt); vsnprintf(b, sizeof b, fmt, ap); va_end(ap);
     printf("   INCIDENT %s: %s\n", kind, b);
 }
-volatile char g_dash_flash, g_dash_status;
-double g_dash_flash_until;
+int game_letter(void *, char) { return 1; }   // the dashboard letter's writer (core/display.cpp)
 static double t_now;
 double wall_s() { return t_now; }
 double sim_s() { return t_now; }
@@ -114,6 +113,7 @@ int low_stopped() { return s_low_on && s_low_stopped; }
 int low_sg_zone() { return s_low_on && s_low_zone; }
 
 #include "modules/cruise.cpp"
+#include "core/display.cpp"
 #include "core/rsc.cpp"
 #include "core/actuate.cpp"
 #include "core/vehicle.cpp"

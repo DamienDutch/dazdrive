@@ -1024,8 +1024,7 @@ static void indicator_pause()
         __atomic_fetch_and((unsigned char *)(ga + 0x1d1), (unsigned char)~0x20, __ATOMIC_SEQ_CST);
         we_off = 0; lka = 0;
         if (p_tone > 0) play_cue(CUE_OFF);
-        g_dash_flash = 'X';
-        g_dash_flash_until = wall_s() + 1.5;
+        disp_post(DISP_LANE, DISP_FLASH, 'X', 1.5);
         logline("Lane: key pressed during the indicator: lane keeping off (stays off after the indicator)");
     }
     if (one) {
@@ -1097,7 +1096,7 @@ static void roundabout_off()
         if (lka && !g_pause) {
             lka_set(ga, 0);
             we_off = 1; off_at = now;
-            g_dash_flash = 'X'; g_dash_flash_until = now + 1.5;
+            disp_post(DISP_LANE, DISP_FLASH, 'X', 1.5);
             logline("Lane: cruise cancelled for a roundabout: lane keeping off, back on at the next resume");
         }
     }
@@ -1179,8 +1178,7 @@ static void ln_frame()
             else if (on) slow_off = 0;                           // switched on by the key at another speed: normal again
             g_lka_expect = -1;
             play_cue(on ? CUE_ON : CUE_OFF);
-            g_dash_flash = on ? 'L' : 'X';  // L = lane keeping on, X = off (1.5 s on the dashboard)
-            g_dash_flash_until = wall_s() + 1.5;
+            disp_post(DISP_LANE, DISP_FLASH, on ? 'L' : 'X', 1.5);  // L = lane keeping on, X = off (1.5 s on the dashboard)
             logline("Lane: lane keeping %s", on ? "on" : "off");
             g_engaged = 0;
         }

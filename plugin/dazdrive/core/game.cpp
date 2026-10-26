@@ -895,8 +895,8 @@ static int writable(const void *p, size_t n)
 }
 
 // The one-letter auto_mode_name buffer of a transmission object, or NULL when
-// the object does not look like one (auto name 1 char, manual name "M"). Every letter we show must be in the list below, or a flash
-// of it (I = ISA) would make the buffer look foreign and the letter would stay on it.
+// the object does not look like one (auto name 1 char, manual name "M", a letter of disp_letters(): core/display.cpp refuses any
+// other, so a letter we show never makes the buffer look foreign).
 static char *auto_name(char *tx)
 {
     unsigned o = L->t_auto_name;
@@ -904,7 +904,7 @@ static char *auto_name(char *tx)
     char *a = *(char **)(tx + o), *m = *(char **)(tx + o + 0x20);
     uint32_t na = *(uint32_t *)(tx + o + 8), nm = *(uint32_t *)(tx + o + 0x28);
     if (na != 1 || nm != 1 || !writable(a, 2) || !readable(m, 2)) return NULL;
-    if (m[0] != 'M' || m[1] || a[1] || !strchr("ADEPMNSFOHXLCBK123I", a[0])) return NULL;
+    if (m[0] != 'M' || m[1] || a[1] || !strchr(disp_letters(), a[0])) return NULL;
     return a;
 }
 
