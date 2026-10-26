@@ -1536,8 +1536,8 @@ static void aeb_record(float gap, float kmh, float vc, float ttc, float a_need)
         char stamp[32];
         s_inc = open_incident("incidents", "aeb", g_incident_mb, stamp, sizeof stamp);
         if (s_inc) {
-            fprintf(s_inc, "# DazDrive %s AEB incident at %s (local time), %.0f t, log clock %.0f s (dazdrive.log); stage 0 off 1 warning 2 partial 3 full 4 hold (no partial in aeb_mode 1, where a_need is the deceleration it takes to stop aeb_margin_m behind the lead); indicator 1 left -1 right 2 hazards\n", SUITE_VERSION, stamp,
-                    load_mass() / 1000, now);
+            fprintf(s_inc, "# DazDrive %s AEB incident at %s (local time), %.0f t, log clock %.0f s (dazdrive.log); stage 0 off 1 warning 2 partial 3 full 4 hold%s; indicator 1 left -1 right 2 hazards\n", SUITE_VERSION, stamp,
+                    load_mass() / 1000, now, p_aeb_mode > 0 ? " (aeb_mode 1: no partial; a_need is the deceleration it takes to stop aeb_margin_m behind the lead)" : "");
             fputs("t,kmh,gap_m,lead_kmh,closing_ms,ttc_s,a_need,stage,request,a_cmd,thr,brake,decel,steer,yaw_deg_s,indicator,air_psi\n", s_inc);
             for (int k = 0; k < s_ring_n; k++) aeb_row(s_inc, s_ring[(s_ring_i - s_ring_n + k + AEB_RING) % AEB_RING]);
             logline("incident: aeb -> incidents\\aeb_%s.csv", stamp);
@@ -1563,6 +1563,19 @@ static void aeb(char *g, float dt)
     s_aeb_watch = active ? 1 : 0;  // not watching (cruise off with aeb_without_cruise = 0, reversing, ...): the game's own AEB is left alone
     float heavy = fminf(2.0f, fmaxf(1.0f, load_mass() / 30000)), hs = sqrtf(heavy);  // heavier: slower to stop, so earlier
     float a_top = fminf(p_aeb_max_dec, 0.4f + 10.0f / heavy);  // aeb_mode 1: the most it can ask for: what the brakes deliver at full request (see below)
+    // aeb_mode 1: a warning from aeb_warn_decel, full braking from aeb_full_frac of a_top (a heavy truck cannot brake as hard: it starts in proportion earlier)
+    float f_a1 = p_aeb_full_frac * a_top, w_a1 = p_aeb_warn_dec * a_top / p_aeb_max_dec;
+    // Evasive lane change (see below): one indicator and steering or turning to that side, compared with what the truck did before the warning
+    unsigned char ev_fl = *(unsigned char *)(g + GA_LIGHTS) & 0x0c;
+    int ev_side = ev_fl == 4 ? 1 : ev_fl == 8 ? -1 : 0;  // + = left, like the steering and the yaw rate
+    // (aeb_mode 1: not while an evasion stands it down, else a held steering becomes the new straight ahead within a second and
+    // the evasion "ends" mid lane change)
+    if (AE.st == AEB_OFF && !(p_aeb_mode > 0 && now < AE.evade_until)) {
+        float k = fminf(1, dt / 1.0f);
+        AE.steer0 += (T.in_steer - AE.steer0) * k;
+        AE.yaw0 += (T.yaw - AE.yaw0) * k;
+    }
+    int ev = p_aeb_evade > 0 && ev_side && ((T.in_steer - AE.steer0) * ev_side > p_aeb_evade || (T.yaw - AE.yaw0) * ev_side > 0.004f);
     // the radar lead (fresh, plausible); a jump in the gap is a new target
     int fresh = g_radar_ok && now - s_radar.at < 0.3 && s_radar.gap > 0.3f && s_radar.gap < 100 && s_radar.v >= 0 && s_radar.v < 70;
     float gap = fresh ? s_radar.gap : NAN;
@@ -1623,7 +1636,9 @@ static void aeb(char *g, float dt)
         if (crossing) { cap_st = AEB_WARN; cap = "crossing traffic"; }
         // a new target must be seen a moment first (a jump in the gap, a car swerving past), unless it is close and urgent
         if (now - AE.age_t0 < 0.3 && !(gap < 12 && a_need > 3)) { cap_st = AEB_WARN; if (!cap) cap = "new target"; }
-        if ((*(unsigned char *)(g + GA_LIGHTS) & 0x0c) && !(gap < 10 && ttc < 1.0f)) { cap_st = AEB_WARN; cap = "indicator"; }
+        // (aeb_mode 1: "< 10 m, < 1 s" is a crash at speed for a late system; there an indicator holds braking back only while the
+        // driver also steers that way, else full braking comes as without it)
+        if ((*(unsigned char *)(g + GA_LIGHTS) & 0x0c) && !(p_aeb_mode > 0 ? !ev && vc > 0.3f && a_need >= f_a1 : gap < 10 && ttc < 1.0f)) { cap_st = AEB_WARN; cap = "indicator"; }
         // a lead that drives near a junction (turning, merging): partial and full braking later
         float jm = route_junction_m();
         if (jm >= 0 && jm < 60 && AE.vl > 2) { p_s = fminf(p_s, 1.5f); f_s = fminf(f_s, 1.0f); }
@@ -1648,24 +1663,19 @@ static void aeb(char *g, float dt)
     // Evasive lane change (Damien 11-10: "if it warns me and I indicate left and steer left, it must understand"): one
     // indicator and steering or turning to that side, compared with what the truck did before the warning, for 0.3 s ends
     // a warning or partial braking; 3 s no AEB for it, unless the lead is still dead ahead and very close.
-    {
-        unsigned char fl = *(unsigned char *)(g + GA_LIGHTS) & 0x0c;
-        int side = fl == 4 ? 1 : fl == 8 ? -1 : 0;  // + = left, like the steering and the yaw rate
-        if (AE.st == AEB_OFF) {
-            float k = fminf(1, dt / 1.0f);
-            AE.steer0 += (T.in_steer - AE.steer0) * k;
-            AE.yaw0 += (T.yaw - AE.yaw0) * k;
-        }
-        int ev = p_aeb_evade > 0 && side && ((T.in_steer - AE.steer0) * side > p_aeb_evade || (T.yaw - AE.yaw0) * side > 0.004f);
-        if (!ev) AE.evade_since = 0;
-        else if (!AE.evade_since) AE.evade_since = now;
-        if (ev && now - AE.evade_since > 0.3 && AE.st >= AEB_WARN && AE.st <= AEB_PARTIAL && now >= AE.evade_until) {
-            AE.evade_until = now + 3;
-            logline("AEB: evasive lane change to the %s (steering %+.3f, turning %+.1f deg/s): stands down", side > 0 ? "left" : "right",
-                    T.in_steer - AE.steer0, (T.yaw - AE.yaw0) * 360);
-        }
+    // (ev: computed at the top)
+    if (!ev) AE.evade_since = 0;
+    else if (!AE.evade_since) AE.evade_since = now;
+    if (ev && now - AE.evade_since > 0.3 && AE.st >= AEB_WARN && AE.st <= AEB_PARTIAL && now >= AE.evade_until) {
+        AE.evade_until = now + 3;
+        logline("AEB: evasive lane change to the %s (steering %+.3f, turning %+.1f deg/s): stands down", ev_side > 0 ? "left" : "right",
+                T.in_steer - AE.steer0, (T.yaw - AE.yaw0) * 360);
     }
-    int evade = now < AE.evade_until && !(fresh && gap < 10 && ttc < 1.0f);
+    // aeb_mode 1 brakes late: its full braking starts where "dead ahead and very close" (< 10 m, < 1 s) already holds at any
+    // closing speed under ~40 km/h, so that exception would brake into every evasion it warned for (sim: slow truck at 80,
+    // full braking 6.9 m behind it, mid lane change). There the evasion holds while the driver keeps steering away; once he
+    // stops (gives up, the lane is taken) and the stop takes full braking, it brakes, and keeps braking until he steers away again.
+    int evade = now < AE.evade_until && !(fresh && (p_aeb_mode > 0 ? !ev && (AE.st == AEB_FULL || (vc > 0.3f && a_need >= f_a1)) : gap < 10 && ttc < 1.0f));
     if (evade) { cap_st = AEB_OFF; cap = "evasive lane change"; }
     if (cap && AE.st != AEB_OFF && !AE.ev_cap) AE.ev_cap = cap;
     // the stage it asks for, and the stage that may stay (hysteresis)
@@ -1686,18 +1696,18 @@ static void aeb(char *g, float dt)
         if (ttc < f_s * k || a_need > 0.6f * p_aeb_max_dec / hs * ka) keep = AEB_FULL;
     }
     if (p_aeb_mode > 0) {
-        // by the required deceleration only (instead of the above): a warning from aeb_warn_decel, full braking from aeb_full_frac of
-        // the most it may use (no partial stage); braking goes on while the gap is still closing, so it brakes to a stop
+        // by the required deceleration only (instead of the above): a warning from w_a1, full braking from f_a1 (no partial stage);
+        // braking goes on while the gap to the lead it braked for is still closing, so it brakes to a stop. A new target (a jump
+        // in the gap: the lead changed lanes, another car) is judged by its own need: no braking carried over to a far one
         want = keep = AEB_OFF;
-        float f_a = p_aeb_full_frac * a_top, w_a1 = p_aeb_warn_dec * a_top / p_aeb_max_dec;  // a heavy truck cannot brake as hard: it starts in proportion earlier
         if (fresh && vc > 0.3f) {
             if (a_need >= w_a1) want = AEB_WARN;
-            if (a_need >= f_a) want = AEB_FULL;
+            if (a_need >= f_a1) want = AEB_FULL;
         }
         if (fresh && vc > -0.5f) {
             float ka = 0.75f;
             if (a_need >= w_a1 * ka) keep = AEB_WARN;
-            if (a_need >= f_a * ka || (AE.st == AEB_FULL && vc > 0.3f)) keep = AEB_FULL;
+            if (a_need >= f_a1 * ka || (AE.st == AEB_FULL && vc > 0.3f && AE.age_t0 < AE.st_at)) keep = AEB_FULL;
         }
     }
     if (AE.st <= AEB_WARN && kmh < p_aeb_kmh) want = AEB_OFF;        // steps in from aeb_min_kmh
