@@ -39,6 +39,30 @@ void act_thr_scale(int owner, float k) { if (owner_ok(owner)) W[owner].scale = k
 void act_retarder_scale(int owner, float f) { if (owner_ok(owner)) W[owner].ret = f != f ? 1.0f : f < 0 ? 0.0f : f > 1 ? 1.0f : f; }
 const act_wish *act_wishes() { return W; }
 
+// The retarder torque factor the drivetrain hook applies (see "the retarder" below): the lowest of what the owners hold, 1 with
+// nobody posting, and only to the player's vehicle (game_actor -> gearbox -> inner, the path of game_gearbox). The drivetrain runs
+// this code for other vehicles too: a vehicle that is not s_rs.inner keeps its demand, and with the player's vehicle not found
+// (inner NULL) every vehicle does. Another thread reads the pair: a new vehicle clears the old one first, the scale goes in before it.
+static retarder_scale s_rs = { NULL, 1.0f };   // read by the drivetrain hook: player vehicle + the factor
+static char *act_player_inner(char *ga)
+{
+    if (!ga || !L || !L->a_gearbox || !mem_readable(ga + L->a_gearbox, 8)) return NULL;
+    char *gb = *(char **)(ga + L->a_gearbox);
+    if (!gb || !mem_readable(gb + L->s_inner, 8)) return NULL;
+    char *in = *(char **)(gb + L->s_inner);
+    return in && mem_readable(in + 0x1444, 4) ? in : NULL;   // (the demand the stub reads)
+}
+static void act_retarder_merge(char *ga)
+{
+    float f = 1.0f;
+    for (int o = 0; o < ACT_N; o++) if (W[o].ret < f) f = W[o].ret;
+    g_ret_scale = f;
+    char *in = act_player_inner(ga);
+    if (s_rs.inner != in) s_rs.inner = NULL;
+    s_rs.scale = in ? f : 1.0f;
+    s_rs.inner = in;
+}
+
 // ---------------------------------------------------------------- the brake request
 // Every brake wish meets here, once per tick, and what we wrote goes back to 0 when nobody wants it any more. The game
 // never clears the request itself when its emergency brake option is off: what we write stays (ts3c: brakes on, hazards
@@ -131,6 +155,7 @@ void act_brake_write(char *g)
             s_log_owner = owner; s_log_at = now;
         }
     }
+    act_retarder_merge(g);   // the retarder factors, at the same tick
 }
 
 // Our request back to 0 (what we wrote, only if it is still ours) and the writer's memory cleared.
@@ -163,14 +188,6 @@ void act_hook(int phase, void (*fn)(act_tick *))
 int act_hooked() { return s_hooked; }
 void act_thr_base(float v) { s_base = v; }
 
-// The retarder torque factor the drivetrain hook applies: the lowest of what the owners hold, 1 with nobody posting.
-static void act_retarder_merge()
-{
-    float f = 1.0f;
-    for (int o = 0; o < ACT_N; o++) if (W[o].ret < f) f = W[o].ret;
-    g_ret_scale = f;
-}
-
 static float act_stub(void *ga, float dt, float pedal)
 {
     act_tick a = { (char *)ga, dt, pedal, NAN, NAN };
@@ -179,8 +196,8 @@ static float act_stub(void *ga, float dt, float pedal)
     a.stock = o_cruise(ga, dt, pedal);
     rsc_step(dt);   // the rollover guard (core/rsc.cpp) decides from the telemetry alone and posts its brake wish and throttle cap
     for (int i = 0; i < s_n[ACT_POST]; i++) s_fn[ACT_POST][i](&a);
-    if (ga) act_brake_write((char *)ga);
-    act_retarder_merge();
+    if (ga) act_brake_write((char *)ga);   // (merges the retarder factors too)
+    else act_retarder_merge(NULL);
     // the throttle: the base (the game's, or what Cruise posted), then every floor, then every cap, then every scale
     float r = s_base == s_base ? s_base : a.stock;
     for (int o = 0; o < ACT_N; o++) if (W[o].floor > 0 && W[o].floor > r) r = W[o].floor;
@@ -222,7 +239,8 @@ int act_clutch_vehicle(char *inner, float v)
 // ---------------------------------------------------------------- the retarder
 // The drivetrain reads the retarder demand (inner+0x1444) once for the torque it applies (0x1408c87a8, ETS2 1.60.1.7; the patch is
 // game_patch_retarder, only with [core] retarder_hook = 1). Our factor scales that one read: the dashboard, the animation and the
-// lever keep the game's own step. No module posts a factor yet, so the hook changes nothing.
+// lever keep the game's own step. The factor reaches the player's vehicle only (s_rs, act_retarder_merge). No module posts a
+// factor yet, so the hook changes nothing.
 static bool s_ret_in;
 bool act_retarder_hooked() { return s_ret_in; }
 // The pattern ends at the torque read after the curve call; the demand read is the 8 bytes at +7 (unique in the exe too).
@@ -247,7 +265,7 @@ void act_start()
     if (g_retarder_hook >= 0.5f && L && !strcmp(L->name, "1.60")) {
         uintptr_t rs = game_scan(k_ret_pat);
         if (!rs) logline("Actuator: retarder demand read not found: retarder scale unavailable");
-        else if (!game_patch_retarder(rs + RET_READ_AT, &g_ret_scale)) logline("Actuator: retarder hook failed: retarder scale unavailable");
+        else if (!game_patch_retarder(rs + RET_READ_AT, &s_rs)) logline("Actuator: retarder hook failed: retarder scale unavailable");
         else { s_ret_in = true; logline("Actuator: retarder hook in place at %p", (void *)(rs + RET_READ_AT)); }
     } else if (g_retarder_hook >= 0.5f) logline("Actuator: no retarder hook (1.60 only): retarder scale unavailable");
     // The cruise fn call in the game's pedal code (cruise-re notes; the pattern ends at the E8 of the call).
@@ -277,14 +295,19 @@ void act_stop()
 {
     release_request();
     g_ret_scale = 1.0f;
+    s_rs.inner = NULL; s_rs.scale = 1.0f;
 }
 
-// Continuity broke (see RESET_*): the writer's slew memory and our request go; the owners clear their own wishes.
+// Continuity broke (see RESET_*): the writer's slew memory and our request go; the owners clear their own wishes, except the
+// retarder factors: they go here (a factor held through a reset would weaken the retarder of whatever comes next).
 void act_reset(int level, const char *why)
 {
     (void)why;
     s_aeb_was = 0; s_hill_was = s_hold_was = s_dec_was = 0; s_br_at = 0;
     release_request();
+    for (int o = 0; o < ACT_N; o++) W[o].ret = 1.0f;
+    g_ret_scale = 1.0f;
+    s_rs.inner = NULL; s_rs.scale = 1.0f;
     s_log_owner = -1; s_log_at = 0;
     if (level >= RESET_HARD) s_air_low = 0;
 }

@@ -60,7 +60,7 @@ int mem_readable(const void *, size_t) { return 0; }
 uintptr_t game_scan(const char *) { return 0; }
 int game_patch_tail(uintptr_t, void *) { return 0; }
 int game_patch_clutch_floor(uintptr_t, clutch_floor *) { return 0; }
-int game_patch_retarder(uintptr_t, const volatile float *) { return 0; }
+int game_patch_retarder(uintptr_t, const retarder_scale *) { return 0; }
 int game_patch_cf0_if(uintptr_t, int, const unsigned char *) { return 0; }
 int game_patch_call(uintptr_t, void *) { return 0; }
 int game_engage_init() { return 0; }

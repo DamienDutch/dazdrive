@@ -1,5 +1,6 @@
 // Offline test of the retarder hook (core/actuate.cpp, core/game.cpp): the merge of the owners' factors into g_ret_scale, the
-// stub's bytes run natively (game.h retarder_stub_code: what game_patch_retarder puts next to the drivetrain), the hook pattern.
+// stub's bytes run natively (game.h retarder_stub_code: what game_patch_retarder puts next to the drivetrain), the hook pattern,
+// and that only the player's vehicle gets the factor (another vehicle's inner, or the player's not found: the demand as it is).
 // The actuator is included, so its statics are reachable. Build+run: tools/sim/run_retarder.sh
 #include "core/suite.h"
 #include "core/game.h"
@@ -20,7 +21,8 @@ int g_log_level = 2;
 void logring(const char *, ...) {}
 void incident(const char *, const char *, ...) {}
 double wall_s() { return 0; }
-int mem_readable(const void *, size_t) { return 0; }
+static int g_mem_ok;   // memory counts as readable (the player's vehicle can be found through the sim's game_actor)
+int mem_readable(const void *p, size_t) { return g_mem_ok && p; }
 char *game_actor_safe() { return NULL; }
 void rsc_step(float) {}
 // the patch helpers of the game: a stub in this sim (the real ones patch the exe's memory), so the hook stays "not in"
@@ -28,7 +30,7 @@ uintptr_t game_scan(const char *) { return 0; }
 int game_patch_call(uintptr_t, void *) { return 0; }
 int game_patch_cf0_if(uintptr_t, int, const unsigned char *) { return 0; }
 int game_patch_clutch_floor(uintptr_t, clutch_floor *) { return 0; }
-int game_patch_retarder(uintptr_t, const volatile float *) { return 0; }
+int game_patch_retarder(uintptr_t, const retarder_scale *) { return 0; }
 #include "core/actuate.cpp"
 
 static float stock_cruise(void *, float, float pedal) { return pedal; }
@@ -116,7 +118,7 @@ static void pattern_test()
     memcpy(img + 300, odd, sizeof odd);
     check(pat_find(img, sizeof img, k_ret_pat, &at) == 1, "a near miss does not match");
     // the read instruction at the offset is what the stub starts with (and what game_patch_retarder insists on)
-    unsigned char code[64]; static volatile float one = 1.0f;
+    unsigned char code[64]; static retarder_scale one = { NULL, 1.0f };
     size_t len = retarder_stub_code(code, &one);
     check(len < 64 && !memcmp(code, want + RET_READ_AT, 8), "the stub begins with the original 8-byte read");
     check(!memcmp(img + 200 + RET_READ_AT, code, 8), "the read sits at +7 of the pattern");
@@ -245,14 +247,14 @@ static const unsigned long long k_fill[16] = { 0, 0x1111111111111111ULL, 0x22222
 static char g_inner[0x1500];
 static unsigned char *g_page;
 // one call of the patched site; returns the xmm0 float, sets *clean when nothing but xmm0 changed
-static float run_patched(float demand, unsigned flags, int *clean)
+static float run_patched(float demand, unsigned flags, int *clean, char *inner = g_inner)
 {
-    *(float *)(g_inner + 0x1444) = demand;
+    *(float *)(inner + 0x1444) = demand;
     site_ctx c = {};
-    c.site = g_page; c.inner = g_inner; c.flags_in = flags;
+    c.site = g_page; c.inner = inner; c.flags_in = flags;
     for (int i = 0; i < 16; i++) for (int j = 0; j < 16; j++) c.xin[i][j] = (unsigned char)(0xA0 + i * 3 + j);
     run_site(&c);
-    int ok = (void *)c.gpr[0] == g_inner && c.rsp_before == c.rsp_after;                // rax = inner, the stack as it was
+    int ok = (void *)c.gpr[0] == inner && c.rsp_before == c.rsp_after;                // rax = inner, the stack as it was
     for (int i = 1; i < 16; i++) if (i != 4 && c.gpr[i] != k_fill[i]) ok = 0;            // every other register
     for (int i = 1; i < 16; i++) if (memcmp(c.xin[i], c.xout[i], 16)) ok = 0;            // xmm1-15 whole
     static const unsigned char zero12[12] = {};
@@ -270,7 +272,7 @@ static void stub_test()
     g_page = (unsigned char *)mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (g_page == MAP_FAILED) { printf("stub: no executable memory here, not run\n"); return; }
     unsigned char *stub = g_page + 64;
-    size_t n = retarder_stub_code(stub, &g_ret_scale);
+    size_t n = retarder_stub_code(stub, &s_rs);
     (void)n;
     int32_t rel = (int32_t)(stub - (g_page + 5));
     g_page[0] = 0xE8; memcpy(g_page + 1, &rel, 4);        // the patched site: call stub
@@ -279,7 +281,15 @@ static void stub_test()
     const float demand[] = { 0.0f, 0.25f, 0.5f, 1.0f, from_bits(0x00000001), from_bits(0x007FFFFF), 0.8f, -0.0f, from_bits(0x7FA00001) /* signaling NaN */ };
     const unsigned flags[] = { 0x202, 0x8D7, 0x282, 0x246, 0x203 };
     int ident = 0, tot = 0, clean_all = 1;
-    g_ret_scale = 1.0f;
+    // the player's vehicle is found through game_actor -> gearbox -> inner (offsets of a stand-in layout): the runs below are the
+    // player's, through the scale compare
+    char GA[0x400] = {};
+    static layout lay; lay.name = "sim"; lay.a_gearbox = 0x40; lay.s_inner = 0x10;
+    static char gbox[0x40];
+    *(char **)(gbox + lay.s_inner) = g_inner; *(char **)(GA + lay.a_gearbox) = gbox;
+    L = &lay; g_mem_ok = 1;
+    act_stub(GA, 1 / 60.0f, 0);
+    check(s_rs.inner == g_inner && bits(s_rs.scale) == bits(1.0f), "the player's vehicle found, factor exactly 1.0");
     for (float d : demand) for (unsigned f : flags) {
         int cl; float r = run_patched(d, f, &cl);
         tot++; ident += bits(r) == bits(d); clean_all &= cl;
@@ -295,7 +305,6 @@ static void stub_test()
     printf("factor 1.0 with DAZ on: denormal 0x00000001 -> 0x%08x (0x00000001)\n", bits(r));
     check(bits(r) == 0x00000001 && cl, "factor 1.0 bit-identical also with DAZ");
     // a post through the actuator: owner -> merge -> g_ret_scale -> the stub
-    char GA[0x400] = {};
     act_retarder_scale(ACT_RET_NORM, 0.5f); act_stub(GA, 1 / 60.0f, 0);
     int halved = 0, tot2 = 0; clean_all = 1;
     for (float d : demand) {
@@ -310,6 +319,37 @@ static void stub_test()
     float back = run_patched(0.8f, 0x246, &cl);
     printf("post withdrawn: 0.8 -> %.2f (post 0.5: %.2f)\n", back, r);
     check(bits(back) == bits(0.8f), "withdrawn post returns the demand");
+    // the drivetrain runs the stub for other vehicles too (AI trucks): only the player's inner gets the factor
+    static char other[0x1500];
+    act_retarder_scale(ACT_RET_NORM, 0.5f); act_stub(GA, 1 / 60.0f, 0);
+    int same = 0, mine = 0; tot2 = 0; clean_all = 1;
+    for (float d : demand) for (unsigned f : flags) {
+        if (d != d) continue;
+        r = run_patched(d, f, &cl, other); clean_all &= cl;
+        tot2++; same += bits(r) == bits(d);
+        mine += bits(run_patched(d, f, &cl)) == bits(d * 0.5f); clean_all &= cl;
+    }
+    printf("owner posts 0.50, another vehicle: %d of %d demands come back as they are (the player's: %d halved), state preserved: %s\n", same, tot2, mine, clean_all ? "yes" : "NO");
+    check(same == tot2 && mine == tot2 && clean_all, "a vehicle that is not the player's gets factor 1");
+    // the player's vehicle not found (gearbox pointer unreadable, then no layout): factor 1 for every vehicle, the merge itself stands
+    g_mem_ok = 0; act_stub(GA, 1 / 60.0f, 0);
+    float lost = run_patched(0.8f, 0x246, &cl), lost_o = run_patched(0.8f, 0x246, &cl, other);
+    g_mem_ok = 1; L = NULL; act_stub(GA, 1 / 60.0f, 0);
+    float nolay = run_patched(0.8f, 0x246, &cl);
+    printf("player's vehicle not found: 0.8 -> %.2f, another vehicle %.2f, no layout %.2f (0.80; g_ret_scale %.2f)\n", lost, lost_o, nolay, g_ret_scale);
+    check(bits(lost) == bits(0.8f) && bits(lost_o) == bits(0.8f) && bits(nolay) == bits(0.8f) && g_ret_scale == 0.5f, "no player vehicle = factor 1");
+    L = &lay;
+    // the brake writer alone (the sims' tick) merges too; a reset clears every factor
+    act_retarder_scale(ACT_RET_DECEL, 0.4f); act_brake_write(GA);
+    float bw = run_patched(0.8f, 0x246, &cl);
+    act_reset(RESET_SOFT, "sim");
+    float rs = run_patched(0.8f, 0x246, &cl);
+    act_stub(GA, 1 / 60.0f, 0);
+    float rs2 = run_patched(0.8f, 0x246, &cl);
+    printf("brake writer alone, post 0.40: 0.8 -> %.2f (0.32); after a reset %.2f, next tick %.2f (0.80, 0.80)\n", bw, rs, rs2);
+    check(bits(bw) == bits(0.8f * 0.4f), "the brake writer merges the factors");
+    check(bits(rs) == bits(0.8f) && bits(rs2) == bits(0.8f) && bits(g_ret_scale) == bits(1.0f), "a reset clears the factors");
+    L = NULL; g_mem_ok = 0;
 }
 #endif
 
