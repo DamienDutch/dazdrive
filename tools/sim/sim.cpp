@@ -54,9 +54,14 @@ void csv_cap(FILE **, const char *) {}
 FILE *open_out(const char *name, const char *mode) { return NULL; }  // no trace file
 static int verbose, n_failed, g_x_failed;
 static float g_stuck_s = -1;   // the last 'stuck in neutral for N s' line (tail_pre's gap-state timer)
+static double g_dn1_t; static char g_dn1_why[48];   // set g_dn1_t to -1: the first downshift of ours after it, when and its reason, lands here
 void logline(const char *fmt, ...)
 {
     if (strstr(fmt, "no pull after")) n_failed++;
+    if (g_dn1_t < 0 && !strncmp(fmt, "shift %d->%d (%s)", 17)) {
+        va_list ap; va_start(ap, fmt); int a = va_arg(ap, int), b = va_arg(ap, int); const char *w = va_arg(ap, const char *); va_end(ap);
+        if (b < a) { g_dn1_t = t_now; snprintf(g_dn1_why, sizeof g_dn1_why, "%s", w); }
+    }
     if (!strncmp(fmt, "stuck in neutral for", 20)) { va_list ap; va_start(ap, fmt); g_stuck_s = (float)va_arg(ap, double); va_end(ap); }
     int shift = !strncmp(fmt, "shift", 5) || strstr(fmt, "no pull after") || !strncmp(fmt, "load changed", 12);
     if ((!verbose && !shift) || g_quiet) return;
@@ -348,7 +353,7 @@ static void tick(double dt, int stats)
 }
 
 struct setup { float mass, v0; int g0; double secs; float cvar = 3, shift_time = 0.5f, mass_seen = 0; int eb_toggle = -1; float eb_level = -1;
-               float (*road)(double) = NULL; int route = 0; double junction = 0; };
+               float (*road)(double) = NULL; int route = 0; double junction = 0; float pedal0 = 0; };   // pedal0: the pedal from the first tick on (the module's demand starts from it)
 static int rolls; static double roll_time, min_kmh, t_30, t_50, t_80, d_80;
 
 static void run(const char *name, setup su, void (*ctl)(double))
@@ -357,7 +362,7 @@ static void run(const char *name, setup su, void (*ctl)(double))
     memset(&M, 0, sizeof M);
     M.mass = su.mass; M.gear = M.target = su.g0; M.cvar = su.cvar; M.shift_time = su.shift_time;
     M.eb_level = su.eb_level; M.eb_toggle = su.eb_toggle; M.mass_seen = su.mass_seen;
-    M.road = su.road; M.route_on = su.route; M.junction_s = su.junction;
+    M.road = su.road; M.route_on = su.route; M.junction_s = su.junction; M.pedal = su.pedal0;
     M.v = 0; tick(1 / 60.0, 0);  // register the gear at standstill (no hint)
     M.state = 0; M.gear = M.target = su.g0; M.force = 0;
     M.v = su.v0 / 3.6f; tick(1 / 60.0, 0);
@@ -684,6 +689,27 @@ static int sc_gear_for(float kmh, float rpm_min)   // the highest gear that stil
 }
 static void c_hold45(double) { hold(45); }
 static void c_hold70(double) { hold(70); }
+// c_fullramp: pedal 0.55 (from the first tick: setup.pedal0) for 3 s, then a ramp by 0.4/s to 1.0 (too slow for a kickdown). g_fr_full: when
+// it reached 1.0 (-1 = not yet); the first downshift from the start of the ramp on is caught (g_dn1_t)
+static double g_fr_ramp, g_fr_full;
+static void c_fullramp(double t)
+{
+    if (t <= 0) { g_fr_ramp = g_fr_full = -1; g_dn1_t = 0; }
+    if (g_fr_ramp < 0 && t >= 3) { g_fr_ramp = t; g_dn1_t = -1; g_dn1_why[0] = 0; }
+    M.pedal = g_fr_ramp < 0 ? 0.55f : fminf(1.0f, 0.55f + 0.4f * (float)(t - g_fr_ramp));
+    if (g_fr_full < 0 && M.pedal >= 1.0f) g_fr_full = t_now;
+}
+// c_cc83: the cruise control holding 83 km/h (a smooth controller); r_cruise3: 2 km flat, then 1 km at 3 %, then flat
+static void c_cc83(double) { M.cruise_kmh = 83; M.pedal = 0; float e = 83 / 3.6f - M.v; M.cc = fminf(1, fmaxf(0, 0.25f + e * 1.0f)); }
+static float r_cruise3(double s) { return s < 2000 ? 0 : s < 3000 ? 3.0f : 0; }
+static double g_c12_up; static int g_c12_g12;   // the first time in 12; 1 = 12 at the end of the climb
+static void c_cruise3(double t)
+{
+    if (t <= 0) { g_c12_up = -1; g_c12_g12 = 0; }
+    c_cc83(t);
+    if (g_c12_up < 0 && M.gear == 12 && !M.state) g_c12_up = t;
+    if (M.s >= 2950 && M.s < 3000) g_c12_g12 = M.gear == 12;
+}
 static int run_scores_table()
 {
     struct Tr { const char *name; void (*use)(); int g0; } trucks[2] = { { "ATO", use_ato, 1 }, { "XT", use_renault, 3 } };
@@ -761,6 +787,38 @@ static int run_scores_table()
         use_ato();
         printf("  downshifts after the teleport: %d / %d, no-pull lessons: %d / %d\n", downs[0], downs[1], les[0], les[1]);
         sc_check(worse == 0, "choice 1: after a teleport in a pull no more downshifts and no-pull lessons than choice 0, in every one of the 18 cases");
+    }
+    // 3d. full pedal in a gear under the torque plateau (ride: 34.6 t, gear 10, 41 km/h, 809 rpm, pedal and throttle 1.00: 0.3-0.5 m/s2 and
+    // gear 10 held for 5 s, 'hold', until the kickdown rule fired). The pull the pedal asks is not what this gear gives: a lower gear
+    // within 1.5 s of the full pedal, not by kickdown (the ramp of 0.4/s is too slow for one)
+    printf("\n  full pedal in 10 at 41 km/h (34.6 t ATO, flat; pedal 0.55 for 3 s, then a ramp to 1.0 by 0.4/s): the first downshift\n");
+    {
+        double dt_dn[2]; char wy[2][48]; int in10[2];
+        for (int ch = 0; ch < 2; ch++) {
+            sc_do("full pedal in 10", {34600, 41, 10, 15, 3, 0.5f, 0, -1, -1, NULL, 0, 0, 0.55f}, c_fullramp, ch);
+            in10[ch] = g_dn1_t != 0;
+            dt_dn[ch] = g_dn1_t < 0 || g_fr_full < 0 ? 99 : g_dn1_t - g_fr_full;
+            snprintf(wy[ch], sizeof wy[ch], "%s", g_dn1_t < 0 ? "none" : g_dn1_why);
+            if (!in10[ch]) printf("  choice %d: never in 10 at 41 km/h\n", ch);
+            else printf("  choice %d: the ramp from %.1f s, first downshift: %s, %+.1f s after the full pedal\n", ch, g_fr_ramp, wy[ch], dt_dn[ch]);
+        }
+        g_dn1_t = 0;
+        sc_check(in10[1] && dt_dn[1] <= 1.5 && strcmp(wy[1], "kickdown"), "choice 1: full pedal in a gear under the plateau downshifts within 1.5 s of the full pedal, not by kickdown");
+    }
+    // 3e. a steady cruise (ride: 83 km/h on the cruise control, 20-30 % throttle, 11 at 1262 rpm held 38 s, 'hold', against 12 at ~990 rpm, which
+    // then held the climb that followed): 12 is chosen on the flat and keeps the 3 % climb (22 t: 12 can hold it). The vehicle model learns
+    // its resistance bias in the first ~25 s after the hard reset (the demanded acceleration is off until then)
+    printf("\n  cruise control 83 km/h in 11 (22 t ATO, route), 2 km flat, then 1 km at 3 %%: when 12 comes, and 12 at the end of the climb\n");
+    {
+        double up12[2]; int keep12[2];
+        for (int ch = 0; ch < 2; ch++) {
+            sc_do("cruise 83 then 3 %", {22000, 83, 11, 140, 3, 0.5f, 0, -1, -1, r_cruise3, 1}, c_cruise3, ch);
+            up12[ch] = g_c12_up; keep12[ch] = g_c12_g12;
+            char at[24] = "never";
+            if (up12[ch] >= 0) snprintf(at, sizeof at, "at %.1f s", up12[ch]);
+            printf("  choice %d: in 12 %s, 12 at the end of the climb: %s, %d shifts\n", ch, at, keep12[ch] ? "yes" : "no", shifts);
+        }
+        sc_check(up12[1] >= 0 && up12[1] <= 40 && keep12[1], "choice 1: a steady cruise at 83 km/h takes 12 within 40 s and keeps it on the 3 % climb");
     }
     // 4. the regression from a ride: the truck skips to the tenth at ~45 km/h and 880 rpm, the driver lifts to 0.00 one second later. Several
     // ramps and start speeds, so that the skip lands at different moments; no brake, no engine brake, no retarder: no hard rule asks for a shift

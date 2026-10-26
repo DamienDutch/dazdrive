@@ -14,7 +14,8 @@
 //                acceleration (m*a + resistance). Over 1 the gear cannot make it: out. "Does it make it with a bit more
 //                throttle" is the test, not "with reserve at the throttle of now". The gear we are in may be 10 % short (no flip back
 //                at full throttle). A pull asked that no gear in the window can give counts as what the strongest one gives (never
-//                less than holding the speed), or nothing would be left to choose from after a forced shift.
+//                less than holding the speed), or nothing would be left to choose from after a forced shift. A pedal near the floor
+//                (pull > 0) asks that share of the strongest gear in the window, not of the gear we are in: a gear that gives less is out.
 //   gas_cost     0 up to the comfort limit, then ((share - comfort) / (1 - comfort))^2: steep, 1 at share 1.
 //   rpm_cost     w_rpm * ((rpm - plateau)+ / (window top - plateau))^2   far above the plateau: expensive revs
 //               + w_rpm * u * ((plateau - rpm)+ / (plateau - idle))^2   under it, near idle with load: lugging
@@ -24,6 +25,7 @@
 //                shifts = the shift to g (one, however many gears it jumps) + the shifts g will need later because the speed
 //                keeps rising at the demanded acceleration (a gear that is at the top of the window in a few seconds needs
 //                another one). That is what makes one skip cheaper than two single shifts, and a slow box pay more per shift.
+//                At a steady speed a gear that stands on the floor already pays it divided by up to 4 (it is held for long).
 //   stay_bonus   the current gear gets a small bonus: no flip-flopping on near-equal scores.
 #pragma once
 #include "vehicle.h"
@@ -43,6 +45,7 @@ struct gs_cfg {
     float hyst;        // rpm: an upshift must land this far above the window's lower edge, a downshift this far under its upper edge
     float horizon;     // s: how far ahead the demanded acceleration is followed for the shifts a gear will need later
     float learn_res;   // extra share an upshift must have in hand (what TrueShift learned on this grade)
+    float pull;        // 0, or the pedal when it is near the floor: the pull asked is at least this share of the strongest gear in the window
 };
 
 enum { GS_MAX = 32 };
@@ -103,6 +106,9 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
         if (r >= o->lo + (g > cur ? c.hyst : 0) && r <= o->hi_g[g] - (g < cur ? c.hyst : 0)) fwin = fmaxf(fwin, vehicle_force_at(g, vg, 1.0f) / (g > cur ? 1 + c.learn_res : 1));
     }
     if (fwin > 0 && need > fwin) need = fmaxf(fwin, f_res);   // (holding the speed is never capped away: a gear that cannot hold it is out)
+    // the pedal near the floor asks for the truck's pull, not for what the gear of now happens to give (it would give a gear under the
+    // plateau share 1 and keep it: ride, 34.6 t in 10 at 809 rpm, full pedal, 0.3-0.5 m/s2 for 5 s)
+    if (c.pull > 0 && !coast) need = fmaxf(need, c.pull * fwin);
     float a_d = fmaxf(0, (need - f_res) / m);                 // the acceleration demanded
     float v_f = v + a_d * c.horizon;                          // where the demand takes the speed
     // The floor: a gear must be at plateau + floor (an upshift: + hyst) where the speed has taken it in three horizons. A steady load (the
@@ -139,7 +145,12 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
             later = (k + span_later - 1) / span_later;
         }
         t->shifts = (g != cur) + later;
-        t->shiftc = c.w_shift * t->shifts * ts * u;
+        // a gear that stands on the floor at the speed of now, without the speed carrying it there, is held as long as the speed stays steady
+        // (the demand accelerates less than 0.02-0.08 m/s2): its shift is paid over that time, like its revs (ride: 83 km/h on the cruise
+        // control, 11 at 1262 rpm held 38 s against 12 at 990 rpm: the one shift weighed more than the revs). A gear that only reaches the
+        // floor because the speed rises pays it whole (sim: 17 t at 45 km/h, 9 > 10 > 9 every 5 s when it did not)
+        float amort = g != cur && c.floor > 0 && t->rpm >= r_min ? 1 + 3 * (1 - gs_smooth(0.02f, 0.08f, a_d)) : 1;
+        t->shiftc = c.w_shift * t->shifts * ts * u / amort;
         t->stay = g == cur ? c.stay : 0;
         t->score = -t->gas - t->rpmc - t->shiftc + t->stay;
         if (g == cur) o->cur_ok = 1;
