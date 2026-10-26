@@ -25,14 +25,22 @@
 // a tolerance and none of our brake is on, a factor on the game's retarder torque (act_retarder_scale, ACT_RET_DECEL) comes down,
 // an integral on the error over what the retarder gives at 1, rate-limited, with a dead band so the noise does not move it; it
 // goes back up as soon as the deceleration is short, and while it is under 1 the brake does not add (the retarder comes first).
-// In a gap the factor goes back to 1 as the retarder falls (the gap's feedforward is made for the game's own floor) and down to
-// the factor of before as the retarder recovers, both ramped so the two together do not make a peak. Back to 1 at once when the
-// assist ends, rate-limited when the lever is released. Only the player's truck gets it (core/actuate.cpp).
+// In a gap (without the ramp, below) the factor goes back to 1 as the retarder falls (the gap's feedforward is made for the
+// game's own floor) and down to the factor of before as the retarder recovers, both ramped so the two together do not make a
+// peak. Back to 1 at once when the assist ends, rate-limited when the lever is released. Only the player's truck gets it
+// (core/actuate.cpp).
+// Ramp: the game may bring its retarder back at full strength the moment the clutch closes (the lower gear's engine brake with
+// it) while the brake still holds the gap's level, and a factor could follow the close only a frame later: the deceleration
+// jumps. With ramp_s and the hook (and a retarder step held) the retarder's comeback is ours: in a gap the factor goes to 0 over
+// the retarder's fall time, the brake's lag after the open (the feedforward counts no floor: the brake holds the whole target
+// there), and from the close the level goes linearly from the gap's to the one before it over ramp_s while the factor climbs
+// from 0 to its own (soften's, or 1) as the brake model gives up the level, so the two sum to the target on the way. Without
+// the hook all of this is off (one log line) and the close is as above.
 #include "../core/suite.h"
 #include <math.h>
 #include <string.h>
 
-static float p_enabled, p_tmin, p_tmax, p_tcurve, p_jerk, p_max, p_soften;
+static float p_enabled, p_tmin, p_tmax, p_tcurve, p_jerk, p_max, p_soften, p_ramp;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 0, "1 = while a retarder or engine-brake step is held and both pedals are free, the service brake adds what is missing to reach that step's target deceleration (bridges the gearbox shifts, helps at low speed and with a heavy load). 0 = off" },
@@ -42,6 +50,7 @@ static param g_params[] = {
     { "jerk_limit", &p_jerk, 4.0f, "most the added braking may change per second (m/s3), rising and falling" },
     { "max_brake", &p_max, 0.6f, "most brake request (0-1) the assist may ask for" },
     { "soften", &p_soften, 1, "1 = when the step alone brakes harder than its target (a light truck), the game's retarder is made weaker until the target holds; full again when the lever is released. Needs [core] retarder_hook = 1. 0 = the retarder stays as the game has it" },
+    { "ramp_s", &p_ramp, 0.45f, "seconds over which the game's retarder is built back up after a gearbox shift, while the service brake hands over in the same time (no jolt when the clutch closes; in the shift the brake alone holds the target). Needs [core] retarder_hook = 1. 0 = the retarder comes back as the game has it" },
 };
 
 // Constants of the controller (physics of the measurements, not preferences).
@@ -84,6 +93,7 @@ struct decel_in {
     float held;        // the request the actuator holds now (brake air low: none of ours)
     float hold, take;  // Auto Hold: the request it holds now, and what it will hold after a stop by the lever (0 = it will not take one)
     int soften;        // the retarder factor may be posted (soften on, the hook in)
+    int ramp;          // the retarder's comeback after a shift is ramped (ramp_s on, the hook in)
 };
 
 static struct {
@@ -112,6 +122,11 @@ static struct {
     float kr = 1.0f;      // soften: the loop's retarder factor (held in a gap)
     float ks = 1.0f;      // the factor shaped through a gap (to 1 as the retarder falls, back as it recovers)
     float kp = 1.0f;      // the factor posted last
+    int rg;               // ramp: this gap is one (the retarder taken off in it)
+    float kg;             // the factor as the gap began (down to 0 from there)
+    float rt = -1;        // seconds since the close while the ramp runs (-1 = none)
+    float rdl, r0;        // the ramp's change of the level (gap's to before) and its factor at the close
+    float rs;             // the retarder's share of the ramp so far: the level's share through the brake's lag
 } D;
 
 // The target deceleration of a lever step, 1..n of n steps.
@@ -126,7 +141,7 @@ static float decel_target(int step, int n)
 }
 
 static void soft_post(float k) { if (k != D.kp) { D.kp = k; act_retarder_scale(ACT_RET_DECEL, k); } }
-static void soft_off() { D.kr = D.ks = 1.0f; soft_post(1.0f); }
+static void soft_off() { D.kr = D.ks = 1.0f; D.rg = 0; D.rt = -1; soft_post(1.0f); }
 
 static void decel_off()
 {
@@ -135,15 +150,23 @@ static void decel_off()
 }
 
 // The clutch closed: learn what the gap needed (the level now, plus what the error left would still have needed; not at the
-// ceiling, where the error says nothing about the gain) and go back to the level before the gap.
+// ceiling, where the error says nothing about the gain) and go back to the level before the gap: at once, or with the ramp over
+// ramp_s.
 static void decel_release(float need)
 {
     if (!D.k_fix && D.gap_s > 0.6f && need > 0.3f && D.lvl < p_max - 1e-3f) {
         float kn = (D.lvl + (D.refm - D.a) * D.k) / need;
         if (kn > 0.2f / DC_G_NOM && kn < 5.0f / DC_G_NOM) { D.k = D.k_known ? 0.5f * (D.k + kn) : kn; D.k_known = 1; }
     }
-    D.lvl = fminf(D.lvl, D.pre);
-    D.blind = DC_REL_S + DC_BLIND_S;
+    float to = fminf(D.lvl, D.pre);
+    if (D.rg) {
+        D.rdl = to - D.lvl; D.rt = 0; D.rs = 0; D.r0 = D.kp; D.rg = 0;
+        D.ks = D.kr;   // soften's own way down after the close is the ramp's
+        D.blind = DC_BLIND_S;
+    } else {
+        D.lvl = to;
+        D.blind = DC_REL_S + DC_BLIND_S;
+    }
 }
 
 static void decel_tick(const decel_in &in)
@@ -189,6 +212,7 @@ static void decel_tick(const decel_in &in)
     }
     if (hard) { if (D.on) decel_off(); soft_off(); return; }
     if (!lever) {
+        if (D.rg || D.rt >= 0) { D.rg = 0; D.rt = -1; soft_post(D.ks); }   // in a ramp's gap or ramp: to soften's factor (1 without it)
         if (D.kr < 1) { D.kr = D.ks = fminf(D.kr + DC_SOFT_UP * dt, 1.0f); soft_post(D.ks); }   // the lever released: back up, not a jolt
         if (D.on) {
             D.u = fmaxf(D.u - rlim * dt, 0);
@@ -199,7 +223,7 @@ static void decel_tick(const decel_in &in)
         return;
     }
     if (!D.on) {   // starting: the reference starts at what the truck does now and climbs at the jerk limit, as the retarder builds up
-        D.on = 1; D.lvl = D.u = D.pre = 0; D.gap = 0; D.gap_s = 0; D.blind = 0; D.hand_s = 0;
+        D.on = 1; D.rg = 0; D.rt = -1; D.lvl = D.u = D.pre = 0; D.gap = 0; D.gap_s = 0; D.blind = 0; D.hand_s = 0;
         D.ref = D.refm = fmaxf(D.a, 0);
     }
     int step = in.retarder > 0 ? (int)in.retarder : 1;   // an engine brake alone counts as the first step (of however many)
@@ -216,11 +240,13 @@ static void decel_tick(const decel_in &in)
     D.ref += D.ref < tgt ? fminf(dr, tgt - D.ref) : -fminf(dr, D.ref - tgt);
     // the gap: the clutch opens at a shift, or the box is in neutral (stop assist)
     int open = in.clutch > DC_OPEN || in.gear == 0, closed = in.clutch < DC_CLOSED && in.gear != 0;
-    float need = fmaxf(D.ref - DC_FLOOR, 0);
+    int rg = D.gap ? D.rg : in.ramp && in.retarder > 0;   // a ramp's gap (the retarder taken off in it: no floor of its own)
+    float need = fmaxf(D.ref - (rg ? 0 : DC_FLOOR), 0);
     int step_now = 0;   // the level jumped (the shift's feedforward or its release): the request follows at once
     float lvl = D.lvl;
     if (!D.gap && open) {
-        D.gap = 1; D.gap_s = 0; D.fix = 0; D.pre = lvl;
+        if (D.rt >= 0) { lvl = fmaxf(lvl + D.rdl * (1 - fminf(D.rt / p_ramp, 1.0f)), 0); D.rt = -1; }   // a ramp cut short: where it went
+        D.gap = 1; D.gap_s = 0; D.fix = 0; D.pre = lvl; D.rg = rg; D.kg = D.kp;
         // the level that held the target in the last gap, at once; before a gap has taught it, only part of what the nominal brake
         // would need (too little the loop makes up in a moment, too much is a lurch)
         lvl = fminf(fmaxf(D.k * need * (D.k_known ? 1.0f : DC_FF_FIRST), lvl), p_max);
@@ -233,6 +259,11 @@ static void decel_tick(const decel_in &in)
         D.gap = 0;
         step_now = 1;
     } else if (D.gap) D.gap_s += dt;
+    if (D.rt >= 0) {   // the ramp's share of the level for this tick
+        float s0 = fminf(D.rt / p_ramp, 1.0f);
+        D.rt += dt;
+        lvl = fmaxf(lvl + D.rdl * (fminf(D.rt / p_ramp, 1.0f) - s0), 0);
+    }
     D.refm += dt / (DC_REFM_S + dt) * (D.ref - D.refm);
     if (in.soften) {
         // soften: lowered only while over the target with none of our brake on, raised while short (out of the transients)
@@ -244,8 +275,15 @@ static void decel_tick(const decel_in &in)
         }
         if (D.gap) D.ks = fminf(D.ks + (1 - D.kr) / DC_SOFT_GAP_UP * dt, 1.0f);
         else D.ks = D.kr >= D.ks ? D.kr : fmaxf(D.kr, D.ks - (1 - D.kr) / DC_SOFT_GAP_DN * dt);
-        soft_post(D.ks);
     }
+    float kf = in.soften ? D.ks : 1.0f;
+    if (D.rg) kf = D.kg * fminf(fmaxf(1 - (D.gap_s - DC_LAG_S) / DC_FF_S, 0), 1.0f);   // a ramp's gap: off as the brake's feedforward arrives
+    else if (D.rt >= 0) {   // the ramp: the retarder takes over what the brake gives up, as the brake model has it (to the last 1 %)
+        D.rs += (fminf(D.rt / p_ramp, 1.0f) - D.rs) * dt / (DC_LAG_S + dt);
+        if (D.rs > 0.99f) D.rt = -1;
+        else kf = D.r0 + (kf - D.r0) * D.rs;
+    }
+    if (in.soften || in.ramp) soft_post(kf);
     float e = D.refm - am;
     if (in.soften && D.kr < 1 && !D.gap && e > 0) e = 0;   // short with the retarder lowered: it comes back first, the brake waits
     int guard = am > D.refm + DC_TOL;
@@ -290,7 +328,7 @@ static void decel_tick(const decel_in &in)
     if (!((lvl >= p_max && di > 0) || (lvl <= 0 && di < 0))) lvl += di;
     D.lvl = fminf(fmaxf(lvl, 0), p_max);
     float want = fminf(fmaxf(D.lvl + DC_KP * e, 0), p_max);
-    D.u = step_now ? want : fminf(fmaxf(want, D.u - dn * dt), D.u + up * dt);
+    D.u = step_now || D.rt >= 0 ? want : fminf(fmaxf(want, D.u - dn * dt), D.u + up * dt);
     act_brake(ACT_DECEL, D.u);
 }
 
@@ -312,6 +350,7 @@ static void de_frame()
     cruise_info_get(&cu);
     in.hold = w[ACT_HOLD].brake; in.take = cu.lever_take;
     in.soften = p_soften > 0 && act_retarder_hooked();
+    in.ramp = p_ramp > 0 && act_retarder_hooked();
     bool was = D.on, soft_was = D.kr < 1;
     decel_tick(in);
     if (D.on != was) logv(1, "Decel: %s (step %d of %d, target %.2f m/s2, %.0f km/h)", D.on ? "on" : "off", D.step, D.n, D.tgt, fabsf(T.speed) * 3.6f);
@@ -335,10 +374,13 @@ static void de_start()
     if (p_enabled <= 0) return;
     p_max = p_max > 0 ? fminf(p_max, 1.0f) : 0;   // a request is 0..1 (and a NaN from the ini is none)
     if (!(p_jerk >= 0.1f)) p_jerk = 0.1f;         // the slews divide and multiply by it
-    snprintf(g_status, sizeof g_status, "on: %.1f-%.1f m/s2, jerk %.1f m/s3, max brake %.2f%s%s", p_tmin, p_tmax, p_jerk, p_max,
-             p_soften > 0 && g_retarder_hook >= 0.5f ? ", soften" : "", act_hooked() ? "" : " (no actuator hook)");
+    snprintf(g_status, sizeof g_status, "on: %.1f-%.1f m/s2, jerk %.1f m/s3, max brake %.2f%s%s%s", p_tmin, p_tmax, p_jerk, p_max,
+             p_soften > 0 && g_retarder_hook >= 0.5f ? ", soften" : "", p_ramp > 0 && g_retarder_hook >= 0.5f ? ", ramp" : "",
+             act_hooked() ? "" : " (no actuator hook)");
     static bool told;
     if (p_soften > 0 && g_retarder_hook < 0.5f && !told) { told = true; logline("Decel: soften is on but [core] retarder_hook is 0: the game's retarder stays as it is, the service brake only adds"); }
+    static bool told_ramp;
+    if (p_ramp > 0 && g_retarder_hook < 0.5f && !told_ramp) { told_ramp = true; logline("Decel: ramp_s is on but [core] retarder_hook is 0: after a shift the retarder comes back as the game has it, the brake goes back at once"); }
 }
 
 static void de_stop() { act_brake(ACT_DECEL, 0); soft_off(); }
