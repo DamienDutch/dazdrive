@@ -120,6 +120,8 @@ static float g_ff;  // last bend feed-forward request (mode 2, log)
 static float g_o3_prev, g_do3; static int g_have_o3;
 static float g_lf = 1, g_li = 1; static int g_hold;   // last live scales and bend-hold state (lane.csv)
 static double g_law_at = -1e9;  // last call of the control law (LKA active)
+static int g_lane_state = LANE_OFF;   // LaneState (core/suite.h): what the assist is doing now, set where the gates below decide
+static double g_stub_at = -1e9;       // last call of stub_law: the game calls the law only while lane keeping is on
 
 static float clampf(float x, float lo, float hi) { return x < lo ? lo : (x > hi ? hi : x); }
 
@@ -801,7 +803,7 @@ static float lane_step(float u, float o1, float o2, float o3, float dt, float wh
                 incident("lane", "the lane assist ran away at %.0f km/h (request %.2f, heading %.3f rad, offset %.2f m): the game's own assist for 4 s", kmh, want2, o2, o1);
             }
             // The game's own law takes over (it is stable, just weak), not nothing: a truck with no steering at all leaves a bend (sim S-bend: 12-38 m)
-            if (nowp < g_panic_until) { g_u = u; g_ci = 0; return u; }
+            if (nowp < g_panic_until) { g_u = u; g_ci = 0; g_lane_state = LANE_RUNAWAY; return u; }
         }
         float st = p_rate2 * dt;
         return want2 > g_u + st ? g_u + st : (want2 < g_u - st ? g_u - st : want2);
@@ -844,6 +846,7 @@ static void stub_law(void *ga, float o1, float o2, float o3, float dt)
     float before = g ? *(float *)(g + GA_U) : 0;
     o_law(ga, o1, o2, o3, dt);
     if (!g) return;
+    g_stub_at = wall_s();
     float u = *(float *)(g + GA_U), out = u;
     float A, steer, wheel;
     read_veh(&A, &steer, &wheel);
@@ -860,12 +863,14 @@ static void stub_law(void *ga, float o1, float o2, float o3, float dt)
     if (was_slow && !slow) g_resume_at = wall_s();
     // Indicator pause: no request at all (the game's u decays to 0 in a few frames), short-term state forgotten.
     if (p_mode >= 1 && (g_pause || slow)) {
+        g_lane_state = g_pause ? LANE_WAIT_INDICATOR : LANE_WAIT_SLOW;
         float d = before * 0.85f;
         *(float *)(g + GA_U) = fabsf(d) < 1e-3f ? 0 : d;
         g_u = 0; g_ci = 0; g_ref = 0; g_have_o = 0;
         return;
     }
     if (p_mode >= 1 && o1 == 0 && o2 == 0 && o3 == 0) {
+        g_lane_state = LANE_WAIT_NO_LANE;
         float d = before * 0.9f;
         *(float *)(g + GA_U) = fabsf(d) < 1e-3f ? 0 : d;
         g_u = 0;
@@ -883,6 +888,7 @@ static void stub_law(void *ga, float o1, float o2, float o3, float dt)
             g_soft_at = wall_s(); g_soft_end = g_centre_since = -1;
             logv(2, "Lane: soft start (%.0f%% until near the center), o1 %.2f m", p_soft * 100, o1);
         }
+        g_lane_state = LANE_ACTIVE;   // the runaway guard in lane_step overrides it
         out = lane_step(u, o1, o2, o3, dt, wheel, A, fabsf(T.speed) * 3.6f);
         if (g_soft_at >= 0) { out *= soft_share(o1, o2, fabsf(T.speed) * 3.6f, wall_s()); g_u = out; }
         // Indicator set (the game's own clamp, lka-roll-re notes A2): the assist may not steer back against a lane change.
@@ -899,11 +905,14 @@ static void stub_law(void *ga, float o1, float o2, float o3, float dt)
         }
     } else if (p_mode >= 1 && !law2()) {
         // the game's own law (no FFB / profile not known yet): the same ramp after a pause or the low-speed gate
+        if (ran) g_lane_state = LANE_ACTIVE;
         double since = wall_s() - g_resume_at;
         if (since >= 0 && since < 1) { out = u * (float)since; *(float *)(g + GA_U) = out; }
     }
+    // needs_cruise with the cruise off: the request is computed but filter_a lets the wheel target go (the same test as there): waiting
+    if (p_mode >= 1 && p_needs_cc > 0 && !(T.cruise > 0.5f) && g_lane_state == LANE_ACTIVE) g_lane_state = LANE_WAIT_NO_CRUISE;
     if (u == 0) lane_reset();  // the game switched the assist off: let go at once
-    if (u == 0) out = 0;
+    if (u == 0) { out = 0; g_lane_state = LANE_OFF; }
     g_u = out;
     if (!g_csv || u == 0) return;
     static double at;
@@ -943,6 +952,7 @@ static void ln_reset(int level, const char *why)
     lane_reset();
     g_u = g_ci = g_do1 = g_o1_prev = g_o2_prev = g_w_prev = 0;
     g_law_at = -1e9;  // filter_a lets the assist offset go until the law runs again
+    g_lane_state = LANE_OFF;
 }
 
 static void ln_start()
@@ -1127,8 +1137,15 @@ static void cruise_lane_on()
     }
 }
 
+// The game calls the law only while lane keeping is on: no call for 0.15 s = off (filter_a uses the same gap for the wheel target)
+static void lane_state_tick()
+{
+    if (g_lane_state != LANE_OFF && wall_s() - g_stub_at > 0.15) g_lane_state = LANE_OFF;
+}
+
 static void ln_frame()
 {
+    lane_state_tick();
     // Hysteresis on the minimum speed: once above on_kmh it works down to min_kmh; below that it waits for on_kmh.
     if (g_minp) {
         static int latched;
@@ -1169,7 +1186,7 @@ static void ln_frame()
         }
         if (on >= 0) was = on;
     }
-    DEV_NOTE(lane(o_law ? game_actor_safe() : NULL, o_law ? g_pause : -1));  // game_actor offsets are 1.60's: only where the hook matched
+    DEV_NOTE(lane(o_law ? game_actor_safe() : NULL, o_law ? g_pause : -1, g_lane_state));  // game_actor offsets are 1.60's: only where the hook matched
     // learning profile: per wheel (winmm name), loaded once the wheel is found (or after 45 s as "default"), saved at most every learn_save_s
     if (p_learn > 0 && p_mode >= 2 && o_law) {
         if (!L_loaded) {

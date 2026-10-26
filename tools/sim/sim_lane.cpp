@@ -458,6 +458,42 @@ static int test_indicator_key()
     return bad;
 }
 
+// The lane state (core/suite.h LaneState, for the dev display): one value for what the assist does, set where the gates decide.
+static int test_lane_state()
+{
+    apply({ "mode 2", 2 }); o_law = fake_law; p_needs_cc = 1; p_keep_on = 1; p_min_kmh = 5;
+    memset(GA, 0, sizeof GA); GA[0x1d1] = 0x20; memset(VEH, 0, sizeof VEH); g_pause = 0; g_panic_until = 0; g_lane_state = LANE_OFF;
+    int bad = 0;
+    auto law = [&](float o1, float o2, float o3, int n) {   // n law calls at 60 Hz with a request that moves a little (so the law counts as run)
+        for (int i = 0; i < n; i++) { t_now += 1.0 / 60; g_fake_u = 0.1f + 0.01f * (i & 1); stub_law(GA, o1, o2, o3, 1.0f / 60); }
+    };
+    auto expect = [&](const char *what, int want) {
+        printf("lane state: %-46s %d (expect %d)%s\n", what, g_lane_state, want, g_lane_state == want ? "" : "  <-- WRONG");
+        bad |= g_lane_state != want;
+    };
+    T.speed = 80 / 3.6f; T.cruise = 0;
+    law(0.2f, 0.01f, 0.001f, 30); expect("cruise off, needs_cruise = 1", LANE_WAIT_NO_CRUISE);
+    T.cruise = 80 / 3.6f;
+    law(0.2f, 0.01f, 0.001f, 30); expect("cruise on, a lane seen", LANE_ACTIVE);
+    law(0, 0, 0, 30); expect("lane lost (o1 = o2 = o3 = 0)", LANE_WAIT_NO_LANE);
+    g_pause = 1;
+    law(0.2f, 0.01f, 0.001f, 30); expect("indicator pause", LANE_WAIT_INDICATOR);
+    g_pause = 0; T.speed = 3 / 3.6f;
+    law(0.2f, 0.01f, 0.001f, 30); expect("3 km/h with keep_on (min_kmh 5)", LANE_WAIT_SLOW);
+    T.speed = 80 / 3.6f;
+    law(0.2f, 0.01f, 0.001f, 30); expect("back at 80 km/h", LANE_ACTIVE);
+    g_panic_until = t_now + 4;
+    law(0.2f, 0.01f, 0.001f, 30); expect("runaway guard: the game's law for 4 s", LANE_RUNAWAY);
+    g_panic_until = 0;
+    law(0.2f, 0.01f, 0.001f, 30); expect("guard over", LANE_ACTIVE);
+    t_now += 0.3; lane_state_tick(); expect("no law call for 0.3 s (lane keeping off)", LANE_OFF);
+    law(0.2f, 0.01f, 0.001f, 30); expect("the law runs again", LANE_ACTIVE);
+    t_now += 1.0 / 60; g_fake_u = 0; stub_law(GA, 0.2f, 0.01f, 0.001f, 1.0f / 60); expect("the game writes request 0 (assist off)", LANE_OFF);
+    printf("Lane state test: %s\n", bad ? "FAILED" : "ok");
+    g_pause = 0; p_needs_cc = 0;
+    return bad;
+}
+
 // ts5b 387.4 s: the game's law saturated at -1, the same as our clamped output, so the hook took it for "not run", filter_a then
 // thought lane keeping was off and released the wheel in the bend. Saturated with the lane-keeping bit on: A must keep building;
 // with the bit off our law must not keep a stale -1 going (what the game does with its own stale u is the game's).
@@ -768,5 +804,5 @@ int main(int argc, char **argv)
             double pk, opp, os, late; run_driver(c, nom, kmh, &pk, &opp, &os, &late);
             printf("  %-14s %2.0f km/h  peak A %.4f  mean A opposing the driver %.4f  overshoot after letting go %.2f m  |o1| at 14-32 s after %.2f\n", c.name, kmh, pk, opp, os, late);
         }
-    return test_indicator() | test_indicator_key() | test_ffb() | test_saturation();
+    return test_indicator() | test_indicator_key() | test_ffb() | test_saturation() | test_lane_state();
 }

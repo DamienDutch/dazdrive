@@ -144,6 +144,10 @@ extern volatile int g_crawl_on;       // Creep: the driver has crawl switched on
 extern volatile int g_rolling;        // TrueShift has the truck in neutral (eco-roll)
 extern volatile float g_roll_boost_kmh;   // TrueShift asks Cruise for this much over the set speed (km/h) just before an eco-roll starts (0 = none)
 extern volatile double g_rb_cancel_at;   // Cruise: wall time it cancelled itself for a roundabout (Lane switches lane keeping off for it, back on at the next cruise resume)
+// Lane: what the lane assist is doing right now, one value (lane.cpp sets it where its gates decide; the dev display reads it).
+// OFF = lane keeping off (the game does not call the law); WAIT_* = on, but no request of ours: under min_kmh, the cruise is off
+// (needs_cruise), an indicator pause, no lane seen; ACTIVE = steering; RUNAWAY = the runaway guard handed the game's own law the wheel
+enum LaneState { LANE_OFF, LANE_WAIT_SLOW, LANE_WAIT_NO_CRUISE, LANE_WAIT_INDICATOR, LANE_WAIT_NO_LANE, LANE_ACTIVE, LANE_RUNAWAY };
 extern volatile float g_creep_thr;     // Creep asks the merged throttle for this much (0..~0.15): Cruise's stub maxes it in
 extern volatile float g_clutch_ours;  // the clutch value Creep puts on the drivetrain (launch or crawl), NAN when the game's own applies
 static inline float clutch_seen() { float c = g_clutch_ours; return c == c ? c : T.eff_clutch; }  // what the drivetrain sees: use instead of T.eff_clutch for 'is the clutch closed'
