@@ -4,9 +4,11 @@
 //
 //   score(g) = - gas_cost(g) - rpm_cost(g) - shift_cost(g) + stay_bonus(g)
 //
-//   candidates   every forward gear within 1 + skips of the current one whose rpm (at the speed after the shift) lies in the
+//   candidates   every forward gear within 1 + skips (up: skips_up) of the current one whose rpm (at the speed after the shift) lies in the
 //                usable window: from idle + 60 % (coasting 30 %) of the way up to the torque plateau (V.plateau), to the top of the power range
-//                (V.eng.range[R_POWER]) or 93 % of the limit, whichever is lower. An upshift must land hyst above the lower edge,
+//                (V.eng.range[R_POWER]) or 93 % of the limit, whichever is lower. A gear must also
+//                be floor over the start of the plateau where the demanded acceleration takes the speed in 3 horizons: a steady
+//                load does not sit under it, a truck that accelerates may land lower. An upshift must land hyst above the lower edge,
 //                a downshift hyst below the upper one (the hysteresis); the current gear may sit anywhere inside the window.
 //   feasibility  share(g) = needed force / vehicle_force_at(g, v, 1): the throttle that gear needs for the demanded
 //                acceleration (m*a + resistance). Over 1 the gear cannot make it: out. "Does it make it with a bit more
@@ -33,7 +35,11 @@ struct gs_cfg {
     float w_shift;     // weight of shift_cost
     float stay;        // stay_bonus of the current gear
     float idle;        // idle rpm
-    int skips;         // most gears an upshift may skip (a shift spans 1 + skips gears, up or down)
+    int skips;         // most gears a downshift may skip (a shift spans 1 + skips gears)
+    int skips_up;      // the same for an upshift
+    int skips_later;   // the same for the shifts a gear will need later (a skip that is not allowed this second, at the start of a pull-away, will be)
+    float floor;       // rpm over the start of the torque plateau: the lowest the window reaches under load (0 = no such floor)
+    int floor_cur;     // 1 = the current gear must stand on it too, 0 = only the gears a shift would land in (the pedal just came off)
     float hyst;        // rpm: an upshift must land this far above the window's lower edge, a downshift this far under its upper edge
     float horizon;     // s: how far ahead the demanded acceleration is followed for the shifts a gear will need later
     float learn_res;   // extra share an upshift must have in hand (what TrueShift learned on this grade)
@@ -85,8 +91,9 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
     float fpeak = gs_peak_force(v);
     for (int g = 1; g <= n; g++) o->hi_g[g] = fminf(V.eng.range[R_POWER][1], 0.93f * lim);
     o->hi = o->hi_g[cur];
-    int span = 1 + (c.skips > 0 ? c.skips : 0);
-    int g0 = cur - span < 1 ? 1 : cur - span, g1 = cur + span > n ? n : cur + span;
+    int span = 1 + (c.skips_up > 0 ? c.skips_up : 0), span_dn = 1 + (c.skips > 0 ? c.skips : 0);
+    int span_later = 1 + (c.skips_later > 0 ? c.skips_later : 0);
+    int g0 = cur - span_dn < 1 ? 1 : cur - span_dn, g1 = cur + span > n ? n : cur + span;
     float v_after = fmaxf(0.5f, v - f_res / m * ts);          // speed once the shift is done
     // The pull asked can be more than any gear in the window gives (a pedal held in a low gear, then the limiter forces a shift up):
     // it counts as what the strongest of them can do, or nothing would be left to choose from.
@@ -98,6 +105,11 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
     if (fwin > 0 && need > fwin) need = fmaxf(fwin, f_res);   // (holding the speed is never capped away: a gear that cannot hold it is out)
     float a_d = fmaxf(0, (need - f_res) / m);                 // the acceleration demanded
     float v_f = v + a_d * c.horizon;                          // where the demand takes the speed
+    // The floor: a gear must be at plateau + floor (an upshift: + hyst) where the speed has taken it in three horizons. A steady load (the
+    // speed hardly rises) must stand there now; a truck that accelerates may land lower, the speed carries it up. A shorter look
+    // ahead takes the skips away from a pull-away, a gear that lands right on the floor is knocked off it by the demand falling after the
+    // shift (hence the hysteresis too). The caller sets floor 0 where the window must stay low (coasting for a while, engine brake).
+    float r_min = c.floor > 0 ? plateau + c.floor : 0, v_floor = v + a_d * 3 * c.horizon;
     float u = fpeak > 1 ? fminf(1, need / fpeak) : 1;         // demanded power over the power available at this speed
     // a gear that is held for a long time (the speed hardly changes) pays its revs for longer than one the speed runs away from: up to 4 times
     float hold = 1 + 3 * (1 - gs_smooth(0.02f, 0.3f, a_d));
@@ -112,7 +124,8 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
         float f1 = vehicle_force_at(g, vg, 1.0f);
         float fn = need * (g > cur ? 1 + c.learn_res : 1);
         t->share = f1 > 1 ? fn / f1 : 9;
-        bool in = t->rpm >= o->lo + (g > cur ? c.hyst : 0) && t->rpm <= o->hi_g[g] - (g < cur ? c.hyst : 0);
+        bool in = t->rpm >= o->lo + (g > cur ? c.hyst : 0) && t->rpm <= o->hi_g[g] - (g < cur ? c.hyst : 0) &&
+                  (g == cur && !c.floor_cur ? true : t->rpm * (v_floor / vg) >= r_min + (g > cur ? c.hyst : 0));
         if (!in || t->share > (g == cur ? 1.1f : 1.0f)) continue;   // the gear we are in may be a little short (10 %), a gear to shift to may not: no flip back at full throttle
         t->ok = 1;
         float x = fmaxf(0, t->share - c.comfort) / fmaxf(0.05f, 1 - c.comfort);
@@ -123,7 +136,7 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
         if (v_f > v * 1.02f) {
             int k = 0;
             while (g + k < n && vehicle_rpm_at(g + k, v_f) > o->hi_g[g + k]) k++;
-            later = (k + span - 1) / span;
+            later = (k + span_later - 1) / span_later;
         }
         t->shifts = (g != cur) + later;
         t->shiftc = c.w_shift * t->shifts * ts * u;

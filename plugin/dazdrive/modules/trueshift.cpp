@@ -29,7 +29,7 @@ static float p_eco_ceil, p_mode_char, p_enabled, p_takeover, p_on_kmh, p_off_kmh
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
     p_idle, p_trace, p_lookahead, p_roll, p_roll_cruise, p_roll_cruise_min, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_stop, p_tones, p_crest_band, p_relax,
-    p_choice, p_ch_eco, p_ch_norm, p_ch_power, p_ch_rpm, p_ch_shift, p_ch_stay, p_ch_stay_pw;
+    p_choice, p_ch_eco, p_ch_norm, p_ch_power, p_ch_rpm, p_ch_shift, p_ch_stay, p_ch_stay_pw, p_ch_floor;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = TrueShift on, 0 = the game's own automatic" },
@@ -50,9 +50,10 @@ static param g_params[] = {
     { "choice_comfort", &p_ch_norm, 0.8f, "choice 1, Normal: the same, a little more careful" },
     { "choice_comfort_power", &p_ch_power, 0.65f, "choice 1, Power: the same, the most careful (skips the least)" },
     { "choice_rpm_weight", &p_ch_rpm, 0.5f, "choice 1: weight of the cost of the revs (far above the torque plateau, and just above idle under load). A guess, there is no efficiency map: 0 = revs do not count" },
-    { "choice_shift_weight", &p_ch_shift, 4.0f, "choice 1: weight of the cost of a shift (the shift time of the gearbox times the power asked: the drive time it loses). Higher = fewer, longer shifts, more skipping, mostly with a slow gearbox" },
+    { "choice_shift_weight", &p_ch_shift, 8.0f, "choice 1: weight of the cost of a shift (the shift time of the gearbox times the power asked: the drive time it loses). Higher = fewer, longer shifts, more skipping, mostly with a slow gearbox" },
     { "choice_stay", &p_ch_stay, 0.03f, "choice 1, Eco and Normal: bonus for the gear the truck is in, against hunting between two gears that score alike" },
-    { "choice_stay_power", &p_ch_stay_pw, 0.08f, "choice 1, Power: the same, higher" },
+    { "choice_stay_power", &p_ch_stay_pw, 0.2f, "choice 1, Power: the same, higher" },
+    { "choice_floor_rpm", &p_ch_floor, 60, "choice 1: under load the revs stay at least this far over the start of the torque plateau (rpm). Coasting and the engine brake are not held to it. 0 = the window reaches below the plateau" },
     { "launch_correct", &p_launch_fix, 1, "1 = when the game picked a lower start gear than the physics of launch_max_kmh / launch_slip_s allow (after reversing, after the engine started, or its own downshift at a stop), the gear is changed at the standstill before the pull-away: no climbing through the low gears (0 = off)" },
     { "load_down_from", &p_load_from, 0.75f, "on a climb: a gear that needs this share of its full-throttle force to hold the speed (and the speed falls under real throttle) gets its downshift point raised towards the torque plateau (1 = off; a gear that cannot hold it at all downshifts at once anyway)" },
     { "skip_wait_over_rpm", &p_skip_over, 400, "skip_wait_s: how far over the upshift point the revs may build up while waiting for a skip (rpm; never above 85 % of the limit)" },
@@ -935,7 +936,7 @@ static float climb_need_kmh()
 }
 
 // choice = 1: the settings of the score function (core/gearscore.h) for the mode of now
-static gs_cfg score_cfg(int skips)
+static gs_cfg score_cfg(int skips, int skips_up, int skips_later, int low_edge, int coast)
 {
     gs_cfg c = {};
     c.comfort = by_mode(p_ch_eco, p_ch_norm, p_ch_power);
@@ -944,6 +945,10 @@ static gs_cfg score_cfg(int skips)
     c.stay = by_mode(p_ch_stay, p_ch_stay, p_ch_stay_pw);
     c.idle = idle_rpm();
     c.skips = skips;
+    c.skips_up = skips_up;
+    c.skips_later = skips_later;
+    c.floor = low_edge ? 0 : p_ch_floor;   // (coasting for a while and the engine brake keep the window's low edge)
+    c.floor_cur = !coast;                  // (a lift-off does not make the gear it just skipped to a wrong one)
     c.hyst = p_hyst;
     c.horizon = 8;                 // s: the speed the demanded acceleration reaches in that time decides how soon a gear needs the next shift
     c.learn_res = learned().res;   // what the no-pull lessons of this grade ask of an upshift
@@ -1164,7 +1169,7 @@ static int decide_gear(void *self, int *why)
     if (junction_near) { *why = W_JUNCTION_AHEAD; return cur; }
 
     int coast = coast_p;
-    int skips = skip_allowed();
+    int skips = skip_allowed(), skips_free = skips;   // (skips_free: what is allowed once the takeover is a few seconds old)
     float grade = sinf(V.grade_deg * 0.0174533f);
     // No skipping right after taking over from the game (it may have started
     // in a high gear) or close above the takeover speed.
@@ -1204,10 +1209,13 @@ static int decide_gear(void *self, int *why)
         if (g_ahead == g_ahead) g_pk = fmaxf(g_pk, g_ahead);
         float f_hold = fmaxf(f_res, resist_grade(v, g_pk));      // what holding the speed on the worst grade of the next seconds asks
         // what is asked: the force of the last seconds (up fast, down slow), but no more than the pedal gives in this gear now: right after
-        // a shift the old gear's force would still be in it and make every higher gear look out of reach
-        float need = fmaxf(fminf(S.f_need, force_at(cur, v, fmaxf(S.thr, S.demand))), f_hold);
+        // a shift the old gear's force would still be in it and make every higher gear look out of reach. Never less than the pedal of now
+        // asks in this gear: the filter lags 0.3 s behind a pedal going down, and the floor would take a steady load for it (after a takeover
+        // or a reset it starts from 0)
+        float need = fmaxf(fminf(fmaxf(S.f_need, force_at(cur, v, S.thr)), force_at(cur, v, fmaxf(S.thr, S.demand))), f_hold);
         gs_out so;
-        gs_eval(&so, cur, n, v, need, f_hold, coast_p, score_cfg(coast_p ? 0 : skips));   // (no skipping with the pedal off, as in the upshift path)
+        // (no skipping with the pedal off, and no skip up on a climb of 1.5 % and more (the upshift path: 2 %): the gear skipped to had no pull later)
+        gs_eval(&so, cur, n, v, need, f_hold, coast_p, score_cfg(coast_p ? 0 : skips, coast_p || grade > 0.015f ? 0 : skips, grade > 0.015f ? 0 : skips_free, ebrake || (coast_p && S.demand < 0.05f), coast_p));
         int w = so.best;
         if (w == cur) { *why = W_HOLD; return cur; }
         if (w) {
@@ -1227,9 +1235,13 @@ static int decide_gear(void *self, int *why)
                 bool jn_soon = jn >= 0 && jn < fmaxf(50.0f, v * 3);
                 double dwell = now - S.kd_at < by_mode(3, p_kick_dwell, 8) + 1 ? by_mode(3, p_kick_dwell, 8) : by_mode(p_dwell_du, p_dwell_du, 4.0f);
                 // a change for a better score only while pulling steadily (the early upshift's conditions): not right after taking over, not
-                // right after a brake at low speed, not onto a rising grade, not within the kickdown dwell, not while the truck is slowing
+                // right after a brake at low speed, not onto a rising grade, not within the kickdown dwell, not while the truck is slowing, not
+                // while the throttle in effect is far above the filtered demand (cruise control pulling up to its speed: the demand is still
+                // on its way up, and the gear chosen for it has no pull a second later). The engine's throttle, not the raw pedal: under the Eco
+                // pedal curve the pedal stands well above the throttle it gives, and would veto every upshift at a middle pedal
                 bool steady_up = now - S.ours_at > (S.ours_launch ? 1.0 : 3.0) && (now - S.brake_at > 6 || v * 3.6f >= 60) && !climbing &&
-                                 !(now - S.kd_at < by_mode(3, p_kick_dwell, 8)) && T.accel > -0.15f && thr >= 0.6f * S.demand;
+                                 !(now - S.kd_at < by_mode(3, p_kick_dwell, 8)) && T.accel > -0.15f && thr >= 0.6f * S.demand &&
+                                 T.eff_thr <= fmaxf(thr, S.demand) + 0.15f;
                 if (coast_p && S.mode == MODE_POWER && p_mode_char > 0 && now - S.pedal_on_at < 3 && rpm < lim * 0.9f) ret = cur, why_v = W_POWER_HOLDS;
                 else if (!wants_power && (T.accel < -0.2f || jn_soon) && rpm < lim * 0.9f) ret = cur, why_v = W_UP_VETO;
                 else if (S.shift_dir < 0 && since < dwell && rpm < S.up_pt + 100) ret = cur, why_v = W_ANTI_HUNT_UP;

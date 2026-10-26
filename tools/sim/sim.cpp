@@ -27,12 +27,13 @@ int g_log_level = 2;
 incident_ctx g_inc = { 0, 0, 0, NAN, NAN };
 double g_incident_mb = 0;
 int g_n_incidents;
+static int g_quiet;   // the SCORES table runs print no shift lines and no incidents
 void logring(const char *, ...) {}
 void incident(const char *kind, const char *fmt, ...)
 {
     g_n_incidents++;
     char b[300]; va_list ap; va_start(ap, fmt); vsnprintf(b, sizeof b, fmt, ap); va_end(ap);
-    printf("   INCIDENT %s: %s\n", kind, b);
+    if (!g_quiet) printf("   INCIDENT %s: %s\n", kind, b);
 }
 const char *g_truck_unsupported;
 volatile float g_clutch_ours = __builtin_nanf("");
@@ -51,7 +52,7 @@ double wall_s() { return t_now; }
 double sim_s() { return t_now; }
 void csv_cap(FILE **, const char *) {}
 FILE *open_out(const char *name, const char *mode) { return NULL; }  // no trace file
-static int verbose, n_failed, g_x_failed, g_quiet;   // g_quiet: the SCORES table runs print no shift lines
+static int verbose, n_failed, g_x_failed;
 static float g_stuck_s = -1;   // the last 'stuck in neutral for N s' line (tail_pre's gap-state timer)
 void logline(const char *fmt, ...)
 {
@@ -512,11 +513,13 @@ static void c_m_limiter(double t)
 // X4: full pedal up a 6 % climb, at t = 20 s a teleport (HARD reset) onto a 2 % climb at the same speed. The grade peak decide_gear
 // reckons the next upshift with belongs to the road we left: the upshift must come soon on the 2 % road, not ~27 s later when a 6 % peak
 // has faded (it used to be a function-local static that lived through the reset).
-static int g_tp_done, g_tp_ups, g_tp_downs; static double g_tp_up_at;
+static int g_tp_done, g_tp_ups, g_tp_downs, g_tp_snap, g_tp_downs1; static double g_tp_up_at;   // (g_tp_downs1: the downshifts counted from 1.5 s after the teleport)
+static float g_tp_pedal = 1, g_tp_g1 = 6, g_tp_g2 = 2;   // (the SCORES table runs other pedals and grades)
 static void c_teleport(double t)
 {
-    M.pedal = 1; M.grade_pct = t < 20 ? 6 : 2;
-    if (t >= 20 && !g_tp_done) { g_tp_done = 1; g_tp_ups = ups; g_tp_downs = shifts - ups; sim_reset(RESET_HARD, "sim: teleport onto a 2 % climb"); printf("  (teleport: 6 %% -> 2 %%)\n"); }
+    M.pedal = g_tp_pedal; M.grade_pct = t < 20 ? g_tp_g1 : g_tp_g2;
+    if (t >= 20 && !g_tp_done) { g_tp_done = 1; g_tp_ups = ups; g_tp_downs = shifts - ups; sim_reset(RESET_HARD, "sim: teleport onto a 2 % climb"); if (!g_quiet) printf("  (teleport: 6 %% -> 2 %%)\n"); }
+    if (g_tp_done && !g_tp_snap && t >= 21.5) { g_tp_snap = 1; g_tp_downs1 = shifts - ups; }
     if (g_tp_done && g_tp_up_at < 0 && ups > g_tp_ups) g_tp_up_at = t;
 }
 
@@ -545,11 +548,11 @@ static void sc_prime(float mass, float shift_time, float kmh, int gear)   // the
 // the settings of a mode as TrueShift builds them from the ini defaults (set_param changes win)
 static gs_cfg sc_cfg(int mode, int skips)   // mode: 0 Normal, 1 Eco, 2 Power
 {
-    float v[8]; const char *k[8] = { "choice_comfort", "choice_comfort_eco", "choice_comfort_power", "choice_rpm_weight", "choice_shift_weight", "choice_stay", "choice_stay_power", "hysteresis_rpm" };
-    for (int i = 0; i < 8; i++) for (int j = 0; j < m_trueshift.n_params; j++) if (!strcmp(m_trueshift.params[j].key, k[i])) v[i] = *m_trueshift.params[j].val;
+    float v[9]; const char *k[9] = { "choice_comfort", "choice_comfort_eco", "choice_comfort_power", "choice_rpm_weight", "choice_shift_weight", "choice_stay", "choice_stay_power", "hysteresis_rpm", "choice_floor_rpm" };
+    for (int i = 0; i < 9; i++) for (int j = 0; j < m_trueshift.n_params; j++) if (!strcmp(m_trueshift.params[j].key, k[i])) v[i] = *m_trueshift.params[j].val;
     gs_cfg c = {};
-    c.comfort = v[mode == 1 ? 1 : mode == 2 ? 2 : 0]; c.w_rpm = v[3]; c.w_shift = v[4]; c.stay = v[mode == 2 ? 6 : 5]; c.hyst = v[7];
-    c.idle = 550; c.skips = skips; c.horizon = 8; c.learn_res = 0;
+    c.comfort = v[mode == 1 ? 1 : mode == 2 ? 2 : 0]; c.w_rpm = v[3]; c.w_shift = v[4]; c.stay = v[mode == 2 ? 6 : 5]; c.hyst = v[7]; c.floor = v[8]; c.floor_cur = 1;
+    c.idle = 550; c.skips = c.skips_up = c.skips_later = skips; c.horizon = 8; c.learn_res = 0;
     return c;
 }
 // the force a pedal asks in gear cur at the speed of now, as TrueShift's f_need holds it in steady state
@@ -638,6 +641,9 @@ static sc_res sc_last;
 static void sc_do(const char *name, setup su, void (*ctl)(double), int choice)
 {
     set_param("choice", (float)choice);
+    // a short drive first: the module keeps a once-per-standstill flag (the launch correction) until the truck moves, and a run that ends
+    // in a crawl would give the one after it a different start than its twin
+    g_quiet = 1; run("wash", {20000, 30, 6, 2}, c_hold80); g_quiet = 0;
     sim_reset(RESET_HARD, "sim: next scores scenario");   // every run starts from a module that knows nothing of the one before
     g_quiet = getenv("SC_VERBOSE") ? 0 : 1;
     run(name, su, ctl);
@@ -652,7 +658,7 @@ static void sc_print(const char *label, int choice, const sc_res &r)
 static sc_res g_cmp[2];
 static void sc_pair(const char *label, setup su, void (*ctl)(double))   // both choices on the same scenario; the results stay in g_cmp
 {
-    for (int ch = 0; ch < 2; ch++) { sc_do(label, su, ctl, ch); g_cmp[ch] = sc_last; sc_print(label, ch, sc_last); }
+    for (int i = 0; i < 2; i++) { int ch = getenv("SC_REV") ? 1 - i : i; sc_do(label, su, ctl, ch); g_cmp[ch] = sc_last; sc_print(label, ch, sc_last); }
 }
 static void sc_header(const char *title)
 {
@@ -705,17 +711,57 @@ static int run_scores_table()
     // 2. steady cruising
     sc_header("steady cruising (a driver holding the speed), 90 s");
     use_ato();
+    float cruise_rpm_min = 1e9f;
     for (float mass : { 17000.0f, 36000.0f })
         for (float kmh : { 45.0f, 70.0f }) {
             char nm[100]; snprintf(nm, sizeof nm, "cruise %.0f km/h, ATO %.0f t", kmh, mass / 1000);
             sc_pair(nm, {mass, kmh, sc_gear_for(kmh, 1100), 90}, kmh < 50 ? c_hold45 : c_hold70);
+            cruise_rpm_min = fminf(cruise_rpm_min, (float)g_cmp[1].rpm);
         }
+    sc_check(cruise_rpm_min >= V.plateau + sc_cfg(0, 2).floor, "choice 1: a steady cruise does not sit under the torque plateau + choice_floor_rpm (mean rpm of all four rows)");
     // 3. the other modes and a slow box, pull-away 36 t pedal 0.3
     sc_header("the modes and a slow gearbox (ATO 36 t, pedal 0.3, 90 s)");
     sc_pair("Eco", {36000, 1, 1, 90, 10.0f}, c_p30);
     sc_pair("Normal", {36000, 1, 1, 90, 3.0f}, c_p30);
     sc_pair("Power", {36000, 1, 1, 90, 1.6667f}, c_p30);
     sc_pair("Normal, slow box 1.2 s", {36000, 1, 1, 90, 3.0f, 1.2f}, c_p30);
+    // 3b. cruise control pulling up to its speed (the demand filter is still on its way up when a gear is chosen): no upshift without pull
+    printf("\n  cruise control pulling 60 -> 73 km/h up a climb with a dip (30.4 t Volvo, Eco, route), the grade of the climb 5.8 ... 8.0 %%: no-pull lessons (upshifts that had to come back)\n");
+    {
+        int les[2] = {}, ups[2] = {};
+        use_volvo();
+        for (float gg : { 5.8f, 6.5f, 7.0f, 7.5f, 8.0f }) {
+            g_dipg = gg;
+            for (int ch = 0; ch < 2; ch++) { int f0 = n_failed; sc_do("cruise pull", {30400, 60, 9, 150, 10, 1.0f, 0, -1, -1, r_dip, 1}, c_cci73, ch); les[ch] += n_failed - f0; ups[ch] += skips_up; }
+        }
+        use_ato();
+        printf("  choice 0: %d (%d skips up), choice 1: %d (%d skips up)\n", les[0], ups[0], les[1], ups[1]);
+        sc_check(les[1] <= les[0], "choice 1: no more no-pull lessons than choice 0 with the cruise control pulling up to its speed");
+    }
+    // 3c. a teleport (hard reset) in the middle of a pull, onto another grade: the first decisions after it start from the pedal of now
+    // and no state: no more downshifts and no-pull lessons afterwards than with choice 0 (X4 in run.sh, with other speeds, pedals, grades)
+    printf("\n  teleport (hard reset) at 20 s in a pull, 40 t Volvo: downshifts after it and no-pull lessons, choice 0 / choice 1 (sums over %s)\n", "2 speeds, 3 pedals, 3 grade pairs");
+    {
+        int downs[2] = {}, les[2] = {}, worse = 0;
+        use_volvo();
+        for (int sg = 0; sg < 2; sg++)
+            for (float pedal : { 0.3f, 0.5f, 1.0f })
+                for (int gp = 0; gp < 3; gp++) {
+                    static const float gr[3][2] = { { 6, 2 }, { 8, 3 }, { 4, 0 } };
+                    int d[2], l[2];
+                    for (int ch = 0; ch < 2; ch++) {
+                        g_tp_done = g_tp_snap = 0; g_tp_up_at = -1; g_tp_pedal = pedal; g_tp_g1 = gr[gp][0]; g_tp_g2 = gr[gp][1];
+                        int f0 = n_failed;
+                        sc_do("teleport", {40000, sg ? 30.0f : 45.0f, sg ? 7 : 8, 60}, c_teleport, ch);
+                        d[ch] = shifts - ups - g_tp_downs1; l[ch] = n_failed - f0; downs[ch] += d[ch]; les[ch] += l[ch];
+                    }
+                    if (d[1] > d[0] || l[1] > l[0]) { worse++; printf("    worse with choice 1: %.0f km/h, pedal %.1f, grade %.0f -> %.0f %%: downshifts %d / %d, lessons %d / %d\n", sg ? 30.0f : 45.0f, pedal, gr[gp][0], gr[gp][1], d[0], d[1], l[0], l[1]); }
+                }
+        g_tp_pedal = 1; g_tp_g1 = 6; g_tp_g2 = 2;
+        use_ato();
+        printf("  downshifts after the teleport: %d / %d, no-pull lessons: %d / %d\n", downs[0], downs[1], les[0], les[1]);
+        sc_check(worse == 0, "choice 1: after a teleport in a pull no more downshifts and no-pull lessons than choice 0, in every one of the 18 cases");
+    }
     // 4. the regression from a ride: the truck skips to the tenth at ~45 km/h and 880 rpm, the driver lifts to 0.00 one second later. Several
     // ramps and start speeds, so that the skip lands at different moments; no brake, no engine brake, no retarder: no hard rule asks for a shift
     printf("\n  regression (17 t ATO, 8 at the start speed): the pedal ramps from p0 by 0.04/s to 0.73, the driver lifts to 0.00 one second after the first gear +2 lands at >= 40 km/h\n");
