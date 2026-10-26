@@ -35,7 +35,7 @@ static param g_params[] = {
     { "rise_rate_eco", &p_rise_eco, 1.5f, "Eco: the wish may rise at most this much per second (fraction of the full wish); it falls at once, and from blend_from up it is never held back" },
     { "rise_rate_normal", &p_rise_norm, 3.0f, "Normal: the same" },
     { "rise_rate_power", &p_rise_pw, 8.0f, "Power: the same" },
-    { "curve_ref_kw_t", &p_ref_kwt, 12, "the exponents above are for a truck with this much engine power per tonne (kW/t); a heavier, slower truck gets a more direct curve (a lower exponent, at most x0.8), a lighter, stronger one a softer one (at most x1.15). 0 = the exponents as they are" },
+    { "curve_ref_kw_t", &p_ref_kwt, 12, "the exponents above are for a truck with this much engine power per tonne (kW/t) or more; a heavier, slower truck gets a more direct curve (a lower exponent, at most x0.8). 0 = the exponents as they are" },
     { "ref_now", &p_ref_now, 1, "1 = a full wish is the power the truck can give at this speed in the best gear the gearbox may use (the forward gears whose revs lie in the usable window), the same in every gear, so a full pedal asks what the truck can give at this speed and not more. 0 = a full wish is the engine's peak power" },
 };
 
@@ -90,7 +90,8 @@ static float power_now(float v)
     return V.eta > 0 ? best / V.eta : 0;
 }
 
-// The curve factor per truck: power per tonne against curve_ref_kw_t (sqrt, x0.8 ... x1.15). Taken only at a standstill, so the pedal
+// The curve factor per truck: power per tonne against curve_ref_kw_t (sqrt, x0.8 ... x1.0: a softer curve for a strong truck read as
+// "I must give a lot of gas"). Taken only at a standstill, so the pedal
 // never changes under the foot while driving; an unknown mass (the 20 t fallback), an electric motor or engine data that does not look
 // sane keep the exponents as they are. One log line whenever it changes (another truck, a trailer, a load).
 static void truck_curve()
@@ -98,7 +99,7 @@ static void truck_curve()
     if (fabsf(T.speed) > 0.3f) return;
     float pw = peak_power(), k = 1.0f;
     if (p_ref_kwt > 0 && pw > 0 && V.mass_ok && !V.electric && V.eng_ok && V.mass > 1000)
-        k = fminf(1.15f, fmaxf(0.8f, sqrtf(pw / V.mass / p_ref_kwt)));
+        k = fminf(1.0f, fmaxf(0.8f, sqrtf(pw / V.mass / p_ref_kwt)));
     if (fabsf(k - S.truck_k) > 0.005f)
         logline("Pedal: curve x%.2f for this truck (%.1f kW/t: %.0f kW, %.1f t%s)", k, pw > 0 && V.mass > 0 ? pw / V.mass : 0.0f, pw / 1000,
                 V.mass / 1000, V.mass_ok && !V.electric && V.eng_ok ? "" : ", not known: as it is");
@@ -149,7 +150,7 @@ int pedal_wish(float p, float dt, int other, float *out)
 
     // 1, 2: shape, rise limit (the 'delay'). A flat or near-flat pedal is kickdown: never held back
     float expo = md == MODE_ECO ? p_exp_eco : md == MODE_POWER ? p_exp_pw : p_exp_norm;
-    // per truck: the engine's power per tonne against curve_ref_kw_t, sqrt, x0.8 ... x1.15 (a 40 t truck with 350 kW: x0.85, 17 t: x1.15)
+    // per truck: the engine's power per tonne against curve_ref_kw_t, sqrt, x0.8 ... x1.0 (a 40 t truck with 350 kW: x0.85, 17 t: x1.0)
     float pw = peak_power();
     expo *= S.truck_k;   // set at a standstill only (truck_curve)
     float rise = md == MODE_ECO ? p_rise_eco : md == MODE_POWER ? p_rise_pw : p_rise_norm;

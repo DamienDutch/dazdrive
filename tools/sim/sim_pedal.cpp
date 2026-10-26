@@ -495,7 +495,7 @@ static void passthrough_checks()
 // ---------------------------------------------------------------- D2: the exponent per truck (curve_ref_kw_t)
 static void truck_curve_checks()
 {
-    printf("== D2 the exponent per truck: power per tonne against curve_ref_kw_t (12), sqrt, clamped to x0.8 ... x1.15\n");
+    printf("== D2 the exponent per truck: power per tonne against curve_ref_kw_t (12), sqrt, clamped to x0.8 ... x1.0\n");
     p_ref_kwt = 12;
     float prev = 2;
     for (float mass : { 10000.0f, 17000.0f, 25000.0f, 33000.0f, 40000.0f, 60000.0f }) {
@@ -506,12 +506,14 @@ static void truck_curve_checks()
             { float sp = T.speed; T.speed = 0; truck_curve(); T.speed = sp; }   // the factor is taken at a standstill only
             steady(0.5f);
             float base = md == MODE_ECO ? p_exp_eco : md == MODE_POWER ? p_exp_pw : p_exp_norm;
-            float k = fminf(1.15f, fmaxf(0.8f, sqrtf(peak_power() / mass / 12))), want = powf(0.5f, base * k);
+            float k = fminf(1.0f, fmaxf(0.8f, sqrtf(peak_power() / mass / 12))), want = powf(0.5f, base * k);
             q[i] = S.q;
             check(fabsf(S.q - want) < 1e-5f, "D2 %.0f t %s: pedal 0.5 wishes %.4f, %.4f expected (x%.3f)", mass / 1000, mode_text(md), S.q, want, k);
         }
         check(q[0] <= q[1] && q[1] <= q[2], "D2 %.0f t: Eco %.4f <= Normal %.4f <= Power %.4f", mass / 1000, q[0], q[1], q[2]);
         check(q[1] >= prev - 1e-6f || prev > 1, "D2 %.0f t: a heavier truck wishes no less at the same pedal (%.4f after %.4f)", mass / 1000, q[1], prev);
+        // a light, strong truck keeps the base curve (never softer): pedal 0.5 in Normal wishes 0.5^exponent_normal
+        if (peak_power() / mass >= 12) check(fabsf(q[1] - powf(0.5f, p_exp_norm)) < 1e-5f, "D2 %.0f t: over 12 kW/t Normal keeps the base curve (%.4f)", mass / 1000, q[1]);
         printf("   %2.0f t (%.1f kW/t): pedal 0.5 wishes Eco %.3f, Normal %.3f, Power %.3f\n", mass / 1000, peak_power() / mass, q[0], q[1], q[2]);
         prev = q[1];
     }
