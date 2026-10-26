@@ -95,7 +95,15 @@ int route_junction_known(float) { return 0; }
 void route_junction_dump(char *b, size_t n) { snprintf(b, n, "none"); }
 void route_junction_cfg(int, float, float, float, float, int) {}
 void route_hermite(int) {}
-float route_junction_speed(float, route_junction_t *) { return NAN; }
+// a junction or roundabout the scenario puts on the route (dist_m <= 0 = none); the speed profile as route.cpp plans it
+static route_junction_t g_sim_jn;
+float route_junction_speed(float a_dec, route_junction_t *ji)
+{
+    if (!route_ok() || !(g_sim_jn.dist_m > 0)) return NAN;
+    if (ji) *ji = g_sim_jn;
+    float d = g_sim_jn.dist_m - (g_sim_jn.roundabout ? 45 : 25);
+    return sqrtf(g_sim_jn.limit_ms * g_sim_jn.limit_ms + 2 * a_dec * (d > 0 ? d : 0));
+}
 float route_limit_ahead(float, float *d) { if (d) *d = NAN; return NAN; }
 void route_probe_limit(float) {}
 
@@ -365,6 +373,63 @@ static void keys_test()
     if (bad) exit(1);
 }
 
+
+// ======================================================================= junction / roundabout cancel (cruise_body)
+// The cruise is on in front of a roundabout or a junction the route reading knows (25 km/h); the speed is scripted (kmh_of), behind a
+// lead the game's ACC target is that speed. Returns the distance (m) at which the cruise cancelled itself, -1 when it stayed on.
+static float jn_run(const char *name, int roundabout, float set_kmh, float d0, double secs, float (*kmh_of)(double), int lead, float *kmh_at)
+{
+    memset(GA, 0, sizeof GA); memset(&C, 0, sizeof C);
+    o_cruise = stock_cruise; stock_thr = 0;
+    p_smooth = 1; g_low_ok = 1; g_sg_ok = 1; g_sg_hold = 0; g_feed = 0; g_stopped_at = 0; s_cb_was_on = 0; s_jn_cancel_at = -1e9; g_rb_cancel_at = -1e9;
+    p_ah = 0; p_hill = 0; g_radar_ok = 0; p_own_acc = 0;
+    g_route = 1; g_road = road_flat; g_s = 0;
+    T.engine_on = 1; T.gear = 5; T.dgear = 5; T.eff_clutch = 0; T.in_thr = 0; T.in_brake = 0; T.paused = 0; T.parking_brake = 0; T.in_steer = 0;
+    T.place.orientation.pitch = 0; T.accel = 0; T.air_psi = 120; T.air_warning = 0;
+    *(unsigned char *)(GA + GA_ON) = 1; *(float *)(GA + GA_SET) = set_kmh;
+    g_sim_jn.dist_m = d0; g_sim_jn.turn_deg = roundabout ? 0.0f : 90.0f; g_sim_jn.limit_ms = 25 / 3.6f; g_sim_jn.ratio = roundabout ? 2.0f : 1.0f;
+    g_sim_jn.roundabout = roundabout; g_sim_jn.curves = roundabout ? 2 : 1;
+    double t0 = t_now; float cancel_m = -1, kmh = 0; *kmh_at = -1; int held = 0;
+    for (; t_now - t0 < secs; t_now += 1 / 60.0) {
+        kmh = kmh_of(t_now - t0);
+        T.speed = kmh / 3.6f; T.cruise = set_kmh / 3.6f;
+        *(float *)(GA + GA_LEAD_M) = lead ? 15 + 1.0f * kmh : 0;   // the lead keeps 15 m at a standstill, more at speed
+        *(float *)(GA + GA_ACC_TARGET) = lead ? kmh : set_kmh;
+        *(float *)(GA + GA_BRAKE_REQ) = 0;
+        stub_cruise(GA, 1 / 60.0f, 0);
+        if (g_sg_hold) held++;
+        if (!*(unsigned char *)(GA + GA_ON)) { cancel_m = g_sim_jn.dist_m; *kmh_at = kmh; break; }
+        g_sim_jn.dist_m = fmaxf(0.5f, g_sim_jn.dist_m - kmh / 3.6f / 60);   // standing: the entrance stays where it is
+    }
+    if (cancel_m >= 0) printf("%-78s cancelled %.0f m before the %s at %.0f km/h after %.1f s (Stop&Go held %.1f s)%s\n", name, cancel_m,
+                              roundabout ? "roundabout" : "junction", kmh, t_now - t0, held / 60.0, roundabout && g_rb_cancel_at < t_now - 1 ? "  <-- lane not told" : "");
+    else printf("%-78s stays on (%.1f s, ends at %.0f km/h, Stop&Go held %.1f s)\n", name, secs, kmh, held / 60.0);
+    g_sim_jn.dist_m = 0; g_route = 0; g_sg_hold = 0; g_feed = 0; g_stopped_at = 0; *(unsigned char *)(GA + GA_ON) = 0;
+    return cancel_m;
+}
+static float k_lead20(double) { return 20; }                                               // following a lead at 20 km/h
+static float k_queue(double t) { return t < 10 ? 0 : fminf(20.0f, (float)(t - 10) * 5); }   // a queue: 10 s standing, then the lead drives off (5 km/h per s)
+static float k_crawl(double) { return 3; }                                                 // creeping at 3 km/h
+static float k_50(double) { return 50; }
+static void junction_test()
+{
+    int bad = 0; float k;
+    printf("--- junction / roundabout cancel (the cruise cancels itself a few seconds before a roundabout, also behind a vehicle)\n");
+    float a = jn_run("roundabout, ACC behind a lead at 20 km/h (set 50), from 120 m", 1, 50, 120, 40, k_lead20, 1, &k);
+    bad |= !(a > 35 && a < 50);                                           // junction_cancel_s 5 s at 20 km/h: ~43 m before the entrance (the old rule needed > 28 km/h)
+    float b = jn_run("roundabout, queue: 10 s standing 15 m before the entrance behind a lead, then it drives off", 1, 50, 15, 40, k_queue, 1, &k);
+    bad |= !(b >= 0 && k >= 5 && k < 7);                                 // not while standing (Stop&Go holds), cancelled as soon as it drives (5 km/h)
+    float c = jn_run("roundabout, crawling at 3 km/h 15 m before the entrance, no lead", 1, 50, 15, 8, k_crawl, 0, &k);
+    bad |= c >= 0;                                                        // under 5 km/h: never
+    float d = jn_run("junction (90 deg), ACC behind a lead at 20 km/h (set 50), from 120 m", 0, 50, 120, 40, k_lead20, 1, &k);
+    bad |= d >= 0;                                                        // junctions keep the old rule: only above the junction speed + 3
+    float e = jn_run("roundabout, 50 km/h and nobody ahead, from 200 m (as before: handed over at 30 m)", 1, 50, 200, 40, k_50, 0, &k);
+    bad |= !(e > 29 && e < 31);
+    float f = jn_run("junction (90 deg), 50 km/h and nobody ahead, from 200 m (as before: handed over at 30 m)", 0, 50, 200, 40, k_50, 0, &k);
+    bad |= !(f > 29 && f < 31);
+    printf("junction cancel test: %s\n", bad ? "FAIL" : "ok");
+    if (bad) exit(1);
+}
 
 // ======================================================================= Auto Hold
 // Truck stops with the brake, the driver lets go, waits, then launches (gentle / hard). Signed speed, static brake,
@@ -664,6 +729,7 @@ int main(int argc, char **argv)
     for (int i = 0; i < m_cruise.n_params; i++) *m_cruise.params[i].val = m_cruise.params[i].def;
     keys_test();
     g_keys_ok = 0; g_ret_ok = 0;
+    junction_test();
     memset(GA, 0, sizeof GA);
     g_road = road_flat;
     for (int ours = 0; ours <= 1; ours++) run("accelerate 20 -> 80 km/h, flat (shift bursts?)", ours, 80, 60, c_none, 20);

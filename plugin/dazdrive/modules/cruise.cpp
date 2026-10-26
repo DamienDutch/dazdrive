@@ -800,7 +800,11 @@ static float cruise_body(void *ga, float dt, float pedal)
             bool free_to_cancel = ji.roundabout ? (now_c - s_cb_on_since > 1.5 && now_c - s_jn_cancel_at > 3)
                                                 : (now_c - s_cb_on_since > 5 && now_c - s_jn_cancel_at > 20);
             bool slowed = kmh <= jn_orig_kmh + p_jn_margin + p_jn_hand_kmh || ji.dist_m <= p_jn_hand_m;  // handed over when slowed down or close (Damien 25-10: later, slower)
-            if (t_to <= p_jn_cancel_s && kmh > jn_orig_kmh + 3 && free_to_cancel && slowed) {
+            // A junction is only cancelled while the truck is still faster than its speed + 3 (slower = you are at it already). A roundabout
+            // also behind a vehicle the ACC has slowed us for (Damien 26-10: the cruise stayed on behind a lead): no speed floor there, but
+            // not under 5 km/h and not while Stop&Go holds the standstill in a queue before the entrance; once the truck drives again it cancels.
+            bool driving = ji.roundabout ? (kmh >= 5 && !g_sg_hold) : kmh > jn_orig_kmh + 3;
+            if (t_to <= p_jn_cancel_s && driving && free_to_cancel && slowed) {
                 s_jn_cancel_at = now_c;
                 if (ji.roundabout) g_rb_cancel_at = now_c;
                 *(unsigned char *)(g + GA_ON) = 0;
