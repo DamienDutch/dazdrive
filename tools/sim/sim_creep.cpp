@@ -71,10 +71,15 @@ int gb_target(void *) { return 0; }
 int gb_state(void *) { return 0; }
 void gb_set_target(void *, int) {}
 int gb_engage(void *, int) { return 0; }
+// the vehicle model (core/vehicle.cpp) asks for these; the sim drives creep_tick / launch_tick directly, so it never runs
+int gb_engine(void *, engine_info *) { return 0; }
+float game_grade_deg(void *) { return NAN; }
+float curve_factor(const engine_info *, float) { return 1; }
 
 #include "modules/creep.cpp"
 #include "core/rsc.cpp"
 #include "core/actuate.cpp"
+#include "core/vehicle.cpp"
 
 // ---- truck
 static struct { float v; int gear; double engage_at; int lock_ok; } M;

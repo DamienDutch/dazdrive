@@ -20,6 +20,7 @@
 #define LOG_BOOST 1  // experimental: more detail in the log by default
 #include "../core/suite.h"
 #include "../core/game.h"
+#include "../core/vehicle.h"
 #include <math.h>
 #include <string.h>
 #include <windows.h>
@@ -535,13 +536,7 @@ static void ck_frame()
     in.engine_on = T.engine_on;
     in.blocked = p_enabled <= 0 || g_user_on <= 0 || g_truck_unsupported || T.paused || !T.engine_on || T.parking_brake || T.cruise > 0.1f || g_rolling || !amode || hill > 0 ||
                  !(in.idle > 0);
-    static double mass_at = -100;
-    static int heavy = 1;
-    if (now - mass_at > 1) {  // load changes slowly; unknown mass counts as heavy
-        mass_at = now;
-        float m = game_mass();
-        heavy = !(m == m) || m >= p_heavy_t * 1000;
-    }
+    int heavy = !V.mass_ok || V.mass >= p_heavy_t * 1000;  // the vehicle model's mass; unknown counts as heavy
     in.heavy = heavy;
     in.set_max = (int)(heavy ? p_heavy_gear : p_max_gear);
     in.crawl_gear = pick_gear(heavy, in.idle);
