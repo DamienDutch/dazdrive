@@ -1,9 +1,13 @@
-// LowSpeed: the owner of everything below the hand-off to TrueShift (stopping, standing, pulling away, crawling), as a SHADOW.
+// LowSpeed: the owner of everything below the hand-off to TrueShift (stopping, standing, pulling away, crawling).
 //
 // One state machine (the states and transitions of the low-speed design) computed every frame from the telemetry, the vehicle
 // model and what the other modules expose (suite.h: creep_info_get, cruise_info_get, ts_*, g_rolling, g_crawl_on, g_lcx). It works
-// out what the owner WOULD command into g_low and applies nothing: no act_* call, no gear, clutch or brake write, no hook. The
-// modules keep driving as they always did; lowspeed.csv shows next to them what the owner would have done.
+// out what the owner WOULD command into g_low; with trace=1 lowspeed.csv shows that next to what the other modules did.
+//
+// With owner=1 the stop and the standstill are the owner's (step 2 of the design): the game's stop threshold (TrueShift's hook asks
+// low_stop_rpm), the gear preselected with the clutch open (the update's tail hook), the hold behind a lead (a brake wish through the
+// actuator) and the one definition of "stopped" that Auto Hold and Stop&Go read. The pull-away, the crawl and the hand-off to TrueShift
+// are still the old modules' (steps 3-5): in those states the owner posts nothing.
 //
 // No fixed km/h edges: the stop point and the top of the owner's world come from the vehicle model (the gear the truck would start
 // in, where it sits at idle and where its shift window ends). Only the near-zero measurement thresholds are fixed.
@@ -17,7 +21,7 @@
 static float p_owner, p_trace;
 
 static param g_params[] = {
-    { "owner", &p_owner, 0, "1 = the low-speed owner drives the stop, the standstill and the pull-away (not wired yet: nothing happens). 0 = Creep, Cruise and TrueShift keep doing it" },
+    { "owner", &p_owner, 0, "1 = the low-speed owner drives the stop and the standstill: the clutch opens where the gear the truck would start in sits near idle, that gear stays preselected, one hold behind a lead with the cruise on. The pull-away and the crawl stay with Creep and TrueShift. 0 = Creep, Cruise and TrueShift keep doing it all" },
     { "trace", &p_trace, 0, "1 = the low-speed owner runs beside the other modules without driving anything: lowspeed.csv (10 per second) and one log line per state change (needs the log at its highest level)" },
 };
 
@@ -44,6 +48,9 @@ static const float LS_PEDAL_REL_S = 0.4f;   // a pedal released this long ends a
 static const float LS_STOP_MARGIN = 150;    // the clutch opens when the start gear would sit this far over idle (rpm), as the stop threshold does
 static const float LS_ASSIST_REQ = 0.15f;   // the brake request of the stop assist, a placeholder until it is measured (request unit 0..1)
 static const float LS_HOLD_REQ = 0.6f;      // the brake request of a hold when Auto Hold does not say (its own default)
+static const float LS_SG_HOLD_REQ = 0.2f;   // the brake request of the hold behind a lead with the cruise on (the ACC's own standing hold)
+static const float LS_ARM_RPM = 100;        // Stop&Go's hold is set when the driveline is this near the stop threshold (rpm), before the box can go to neutral
+static const float LS_R_BRAKE = 0.01f;      // the game puts R in on a brake above this at a standstill (its own rule)
 
 // What one frame sees: telemetry, the vehicle model and the other modules' states, gathered in one place (the sim sets the same
 // fields through the real accessors).
@@ -70,6 +77,20 @@ static int g_assist;         // stop assist: 0 not asked, 1 running, 2 cancelled
 static int g_pre_gear;       // the gear preselected with the open clutch
 static float g_open_kmh;     // the speed where the start gear sits at the clutch-open rpm now
 static int g_dis_clutch, g_dis_gear;   // frames where what it would command differs from what the truck does (clutch open or closed, gear)
+// What the owner drives with owner=1: set once per frame, read by the game's threads (the stop hook, the update's tail) and the other
+// modules through the accessors at the bottom.
+static volatile int g_o_on;          // the owner has the stop and the standstill (owner=1 and not in GAME)
+static volatile int g_o_stopped;     // the standstill states
+static volatile int g_o_zone;        // Stop&Go's hold is due
+static volatile int g_o_pre;         // the gear to hold preselected in the box's gap (0 = none)
+static volatile int g_o_back;        // hand the at-rest neutral back to the game once (the driver brakes after the pedals were free: R)
+static volatile int g_o_start;       // the start gear the stop hook converts (0 = unknown)
+static volatile int g_o_crawl, g_o_cruise;   // crawl switched on, cruise on: the hook leaves the stock threshold then
+static int g_rest_free;              // at a standstill with the brake pedal free since the stop: a brake press then is the driver asking for R
+static int g_o_holding;              // we wrote the preselect and hold it
+static float g_o_hold_wish;          // the brake wish posted to the actuator
+static void *g_o_self;               // the player's gearbox (the tail hook runs for every vehicle's)
+static int g_tail_ok;
 
 static void to_state(int s, const char *why)
 {
@@ -187,6 +208,7 @@ static void gather(low_in *in, float dt)
 {
     memset(in, 0, sizeof *in);
     void *self = game_gearbox();
+    g_o_self = self;
     in->dt = dt;
     in->kmh = fabsf(T.speed) * 3.6f;
     in->thr = T.in_thr;
@@ -218,11 +240,15 @@ static void gather(low_in *in, float dt)
 // The speed where the start gear sits at the rpm the clutch opens at. Like the stop threshold: idle + 150 rpm and the game's own term
 // for the brake (brake squared times idle); with the pedals free the box opens by itself only with crawl off and no cruise, else at the
 // stock 0.8 idle.
+static float open_margin(float brake, float idle, int crawl, int cruise)
+{
+    brake = fminf(brake, 1.0f);
+    return !cruise && (brake >= LS_BRAKE_ON || !crawl) ? LS_STOP_MARGIN + brake * brake * idle : -0.2f * idle;
+}
 static float open_point_kmh(const low_in &in)
 {
     float brake = fminf(fmaxf(in.brake, in.eff_brake), 1.0f);
-    float margin = brake >= LS_BRAKE_ON || (!in.crawl_toggle && !in.cruise) ? LS_STOP_MARGIN + brake * brake * in.idle : -0.2f * in.idle;
-    return vehicle_kmh_idle(in.start_gear, in.idle, margin);
+    return vehicle_kmh_idle(in.start_gear, in.idle, open_margin(brake, in.idle, in.crawl_toggle, in.cruise));
 }
 
 // What the owner would command in this state. The clutch is a latch: once it is open (the start gear sat at its idle point, or the
@@ -232,6 +258,7 @@ static void low_command(const low_in &in)
 {
     static int was;
     int st = g_low.state, entered = st != was;
+    int was_rest = was == LOW_STOPPED_HELD || was == LOW_STOPPED_FREE;
     was = st;
     float pedal = fmaxf(in.thr, in.cu.feed);
     g_open_kmh = 0;
@@ -258,11 +285,13 @@ static void low_command(const low_in &in)
     case LOW_STOPPED_HELD: case LOW_STOPPED_FREE: {
         g_latch = 1;
         // held by us (Auto Hold, Stop&Go, the stop assist) the owner asks for the hold; the driver's brake, the parking brake and the game's
-        // hill hold hold without a request of ours
+        // hill hold hold without a request of ours. Behind a lead with the cruise on (Auto Hold stands aside then) the hold is the light one
+        // the ACC used to post at a standstill.
         int by_us = in.cu.hold == 1 || in.cu.sg_hold || g_assist == 1;
-        g_low.would_gear = in.start_gear;
+        if (!was_rest) g_pre_gear = in.start_gear;   // the gear preselected at rest is the start gear at the moment of the stop
+        g_low.would_gear = g_pre_gear;
         g_low.would_clutch = 1;
-        g_low.would_brake = st == LOW_STOPPED_HELD && by_us ? (in.cu.hold_req > 0 ? in.cu.hold_req : LS_HOLD_REQ) : 0;
+        g_low.would_brake = st == LOW_STOPPED_HELD && by_us ? (in.cu.hold == 1 ? (in.cu.hold_req > 0 ? in.cu.hold_req : LS_HOLD_REQ) : in.cu.sg_hold ? LS_SG_HOLD_REQ : LS_HOLD_REQ) : 0;
         g_low.would_thr = 0;
         break;
     }
@@ -291,9 +320,84 @@ static void low_command(const low_in &in)
     if (g_low.would_gear > 0 && (g_latch || st == LOW_LAUNCH) && g_low.would_gear != in.gear) g_dis_gear++;
 }
 
+// ---------------------------------------------------------------- what the owner drives (owner=1)
+
+// The game's stop threshold (TrueShift's hook, in rpm of the gear that is in): the clutch opens at the open point of the owner, the
+// speed where the start gear sits at idle + 150 rpm + the brake term, converted to that gear's rpm (less the brake term, which the game adds). In the start gear that is the old
+// smooth stop's number; in a higher gear it is lower, so the box does not go to neutral long before the start gear would be at idle.
+// Never under the stock 0.8 idle (the engine would stall on the clutch). Stock with a pedal and with the cruise on (in a jam the ACC rolls
+// at walking pace, and Stop&Go's hold has to be set before the box can go to neutral: low_sg_zone arms it LS_ARM_RPM above this stock
+// number). With crawl on it is Creep's gear and brake rule: idle + 150 on the brake, else stock. The latch: once the clutch is open the threshold stays above
+// idle + 150, so a start gear that gets lower afterwards (a grade change at the last metre) cannot close it again; a higher start gear has
+// its idle point at a higher speed and opens it at once, by the same arithmetic.
+float low_stop_rpm(float idle, float thr, float brake, int gear)
+{
+    float stock = 0.8f * idle;
+    if (!g_o_on || thr > 0.01f || !(idle > 200 && idle < 2000) || g_o_start < 1 || gear < 1 || g_o_cruise) return stock;
+    if (g_o_crawl) return brake >= LS_BRAKE_ON ? fmaxf(stock, idle + LS_STOP_MARGIN) : stock;   // Creep's: the crawl gear is not the start gear
+    float v = vehicle_kmh_idle(g_o_start, idle, open_margin(brake, idle, g_o_crawl, g_o_cruise)) / 3.6f;
+    float b = fminf(brake, 1.0f);
+    float r = fmaxf(stock, vehicle_rpm_at(gear, v) - b * b * idle);   // the game adds its brake term on top of the hook's value: it is in the open point already
+    if (g_latch) r = fmaxf(r, idle + LS_STOP_MARGIN);
+    return r;
+}
+int low_owner_wanted() { return p_owner > 0; }
+int low_owner_on() { return g_o_on; }
+int low_stopped() { return g_o_on && g_o_stopped; }
+int low_sg_zone() { return g_o_on && g_o_zone; }
+
+// The update's tail (the game's at-rest rule and stop rule have run, the generic gearbox is next): with the clutch open and nothing in
+// gear, the start gear is the target, so the box waits in its gap for the pedal (or Stop&Go's fed throttle) with the gear it will start in,
+// not in neutral. The at-rest rule sets neutral every update; written back here it never reaches the generic gearbox (as Creep's tail does).
+// A brake press at a standstill after the pedals were free is the game's R: the at-rest neutral goes back to it once.
+static void low_tail(void *self)
+{
+    if (!g_o_on || !self || self != g_o_self) return;
+    if (g_o_back) {
+        g_o_back = 0;
+        gb_set_target(self, 0);
+        gb_rest_state(self, 3, 1);
+        return;
+    }
+    int want = g_o_pre;
+    if (want < 1 || gb_gear(self) != 0) return;
+    if (gb_target(self) != want) gb_set_target(self, want);
+    gb_rest_state(self, 4, 0);
+}
+
+// Once per frame, after the state and its command: what the hook, the tail and the other modules read, and the brake wish.
+static void low_publish(const low_in &in)
+{
+    g_o_start = in.start_gear;
+    g_o_crawl = in.crawl_toggle || in.cr.crawl;
+    g_o_cruise = in.cruise;
+    int st = g_low.state, rest = in.kmh < LS_MOVE_KMH;
+    g_o_on = p_owner > 0 && st != LOW_GAME;
+    g_o_stopped = st == LOW_STOPPED_HELD || st == LOW_STOPPED_FREE;
+    // Stop&Go: the box goes to neutral at the stop threshold and the game then cancels the cruise unless the hold is set. Due when the
+    // driveline is within LS_ARM_RPM of that threshold, or the box already is in neutral below the top of the owner's world, or the truck stands.
+    int zone = g_o_stopped;
+    if (g_o_on && !zone && in.gear == 0 && in.kmh < in.top_kmh) zone = 1;
+    float bk = fminf(fmaxf(in.brake, in.eff_brake), 1.0f);
+    if (g_o_on && !zone && in.gear > 0) zone = in.kmh <= vehicle_kmh_at(in.gear, low_stop_rpm(in.idle, 0, bk, in.gear) + bk * bk * in.idle + LS_ARM_RPM);   // the game adds its brake term
+    g_o_zone = zone;
+    // the preselect
+    if (!rest) g_rest_free = 0;
+    else if (in.brake <= LS_R_BRAKE && in.thr < LS_PEDAL_FREE) g_rest_free = 1;
+    int pre = 0;
+    if (g_o_on && !g_o_crawl && !in.rolling && in.gear == 0 && ((st == LOW_STOPPING && g_latch) || g_o_stopped)) pre = g_pre_gear;
+    g_o_back = 0;
+    if (pre && rest && g_rest_free && in.brake > LS_R_BRAKE) { pre = 0; g_o_back = g_o_holding; }
+    g_o_holding = pre != 0;
+    g_o_pre = g_tail_ok ? pre : 0;
+    // the hold behind a lead
+    g_o_hold_wish = g_o_on && st == LOW_STOPPED_HELD && in.cu.sg_hold && in.cu.hold != 1 ? LS_SG_HOLD_REQ : 0;
+    if (p_owner > 0) act_brake(ACT_LOW, g_o_hold_wish);
+}
+
 static void ls_frame()
 {
-    if (p_trace <= 0) return;
+    if (p_trace <= 0 && p_owner <= 0) return;
     double now = sim_s();
     float dt = (float)(now - g_last);
     g_last = now;
@@ -305,6 +409,7 @@ static void ls_frame()
     g_low.since_s += in.dt;
     low_step(in);
     low_command(in);
+    if (p_owner > 0) low_publish(in);
     static double csv_at;
     if (g_csv && now - csv_at >= 0.1) {
         csv_at = now;
@@ -322,6 +427,8 @@ static void ls_reset(int level, const char *why)
 {
     g_fresh = 1;
     g_latch = g_assist = 0;   // derived again too: a stop that is already under the start gear's idle point opens the clutch at once
+    g_o_pre = g_o_back = g_o_holding = g_rest_free = 0;
+    if (p_owner > 0) act_brake(ACT_LOW, 0);
     g_lock_s = g_rel_s = 0;
     g_low.since_s = 0;
 }
@@ -331,11 +438,20 @@ static const char *ls_status() { return g_status; }
 
 static void ls_start()
 {
-    if (p_owner > 0) logline("lowspeed owner: not wired yet");
-    if (p_trace <= 0) { snprintf(g_status, sizeof g_status, "off (ini)"); return; }
+    if (p_owner > 0) {
+        g_tail_ok = G.tail_site && game_patch_tail(G.tail_site, (void *)low_tail);
+        logline("lowspeed owner: drives the stop and the standstill (stop threshold%s, preselected start gear %s, hold behind a lead, Auto Hold and Stop&Go arming); %s",
+                ts_stop_hooked() ? " in TrueShift's hook" : " NOT hooked: the game's own rule opens the clutch", g_tail_ok ? "in the update's tail" : "NOT hooked: the box waits in neutral",
+                "pull-away, crawl and hand-off stay with Creep and TrueShift");
+    }
+    if (p_trace <= 0) {
+        if (p_owner > 0) snprintf(g_status, sizeof g_status, "owner: drives the stop and the standstill (stop threshold, preselected gear, hold behind a lead)");
+        else snprintf(g_status, sizeof g_status, "off (ini)");
+        return;
+    }
     g_csv = open_out("lowspeed.csv", "w");
     if (g_csv) fputs("t,state,kmh,gear,thr,brake,rpm,idle,clutch,start_gear,top_kmh,would_gear,open_kmh,latch,assist,would_clutch,would_brake,would_thr,crawl,launch,ah,sg_hold,feed,accel,act_req,dis_clutch,dis_gear,since_s,reason\n", g_csv);
-    snprintf(g_status, sizeof g_status, "shadow: watches and decides, applies nothing%s", g_csv ? "" : " (no csv)");
+    snprintf(g_status, sizeof g_status, "%s%s", p_owner > 0 ? "owner: drives the stop and the standstill, trace on" : "shadow: watches and decides, applies nothing", g_csv ? "" : " (no csv)");
 }
 
 static void ls_stop()

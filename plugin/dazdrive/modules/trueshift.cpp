@@ -1522,9 +1522,12 @@ static int stub_choose(void *self)
 // While braking to a stop without throttle (below 15 km/h): idle + 150 rpm;
 // the game's own brake term comes on top, so harder braking opens earlier.
 // Not at speed: ride ts3a went to neutral at 74 km/h in 12 when braking hard.
+static int g_stop_in;   // the stop threshold hook is in
 static float stop_threshold(float idle, float thr, float brake)
 {
     float stock = 0.8f * idle;
+    // [lowspeed] owner=1: the open point is the owner's (the start gear's idle point, lowspeed.cpp); no fixed km/h edge, one definition of the stop
+    if (low_owner_on() && !S.unsupported && !manual_box()) return low_stop_rpm(idle, thr, brake, T.gear);
     if (p_stop <= 0 || S.unsupported || manual_box() || thr > 0.01f || !(idle > 200 && idle < 2000)) return stock;
     // Crawl off (Damien): never creep on the clutch at idle; pedals free below 8 km/h opens it like a stop.
     // not with cruise on: in a jam the ACC rolls at walking pace, and neutral would cancel cruise (ts4p 534 s)
@@ -1658,6 +1661,7 @@ int ts_start_gear(float thr)
     return launch_pick(T.trailer ? 1 : (n < 4 ? n : 4), clampf(thr, 0, 1), true);
 }
 float ts_idle_rpm() { return idle_rpm(); }
+int ts_stop_hooked() { return g_stop_in; }
 
 // ---------------------------------------------------------------- module
 
@@ -1675,8 +1679,8 @@ static void ts_start()
     for (int i = 0; i < G.n_choose; i++) done += game_patch_call(G.choose_sites[i], (void *)stub_choose);
     for (int i = 0; i < G.n_start; i++) done += game_patch_call(G.start_sites[i], (void *)stub_start);
     g_active = done == want;
-    if (g_active && p_stop > 0) {
-        if (G.stop_site && game_patch_stop(G.stop_site, stop_threshold)) logline("smooth stop hook in place");
+    if (g_active && (p_stop > 0 || low_owner_wanted())) {
+        if (G.stop_site && game_patch_stop(G.stop_site, stop_threshold)) { g_stop_in = 1; logline("smooth stop hook in place"); }
         else { p_stop = 0; logline("smooth stop off: threshold code not found"); }
     }
     // The update's tail hook carries eco-roll AND the neutral watchdog (a shift interrupted by a pause leaves gear 0 with

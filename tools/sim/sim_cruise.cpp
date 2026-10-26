@@ -106,6 +106,12 @@ float route_junction_speed(float a_dec, route_junction_t *ji)
 float route_limit_ahead(float, float *d) { if (d) *d = NAN; return NAN; }
 void route_probe_limit(float) {}
 
+// the low-speed owner (lowspeed.cpp) is not part of this sim: off unless a scenario sets these
+static int s_low_on, s_low_stopped, s_low_zone;
+int low_owner_on() { return s_low_on; }
+int low_stopped() { return s_low_on && s_low_stopped; }
+int low_sg_zone() { return s_low_on && s_low_zone; }
+
 #include "modules/cruise.cpp"
 #include "core/rsc.cpp"
 #include "core/actuate.cpp"

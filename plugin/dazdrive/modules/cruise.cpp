@@ -255,6 +255,10 @@ static int s_sg_wait;  // Stop&Go: standing longer than stop_go_auto_s, the driv
 static float s_want_hill, s_want_hold, s_want_curve, s_want_acc, s_want_aeb;
 static float s_lv_prev = NAN, s_a_lead;                 // own ACC: lead speed history (reset without a lead)
 
+// Standing, for Auto Hold's arming and its parking brake: with the low-speed owner the owner's one definition (< 0.3 km/h, measurement
+// noise), else Auto Hold's own.
+static int ah_stopped(float kmh) { return low_owner_on() ? low_stopped() : kmh < 0.5f; }
+
 static void hill_start(char *g)
 {
     double now = wall_s();
@@ -360,7 +364,7 @@ static void auto_hold(char *g, float dt)
     switch (AH.st) {
     case AH_OFF:
         AH.r = AH.r > 0 ? fmaxf(0, AH.r - 3 * dt) : 0;   // fade out, ~0.2 s
-        if (!blocked && kmh < 0.5f && T.in_brake > 0.1f) {
+        if (!blocked && ah_stopped(kmh) && T.in_brake > 0.1f) {
             AH.st = AH_HOLD; AH.roll_m = 0;
             logv(2, "Auto Hold: holding at %.1f%% (mass %.0f kg, request %.2f)", grade, ah_mass(), h);
         }
@@ -371,7 +375,7 @@ static void auto_hold(char *g, float dt)
         AH.r = s_park_on && s_park_ok ? fmaxf(0.0f, AH.r - 0.5f * dt) : fminf(h, AH.r + 3 * dt);
         if (T.in_thr > 0.05f) { AH.st = AH_LAUNCH; AH.launch_t = 0; AH.grab_until = 0; logv(2, "Auto Hold: launch, pedal %.2f, grade %.1f%%, hold %.2f", T.in_thr, grade, AH.r); }
         else if (kmh > 1.5f) { AH.st = AH_OFF; logv(2, "Auto Hold: truck moves without gas (%.1f km/h), off", kmh); }
-        else if (p_ah_park > 0 && !s_park_on && !s_park_bad && g_low_ok && now - s_ah_hold_since > p_ah_park && kmh < 0.5f && T.in_thr < 0.03f && !T.parking_brake) {
+        else if (p_ah_park > 0 && !s_park_on && !s_park_bad && g_low_ok && now - s_ah_hold_since > p_ah_park && ah_stopped(kmh) && T.in_thr < 0.03f && !T.parking_brake) {
             s_park_sv = *(unsigned char *)(g + GA_PARK_FLAG); s_park_svf = *(float *)(g + GA_PARK_VAL);
             *(unsigned char *)(g + GA_PARK_FLAG) = 1; *(float *)(g + GA_PARK_VAL) = 1.0f;
             s_park_on = 1; s_park_ok = 0; s_park_at = now;
@@ -887,11 +891,14 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
     // Stop&Go bookkeeping (1.60 fields; only when its patches are in).
     if (g_sg_ok) {
         float lead = *(float *)(g + GA_LEAD_M);
-        int slow = kmh < 3;
+        // with the low-speed owner: the hold is due from the owner's zone (the engine near the stop threshold, before the box can go to
+        // neutral and the game cancels the cruise), the wait for stop_go_auto_s counts from the owner's standstill
+        int own = low_owner_on();
+        int slow = own ? low_sg_zone() : kmh < 3, stopped = own ? low_stopped() : slow;
         double now = wall_s();
-        if (!slow) g_stopped_at = 0;
+        if (!stopped) g_stopped_at = 0;
         else if (!g_stopped_at) g_stopped_at = now;
-        int may_wait = p_sg_auto <= 0 || (g_stopped_at && now - g_stopped_at < p_sg_auto);
+        int may_wait = p_sg_auto <= 0 || (g_stopped_at ? now - g_stopped_at < p_sg_auto : own);
         g_sg_hold = p_sg > 0 && slow && lead > 0.5f && may_wait && !T.parking_brake;
         s_sg_wait = p_sg > 0 && p_sg_auto > 0 && slow && g_stopped_at && !may_wait && !T.parking_brake;
         g_feed = (p_sg > 0 && kmh < 10 && (g_sg_hold || g_stopped_at) && u > 0.02f) ? u : 0;
@@ -1178,7 +1185,7 @@ static void own_acc(char *g, float dt)
                 b = fmaxf(b, bs);
             }
         }
-        if (p_own_brake > 0 && v <= 0.05f && lv < 0.5f && lead < gmin + 3) b = fmaxf(b, 0.2f);  // standing: hold
+        if (p_own_brake > 0 && v <= 0.05f && lv < 0.5f && lead < gmin + 3 && !(low_owner_on() && g_sg_ok)) b = fmaxf(b, 0.2f);  // standing: hold (the low-speed owner's, with Stop&Go)
         s_want_acc = crossing ? 0 : b;
     }
     if (want < OA.t) OA.t = fmaxf(want, OA.t - dn * dt);

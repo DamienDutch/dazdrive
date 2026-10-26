@@ -213,7 +213,15 @@ struct low_owner {
 };
 extern low_owner g_low;
 const char *low_state_name(int state);
+// With [lowspeed] owner=1 (and the owner able to work: not in GAME) the owner drives the stop and the standstill; the other modules ask it
+// through these. All 0 / stock with owner=0 and in GAME.
+int low_owner_wanted();          // [lowspeed] owner=1 in the ini (TrueShift installs its stop hook for it even with smooth_stop 0)
+int low_owner_on();             // the owner has the stop and the standstill
+int low_stopped();              // standing by the owner's one definition (< 0.3 km/h, measurement noise): the standstill states
+int low_sg_zone();              // the engine is within reach of the stop threshold or the truck stands: Stop&Go's hold has to be set before the box can go to neutral
+float low_stop_rpm(float idle, float thr, float brake, int gear);   // the stop threshold for gear (rpm): the clutch opens at the open point of the owner
 int ts_start_gear(float thr);   // TrueShift: the start gear by physics (mass, grade, engine) for this pedal, whether or not TrueShift has the truck; 0 = unknown
+int ts_stop_hooked();            // TrueShift: the game's stop threshold hook is in (the owner's clutch-open point needs it)
 float ts_idle_rpm();            // TrueShift: the idle rpm (learned at a standstill, else the ini's)
 extern volatile int g_pedal_mapped;     // Cruise: the throttle the engine gets is the pedal through the Eco / Power curve this frame
 extern volatile int g_pcc_on;         // Cruise: predictive cruise (PCC) is switched on
@@ -229,7 +237,7 @@ float wheel_radius();    // powered wheels, meters (0 if unknown)
 // game tick (the game's cruise fn call, hooked by core whatever the ini says) and writes them. The throttle is the base (the
 // game's cruise output, or what Cruise posts from its own controller), then every floor, then every cap, then every scale.
 // Brake wishes are in the game's request unit 0..1 (the top of actuate.cpp says why not m/s2).
-enum { ACT_CRUISE, ACT_HILL, ACT_HOLD, ACT_BEND, ACT_ACC, ACT_AEB, ACT_RSC, ACT_CREEP, ACT_LCX, ACT_RET_DECEL, ACT_RET_NORM, ACT_N };
+enum { ACT_CRUISE, ACT_HILL, ACT_HOLD, ACT_BEND, ACT_ACC, ACT_AEB, ACT_RSC, ACT_CREEP, ACT_LCX, ACT_RET_DECEL, ACT_RET_NORM, ACT_LOW, ACT_N };
 struct act_wish { float brake, floor, cap, scale, ret; };  // brake request 0..1; throttle at least floor (0 = none), at most cap (1 = none), times scale (1 = none); retarder torque factor 0..1 (1 = none)
 void act_brake(int owner, float want);
 void act_thr_floor(int owner, float v);
