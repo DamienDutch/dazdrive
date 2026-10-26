@@ -23,6 +23,7 @@
 #include "../core/suite.h"
 #include "../core/game.h"
 #include "../core/route.h"
+#include "../core/vehicle.h"
 #include <math.h>
 #include <string.h>
 
@@ -189,20 +190,15 @@ static float g_feed;
 static int g_sg_ok;
 static double g_stopped_at;
 
-// Grade (%) from the SDK placement: pitch in turns, positive = nose up.
-static float pitch_grade() { return tanf((float)T.place.orientation.pitch * 6.2831853f) * 100; }
+// Grade (%) from the SDK placement's pitch (the vehicle model computes it; TrueShift decides on the game's own gearbox grade, V.grade_pct)
+static float pitch_grade() { return V.pitch_pct; }
 // The band over the set speed (km/h): at most band_up_kmh (Damien 11-10: above may always, +6), but only as much as the
 // next climb needs (TrueShift works it out from mass, engine and route: solo often 0, loaded more). Without TrueShift's
 // answer: scaled by mass as before (full at 40 t, 40 % at 12 t).
 static float s_mom_up;   // km/h over the set speed the PCC momentum aims for now (the game's overspeed braking must allow it)
 static int s_lead_near;  // a vehicle within ~4 s ahead (cruise_body): no PCC momentum, it would only be braked away
-// gross weight (kg), refreshed every 2 s; 30 t until the game tells
-static float load_mass()
-{
-    static float m = 30000; static double at = -10;
-    if (wall_s() - at > 2 || wall_s() < at) { at = wall_s(); float g = game_mass(); if (g == g && g > 500) m = g; }
-    return m;
-}
+// gross weight (kg) from the vehicle model; 30 t until the game tells
+static float load_mass() { return V.mass_ok ? V.mass : 30000; }
 // 1 in Normal, eco_k in Eco, power_k in Power (the adaptive mode of the game)
 static float mode_k(float eco_k, float power_k)
 {
@@ -291,40 +287,30 @@ static void hill_start(char *g)
 // Without the patch (pattern not found) the throttle is dead while we hold, so the request just ramps with
 // the pedal (the old hill-start behavior, but ramped).
 enum { AH_OFF, AH_HOLD, AH_LAUNCH };
-static struct { int st, released; float r, mass; double launch_t, grab_until, mass_at, roll_m; } AH;
-static engine_info s_eng;
-static int s_eng_ok, s_gate_ok;
+static struct { int st, released; float r; double launch_t, grab_until, roll_m; } AH;
+static int s_gate_ok;
 static float s_ah_k = 1;  // learned: how much of the estimated drive force really arrives (the clutch and the engine model are rough)
 
-// Total mass (kg) and engine data, refreshed while holding.
-static void ah_refresh()
-{
-    double now = wall_s();
-    if (now - AH.mass_at < 1) return;
-    AH.mass_at = now;
-    float m = game_mass();
-    if (m == m && m > 500) AH.mass = m;
-    else if (!(AH.mass > 500)) AH.mass = 26000;
-    void *self = game_gearbox();
-    s_eng_ok = self && gb_engine(self, &s_eng);
-}
+// Total mass (kg) from the vehicle model; 26 t until the game tells.
+static float ah_mass() { return V.mass_ok ? V.mass : 26000; }
 
-// Force (N) at the wheels the engine and clutch deliver right now; NAN if the data is not there.
+// Force (N) at the wheels the engine and clutch deliver right now; NAN if the data is not there. The engine at its
+// real rpm with the clutch slipping, so not the model's force_at (that is a closed clutch at the driveline rpm).
 static float ah_drive_force()
 {
     int g = T.gear;
     float r = wheel_radius();
-    if (!s_eng_ok || g < 1 || g > 31 || !(r > 0.1f) || !(T.diff > 0) || !(T.ratio[g - 1] > 0)) return NAN;
+    if (!V.eng_ok || g < 1 || g > 31 || !(r > 0.1f) || !(T.diff > 0) || !(T.ratio[g - 1] > 0)) return NAN;
     float couple = 1 - clutch_seen();
     couple = couple < 0 ? 0 : couple > 1 ? 1 : couple;
-    float te = s_eng.torque * curve_factor(&s_eng, T.rpm) * T.eff_thr;
+    float te = V.eng.torque * curve_factor(&V.eng, T.rpm) * T.eff_thr;
     return s_ah_k * te * T.ratio[g - 1] * T.diff * 0.9f * couple / r;
 }
 
 // Force (N) that gets the truck going: the grade force plus a small push (0.25 m/s2 with rolling resistance).
 static float ah_need()
 {
-    float gr = pitch_grade() / 100, m = AH.mass;
+    float gr = pitch_grade() / 100, m = ah_mass();
     float f_grade = m * 9.81f * gr / sqrtf(1 + gr * gr);
     float need = 1.1f * f_grade + m * 0.25f;
     return need < m * 0.12f ? m * 0.12f : need;
@@ -374,13 +360,11 @@ static void auto_hold(char *g, float dt)
     case AH_OFF:
         AH.r = AH.r > 0 ? fmaxf(0, AH.r - 3 * dt) : 0;   // fade out, ~0.2 s
         if (!blocked && kmh < 0.5f && T.in_brake > 0.1f) {
-            AH.st = AH_HOLD; AH.mass_at = -10; AH.roll_m = 0;
-            ah_refresh();
-            logv(2, "Auto Hold: holding at %.1f%% (mass %.0f kg, request %.2f)", grade, AH.mass, h);
+            AH.st = AH_HOLD; AH.roll_m = 0;
+            logv(2, "Auto Hold: holding at %.1f%% (mass %.0f kg, request %.2f)", grade, ah_mass(), h);
         }
         break;
     case AH_HOLD:
-        ah_refresh();
         // on within ~0.2 s, while the driver still has the pedal; once the parking brake is confirmed the service brake lets go slowly
         // (it was decayed above and then pulled back to h here every frame, so both brakes stayed on)
         AH.r = s_park_on && s_park_ok ? fmaxf(0.0f, AH.r - 0.5f * dt) : fminf(h, AH.r + 3 * dt);
@@ -595,8 +579,8 @@ static void aeb(char *g, float dt);
 enum { AEB_OFF, AEB_WARN, AEB_PARTIAL, AEB_FULL, AEB_HOLD };
 static struct {
     int st;                                     // AEB_*
-    float vl, gap_prev, rate, a_l, vl_prev, req, i, a_cmd, ttc, a_need, mass, thr_at_brake;
-    double age_t0, calm_since, lock_until, beep_at, lost_at, thr_since, st_at, mass_at, close_since; int close_warned;
+    float vl, gap_prev, rate, a_l, vl_prev, req, i, a_cmd, ttc, a_need, thr_at_brake;
+    double age_t0, calm_since, lock_until, beep_at, lost_at, thr_since, st_at, close_since; int close_warned;
     // the event (for the summary line)
     double ev_t0; float ev_kmh, ev_min_gap, ev_min_ttc, ev_psi0, ev_psi_min, ev_max_dec; int ev_max, air_low; const char *ev_cap;
     // evasive lane change: steering / yaw before the warning (a bend is no evasion), since when it looks like one, until when
@@ -1097,9 +1081,7 @@ static void own_acc(char *g, float dt)
     s_dstar = dstar;
     // Heavier = slower to stop (Damien: "start braking earlier at 60 t"): from 30 t up the planned deceleration shrinks
     // and the same need asks for more brake, up to 2.5x at 75 t.
-    static float mass = 30000; static double mass_at = -10;
-    if (wall_s() - mass_at > 2) { mass_at = wall_s(); float m = game_mass(); if (m == m && m > 500) mass = m; }
-    float heavy = fminf(2.5f, fmaxf(1.0f, mass / 30000));
+    float heavy = fminf(2.5f, fmaxf(1.0f, load_mass() / 30000));
     float want = set;
     if (lv * 3.6f < set) {
         want = (lv + p_own_gain * (lead - dstar)) * 3.6f;
@@ -1499,7 +1481,7 @@ static void aeb_stage(int st, float gap, float kmh)
     if (AE.st == AEB_OFF) AE.air_low = 0;
     if (st > AE.st && st <= AEB_FULL)
         logline("AEB: %s: lead %.1f m ahead at %.0f km/h (we %.0f), time to collision %.1f s, needs %.1f m/s2 (mass %.0f t)",
-                aeb_name[st], gap, AE.vl * 3.6f, kmh, AE.ttc, AE.a_need, AE.mass / 1000);
+                aeb_name[st], gap, AE.vl * 3.6f, kmh, AE.ttc, AE.a_need, load_mass() / 1000);
     if (st == AEB_HOLD && AE.st != AEB_HOLD) {
         if (gap > 0) logline("AEB: stopped %.1f m behind the lead: holding until gas or brake", gap);
         else logline("AEB: stopped (the radar lost the lead on the way): holding until gas or brake");
@@ -1543,7 +1525,7 @@ static void aeb_record(float gap, float kmh, float vc, float ttc, float a_need)
         s_inc = open_incident("incidents", "aeb", g_incident_mb, stamp, sizeof stamp);
         if (s_inc) {
             fprintf(s_inc, "# DazDrive %s AEB incident at %s (local time), %.0f t, log clock %.0f s (dazdrive.log); stage 0 off 1 warning 2 partial 3 full 4 hold; indicator 1 left -1 right 2 hazards\n", SUITE_VERSION, stamp,
-                    AE.mass / 1000, now);
+                    load_mass() / 1000, now);
             fputs("t,kmh,gap_m,lead_kmh,closing_ms,ttc_s,a_need,stage,request,a_cmd,thr,brake,decel,steer,yaw_deg_s,indicator,air_psi\n", s_inc);
             for (int k = 0; k < s_ring_n; k++) aeb_row(s_inc, s_ring[(s_ring_i - s_ring_n + k + AEB_RING) % AEB_RING]);
             logline("incident: aeb -> incidents\\aeb_%s.csv", stamp);
@@ -1567,12 +1549,7 @@ static void aeb(char *g, float dt)
     int on = *(unsigned char *)(g + GA_ON);
     int active = (on || p_aeb_manual > 0) && T.engine_on && !T.paused && T.gear >= 0 && T.dgear >= 0 && v > -0.5f && !T.parking_brake;
     s_aeb_watch = active ? 1 : 0;  // not watching (cruise off with aeb_without_cruise = 0, reversing, ...): the game's own AEB is left alone
-    if (now - AE.mass_at > 2) {
-        AE.mass_at = now;
-        float m = game_mass();
-        AE.mass = m == m && m > 500 ? m : AE.mass > 500 ? AE.mass : 30000;
-    }
-    float heavy = fminf(2.0f, fmaxf(1.0f, AE.mass / 30000)), hs = sqrtf(heavy);  // heavier: slower to stop, so earlier
+    float heavy = fminf(2.0f, fmaxf(1.0f, load_mass() / 30000)), hs = sqrtf(heavy);  // heavier: slower to stop, so earlier
     // the radar lead (fresh, plausible); a jump in the gap is a new target
     int fresh = g_radar_ok && now - s_radar.at < 0.3 && s_radar.gap > 0.3f && s_radar.gap < 100 && s_radar.v >= 0 && s_radar.v < 70;
     float gap = fresh ? s_radar.gap : NAN;
@@ -2063,10 +2040,10 @@ static void cr_reset(int level, const char *why)
     s_press_before = NAN;
     s_btn_held = 0;
     // Auto Hold / hill start / our brake wishes back to 0 (the actuator's own reset puts the request back to 0)
-    AH.st = AH_OFF; AH.r = 0; AH.released = 0; AH.launch_t = 0; AH.grab_until = 0; AH.roll_m = 0; AH.mass_at = -10;
+    AH.st = AH_OFF; AH.r = 0; AH.released = 0; AH.launch_t = 0; AH.grab_until = 0; AH.roll_m = 0;
     s_want_hill = s_want_hold = s_want_curve = s_want_aeb = 0;
     act_brake(ACT_HILL, 0); act_brake(ACT_HOLD, 0); act_brake(ACT_BEND, 0); act_brake(ACT_AEB, 0);
-    { float m = AE.mass; memset(&AE, 0, sizeof AE); AE.mass = m; AE.gap_prev = AE.rate = AE.vl_prev = NAN; }  // AEB: no event spans a reset
+    memset(&AE, 0, sizeof AE); AE.gap_prev = AE.rate = AE.vl_prev = NAN;  // AEB: no event spans a reset
     s_hs_armed = 0; s_hs_until = 0;
     s_sg_wait = 0;
     s_rearm_active = 0; s_dstar_sm = NAN;

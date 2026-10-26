@@ -69,6 +69,7 @@ int mem_readable(const void *p, size_t) { return p != NULL; }
 static float g_sim_mass = 26000;
 static engine_info g_sim_eng;
 float game_mass() { return g_sim_mass; }
+float game_grade_deg(void *) { return NAN; }   // the vehicle model asks; Cruise decides on the pitch
 void *game_gearbox() { return (void *)&g_sim_eng; }
 int gb_engine(void *, engine_info *e) { *e = g_sim_eng; return 1; }
 float curve_factor(const engine_info *e, float rpm) { return rpm < 1000 ? 0.8f + 0.2f * rpm / 1000 : rpm < 1500 ? 1.0f : 1.0f - (rpm - 1500) / 3000; }
@@ -107,6 +108,7 @@ void route_probe_limit(float) {}
 #include "modules/cruise.cpp"
 #include "core/rsc.cpp"
 #include "core/actuate.cpp"
+#include "core/vehicle.cpp"
 
 // ---- the game's cruise (incremental PI, see cruise-re notes § 1)
 static float stock_thr;
@@ -206,6 +208,7 @@ static result run(const char *name, int ours, float set_kmh, double secs, void (
         int shifting = t_now < M.shift_end;
         T.eff_clutch = shifting ? 1 : 0;
         *(float *)(GA + GA_BRAKE_REQ) = 0;  // the game rewrites it every tick (stock ACC: 0 unless emergency)
+        vehicle_frame();
         float u = ours ? act_stub(GA, 1 / 60.0f, 0) : stock_cruise(GA, 1 / 60.0f, 0);
         float brake = *(float *)(GA + GA_BRAKE_REQ);
         if (M.lead) {  // the game's ACC brakes itself when closing in (cruise-re notes § 2)
@@ -332,11 +335,11 @@ static void keys_test()
       bad |= fabsf(r1 - 2) > 0.01f || r2 != 0 || r3 < 1e8f || r4 < 1e8f; }
     // smart overspeed: full on the flat, gliding down to the steep-descent value between -1 % and -2 %, less with a heavy trailer
     { float sp = p_smart_kmh, dc = p_desc_kmh, cr = T.cruise; p_smart_kmh = 3; p_desc_kmh = 2; T.cruise = 80 / 3.6f;
-      auto at = [](float g) { T.place.orientation.pitch = atanf(g / 100) / 6.2831853f; return smart_dynamic(); };
+      auto at = [](float g) { T.place.orientation.pitch = atanf(g / 100) / 6.2831853f; vehicle_frame(); return smart_dynamic(); };   // the pitch reaches Cruise through the vehicle model's frame
       float w0 = at(0), w1 = at(-1.5f), w2 = at(-3), w3 = at(+2);
       printf("smart overspeed: flat %.2f, -1.5 %% %.2f, -3 %% %.2f, uphill %.2f (expect 3.2, between, 2.0, 3.2)\n", w0, w1, w2, w3);
       bad |= !(w0 > 3.0f && w0 < 3.4f) || !(w1 < w0 && w1 > w2) || !(w2 > 1.9f && w2 < 2.2f) || fabsf(w3 - w0) > 0.01f;
-      T.place.orientation.pitch = 0; p_smart_kmh = sp; p_desc_kmh = dc; T.cruise = cr; }
+      T.place.orientation.pitch = 0; vehicle_frame(); p_smart_kmh = sp; p_desc_kmh = dc; T.cruise = cr; }
     // pedal curve after a mode change: stays while the pedal is held, blends with the pedal travel
     { float se = p_pc_eco, sp = p_pc_pw, st = p_pc_travel; p_pc_eco = 1.35f; p_pc_pw = 1.6f; p_pc_travel = 1.0f;
       float e0 = pedal_blend(MODE_ECO, 0.5f);                       // first call: Eco curve
@@ -352,6 +355,7 @@ static void keys_test()
         memset(&T, 0, sizeof T); T.engine_on = 1; T.gear = 1; T.dgear = 1; T.in_brake = 0.3f; T.fwd_gears = 12;
         memset(&AH, 0, sizeof AH); s_park_on = s_park_ok = s_park_bad = 0; s_ah_hold_since = 0; g_sg_hold = 0; g_crawl_on = 0;
         GA[0x15c] = 0; *(float *)(GA + 0x160) = 0;
+        vehicle_frame();   // flat (T was cleared)
         for (int i = 0; i < 60 * 3; i++, t_now += 1 / 60.0) { auto_hold(GA, 1 / 60.0f); T.parking_brake = GA[0x15c] == 1; }  // the game shows what we wrote
         int requested = s_park_on && GA[0x15c] == 1;
         for (int i = 0; i < 60 * 2; i++, t_now += 1 / 60.0) { auto_hold(GA, 1 / 60.0f); T.parking_brake = GA[0x15c] == 1; }
@@ -438,6 +442,7 @@ static float jn_run(const char *name, int roundabout, float set_kmh, float d0, d
         *(float *)(GA + GA_LEAD_M) = lead ? 15 + 1.0f * kmh : 0;   // the lead keeps 15 m at a standstill, more at speed
         *(float *)(GA + GA_ACC_TARGET) = lead ? kmh : set_kmh;
         *(float *)(GA + GA_BRAKE_REQ) = 0;
+        vehicle_frame();
         act_stub(GA, 1 / 60.0f, 0);
         if (g_sg_hold) held++;
         if (!*(unsigned char *)(GA + GA_ON)) { cancel_m = g_sim_jn.dist_m; *kmh_at = kmh; break; }
@@ -551,6 +556,7 @@ static ahres ah_run(const char *name, float grade_pct, int hard, int gate, float
         rpm += (700 + 1300 * T.eff_thr - rpm) * (float)(dt / 0.25); T.rpm = rpm;
         *(float *)(GA + GA_BRAKE_REQ) = 0;                 // AEB option off would leave it; our writer puts back what it wrote
         if (s_req_ours > 0) *(float *)(GA + GA_BRAKE_REQ) = s_req_ours;   // (what we left there last tick)
+        vehicle_frame();
         float u = act_stub(GA, (float)dt, 0);
         float req = *(float *)(GA + GA_BRAKE_REQ);
         // the game's throttle gate now (this tick's flag)
@@ -661,6 +667,7 @@ static accres acc_run(const char *name, int own, int scen)
         *(float *)(GA + GA_ACC_TARGET) = acc_t;
         float game_target = acc_t;
         *(float *)(GA + GA_BRAKE_REQ) = 0;
+        vehicle_frame();
         float u = act_stub(GA, (float)dt, 0);
         float T_used = *(float *)(GA + GA_ACC_TARGET);
         // brakes (pedal fn): overspeed vs the target the game now reads (+0x1a0), skipped while the driver throttle is on
@@ -759,6 +766,7 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
         radar_stub(GA, g_fake_radar);
         float req_before = *(float *)(GA + GA_BRAKE_REQ);
         (void)req_before;
+        vehicle_frame();
         float u = act_stub(GA, (float)dt, pedal);
         float req = *(float *)(GA + GA_BRAKE_REQ);
         r.max_req = fmaxf(r.max_req, req);
@@ -813,7 +821,7 @@ int main(int argc, char **argv)
     // hill start
     {
         memset(GA, 0, sizeof GA); T.speed = 0; T.in_brake = 0.5f; T.in_thr = 0;
-        T.place.orientation.pitch = atanf(0.05f) / 6.2831853f;
+        T.place.orientation.pitch = atanf(0.05f) / 6.2831853f; vehicle_frame();
         for (int k = 0; k < 30; k++) { t_now += 1 / 60.0; hill_start(GA); act_brake(ACT_HILL, s_want_hill); act_brake_write(GA); }
         T.in_brake = 0;
         int held = 0;
