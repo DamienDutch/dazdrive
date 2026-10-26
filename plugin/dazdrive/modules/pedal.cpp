@@ -130,7 +130,7 @@ int pedal_wish(float p, float dt, int other, float *out)
     // 4, 5: the wish as a force at this speed, then the throttle that gives it in this gear
     float fg = vehicle_force_at(g, v, 1.0f), pref = peak_power();
     float fcap = sg > 0 ? vehicle_force_at(sg, vehicle_kmh_at(sg, V.plateau) / 3.6f, 1.0f) : 0;
-    if (!(fg > 0) || !(pref > 0) || !(fcap > 0) || !(V.eta > 0)) return 0;
+    if (!(fg > 0) || !(pref > 0) || !(fcap > 0) || !(V.eta > 0)) { follow(p); return 0; }   // e.g. over the rev limit: the old path, as a pass-through
     float f = fminf(S.q * pref * V.eta / v, S.q * fcap);
     float gas = fminf(1.0f, fmaxf(0.0f, f / fg));
     S.w = gas;
@@ -139,7 +139,7 @@ int pedal_wish(float p, float dt, int other, float *out)
     // keeps asking for it), and a flat pedal is full throttle
     if (p > bl) gas += fmaxf(0.0f, p - gas) * (p - bl) / (1.0f - bl);
     if (p >= 1.0f) gas = 1.0f;
-    if (!(gas == gas)) return 0;
+    if (!(gas == gas)) { follow(p); return 0; }
     *out = gas;
     return 1;
 }

@@ -67,6 +67,10 @@ static const struct { const char *sec, *key; float lo, hi; } k_bounds[] = {
     { "creep", "toggle_hold_s", 0.2f, 5 }, { "creep", "rest_delay_s", 0, 5 },
     { "creep", "close_rate", 0.05f, 5 }, { "creep", "open_rate", 0.05f, 10 }, { "creep", "release_s", 0.1f, 5 },
     { "creep", "heavy_t", 5, 80 }, { "creep", "max_gear", 1, 8 }, { "creep", "heavy_gear", 1, 4 }, { "creep", "heavy_throttle", 0, 0.5f },
+    { "pedal", "wish", 0, 1 }, { "pedal", "blend_from", 0.5f, 1 }, { "pedal", "kick_rate", 0.3f, 20 }, { "pedal", "kick", 0, 0.5f },
+    { "pedal", "kick_s", 0, 2 }, { "pedal", "exponent_eco", 0.5f, 2 }, { "pedal", "exponent_normal", 0.5f, 2 },
+    { "pedal", "exponent_power", 0.5f, 2 }, { "pedal", "rise_rate_eco", 0.3f, 50 }, { "pedal", "rise_rate_normal", 0.3f, 50 },
+    { "pedal", "rise_rate_power", 0.3f, 50 },
 };
 
 // The value as it may be used: finite, within its bounds (or, without a bounds row, within +-1e6). Returns the value it
