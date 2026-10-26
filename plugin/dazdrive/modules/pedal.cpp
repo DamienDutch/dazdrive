@@ -50,7 +50,9 @@ static struct {
     int fast;         // the pedal is rising faster than kick_rate
     float from;       // where that fast rise started
     float kick_age;   // seconds since the kick started, < 0 = none
-} S = { NAN, 0, 0, 0, 0, 0, -1 };
+    double on_at;     // sim_s() of the last tick that gave a wish, < 0 = the pedal goes through (TrueShift reads the wish: pedal_wish_force)
+    float pref, fcap; // that tick's peak power (W) and force cap (N)
+} S = { NAN, 0, 0, 0, 0, 0, -1, -1, 0, 0 };
 
 // Hand over to the pass-through: the state follows the pedal, so the wish starts from where the pedal is, not from zero.
 static void follow(float p)
@@ -58,6 +60,7 @@ static void follow(float p)
     S.q_f = S.q = p == p ? p : 0;
     S.fast = 0;
     S.kick_age = -1;
+    S.on_at = -1;
 }
 
 // The engine's peak power (W) over its torque curve, up to the rpm limit.
@@ -145,7 +148,15 @@ int pedal_wish(float p, float dt, int other, float *out)
     if (p >= 1.0f) gas = 1.0f;
     if (!(gas == gas)) { follow(p); return 0; }
     *out = gas;
+    S.on_at = sim_s(); S.pref = pref; S.fcap = fcap;
     return 1;
+}
+
+float pedal_wish_force(float v)
+{
+    double now = sim_s();
+    if (!(p_wish > 0) || S.on_at < 0 || now < S.on_at || now - S.on_at > 0.3 || !(V.eta > 0)) return -1;
+    return fminf(S.q * S.pref * V.eta / fmaxf(v, 0.5f), S.q * S.fcap);
 }
 
 static void pd_reset(int, const char *) { S.prev = NAN; follow(0); }

@@ -220,6 +220,7 @@ int ts_mode();                  // TrueShift: the driving mode (MODE_ECO / MODE_
 // the truck is in. Returns 1 and the throttle in *out where it applies, else 0 and *out = p (pass-through: the old pedal path).
 // other = the caller knows something else drives the throttle (cruise, ACC, AEB). dt = the tick's seconds.
 int pedal_wish(float p, float dt, int other, float *out);
+float pedal_wish_force(float v);   // the driver's wish as a force (N) at speed v while the wish pedal gives the throttle (its last 0.3 s), else -1
 extern volatile int g_pedal_mapped;     // Cruise: the throttle the engine gets is the pedal through the Eco / Power curve this frame
 extern volatile int g_pcc_on;         // Cruise: predictive cruise (PCC) is switched on
 extern volatile int g_cruise_smooth;  // the Cruise module drives the cruise throttle itself
