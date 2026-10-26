@@ -7,6 +7,7 @@
 #include "core/game.h"
 #include "core/route.h"
 #include "core/vehicle.h"
+#include "core/gearscore.h"
 #include <math.h>
 #include <initializer_list>
 #include <stdarg.h>
@@ -525,6 +526,106 @@ static void run_m()
     sim_btn = 0;
 }
 
+// ---- SCORES: the score-based gear choice ([trueshift] choice = 1, core/gearscore.h). Run: tools/sim/run_scores.sh
+// Part 1: the pure score function on the vehicle model. Part 2 (further down): choice 0 against choice 1 in the simulator.
+static int g_sc_failed;
+static void sc_check(bool ok, const char *what) { printf("  %-4s %s\n", ok ? "ok" : "FAIL", what); if (!ok) g_sc_failed = 1; }
+static void sc_prime(float mass, float shift_time, float kmh, int gear)   // the vehicle model reads this truck now
+{
+    memset(&M, 0, sizeof M);
+    M.mass = mass; M.shift_time = shift_time; M.cvar = 3; M.v = kmh / 3.6f; M.gear = M.target = gear;
+    t_now += 10; T.speed = M.v; T.engine_on = 1;
+    vehicle_reset(RESET_HARD); vehicle_update(SELF);
+}
+// the settings of a mode as TrueShift builds them from the ini defaults (set_param changes win)
+static gs_cfg sc_cfg(int mode, int skips)   // mode: 0 Normal, 1 Eco, 2 Power
+{
+    float v[8]; const char *k[8] = { "choice_comfort", "choice_comfort_eco", "choice_comfort_power", "choice_rpm_weight", "choice_shift_weight", "choice_stay", "choice_stay_power", "hysteresis_rpm" };
+    for (int i = 0; i < 8; i++) for (int j = 0; j < m_trueshift.n_params; j++) if (!strcmp(m_trueshift.params[j].key, k[i])) v[i] = *m_trueshift.params[j].val;
+    gs_cfg c = {};
+    c.comfort = v[mode == 1 ? 1 : mode == 2 ? 2 : 0]; c.w_rpm = v[3]; c.w_shift = v[4]; c.stay = v[mode == 2 ? 6 : 5]; c.hyst = v[7];
+    c.idle = 550; c.skips = skips; c.horizon = 8; c.learn_res = 0;
+    return c;
+}
+// the force a pedal asks in gear cur at the speed of now, as TrueShift's f_need holds it in steady state
+static float sc_need(int cur, float pedal) { return fmaxf(vehicle_force_at(cur, M.v, pedal), vehicle_resist(M.v)); }
+static void sc_show(const char *title, const gs_out &o, int cur)
+{
+    printf("  %s\n", title);
+    for (int g = 1; g <= NG; g++) {
+        if (g < cur - 3 || g > cur + 3) continue;
+        const gs_term &t = o.t[g];
+        if (!t.g) continue;
+        printf("    gear %2d%s rpm %5.0f share %4.2f  %s  gas %.3f rpm %.3f shift %.3f (%d) stay %.3f = %7.3f\n", g, g == cur ? "*" : " ", t.rpm, t.share > 8 ? 9.0 : t.share,
+               t.ok ? "ok " : "out", t.gas, t.rpmc, t.shiftc, t.shifts, t.stay, t.score);
+    }
+}
+static int run_scores()
+{
+    printf("\n=== SCORES part 1: the score function on the vehicle model (Renault ATO 12 speeds, diff 3.08) ===\n");
+    use_ato();
+    gs_out o; gs_out o2;
+    // 17 t at 45 km/h in 8, pedal 0.5: the demand of a pull
+    sc_prime(17000, 0.5f, 45, 8);
+    gs_cfg c = sc_cfg(0, 2);
+    gs_eval(&o, 8, NG, M.v, sc_need(8, 0.5f), vehicle_resist(M.v), 0, c);
+    sc_show("17 t, 45 km/h in 8, pedal 0.5, Normal, skips 2", o, 8);
+    sc_check(o.n > 0 && o.best >= 1, "a best gear exists");
+    bool infeasible_out = true; for (int g = 1; g <= NG; g++) if (o.t[g].g && o.t[g].share > 1 && o.t[g].ok) infeasible_out = false;
+    sc_check(infeasible_out, "a gear that needs a share over 1 is never a candidate");
+    // coasting asks nothing: every gear in the window has share 0
+    gs_eval(&o2, 8, NG, M.v, sc_need(8, 0.0f), vehicle_resist(M.v), 1, c);
+    bool zero = true; for (int g = 1; g <= NG; g++) if (o2.t[g].g && o2.t[g].ok && o2.t[g].share != 0) zero = false;
+    sc_check(zero, "coasting: nothing is asked (share 0)");
+    // one skip is one shift: for the same landing gear a skip never costs more shifts than the two single shifts it replaces
+    bool skip_cheaper = true; int n_cmp = 0;
+    for (float kmh : { 15.0f, 25.0f, 35.0f, 45.0f, 60.0f })
+        for (float pedal : { 0.3f, 0.5f, 0.7f })
+            for (int cur = 3; cur <= 11; cur++) {
+                sc_prime(25000, 0.5f, kmh, cur);
+                gs_eval(&o, cur, NG, M.v, sc_need(cur, pedal), vehicle_resist(M.v), 0, c);
+                if (o.t[cur + 1].ok && o.t[cur + 2].ok) { n_cmp++; if (o.t[cur + 2].shifts > o.t[cur + 1].shifts) skip_cheaper = false; }
+            }
+    sc_check(skip_cheaper && n_cmp > 10, "the skip (cur+2) needs no more shifts than the single step (cur+1) over a grid of speeds, pedals, gears");
+    // a slow gearbox pays more per shift: where the skip (cur+2) saves a later shift over the single step (cur+1), it wins by more
+    // with a slow box than with a fast one (the slow box also loses more speed in the shift, so a skip may land too low and fall out: not counted)
+    int wider = 0, narrower = 0, pairs = 0;
+    for (float kmh : { 15.0f, 20.0f, 25.0f, 30.0f, 35.0f, 45.0f })
+        for (float pedal : { 0.3f, 0.4f, 0.5f, 0.6f })
+            for (float mass : { 17000.0f, 36000.0f })
+                for (int cur = 3; cur <= 11; cur++) {
+                    float margin[2]; bool use = true;
+                    for (int k = 0; k < 2; k++) {
+                        sc_prime(mass, k ? 1.5f : 0.3f, kmh, cur);
+                        gs_eval(&o, cur, NG, M.v, sc_need(cur, pedal), vehicle_resist(M.v), 0, c);
+                        if (!(o.t[cur + 1].ok && o.t[cur + 2].ok && o.t[cur + 2].shifts < o.t[cur + 1].shifts)) use = false;
+                        else margin[k] = o.t[cur + 2].score - o.t[cur + 1].score;
+                    }
+                    if (!use) continue;
+                    pairs++;
+                    if (margin[1] > margin[0] + 0.001f) wider++;
+                    if (margin[1] < margin[0] - 0.02f) narrower++;
+                }
+    printf("  slow box 1.5 s vs fast 0.3 s: the skip's lead over the single step is wider in %d of %d cases, narrower in %d\n", wider, pairs, narrower);
+    sc_check(pairs > 5 && narrower == 0 && wider == pairs, "a slow gearbox pays more per shift: the skip wins by more");
+    // the modes: Eco goes as far as Power or farther, Power the least
+    int eco_far = 0, eco_near = 0, pw_far = 0;
+    for (float kmh : { 15.0f, 25.0f, 35.0f, 45.0f, 60.0f })
+        for (float pedal : { 0.3f, 0.4f, 0.5f, 0.6f })
+            for (int cur = 3; cur <= 11; cur++) {
+                int best[3];
+                for (int md = 0; md < 3; md++) {
+                    sc_prime(25000, 0.5f, kmh, cur);
+                    gs_eval(&o, cur, NG, M.v, sc_need(cur, pedal), vehicle_resist(M.v), 0, sc_cfg(md, 2));
+                    best[md] = o.best;
+                }
+                if (best[0] && best[1] && best[2]) { if (best[1] > best[2]) eco_far++; if (best[1] < best[2]) eco_near++; if (best[0] > best[2]) pw_far++; }
+            }
+    printf("  Eco higher than Power in %d cases, lower in %d; Normal higher than Power in %d\n", eco_far, eco_near, pw_far);
+    sc_check(eco_near == 0 && eco_far > 0 && pw_far > 0, "Eco skips farther than Power, never less; Normal farther than Power somewhere");
+    return g_sc_failed;
+}
+
 int main(int argc, char **argv)
 {
     verbose = argc > 1 && !strcmp(argv[1], "-v");
@@ -539,6 +640,7 @@ int main(int argc, char **argv)
     if (getenv("NOBOOST")) set_param("eco_roll_boost_kmh", 0);
     if (getenv("NOLOAD")) set_param("load_down_from", 1);
 
+    if (getenv("SCORES")) return run_scores();
     if (getenv("RELAX")) {  // skip_relax_rpm study: pull-away at a fixed pedal from a standstill, 12 and 25 km/h, 12/20/36 t, both of his boxes
         // CSV: truck, t, pedal (-1 = wavering), from km/h, s to 30/50/80, shifts, ups, skips, hunting pairs, no-pull lessons, incidents,
         // lowest up-landing rpm (>= 8 km/h), mean rpm below 50 km/h, shifts and hunting pairs >= 8 km/h, lowest skip landing rpm, lowest pull after a skip (m/s2)
