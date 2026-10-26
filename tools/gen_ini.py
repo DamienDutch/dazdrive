@@ -114,7 +114,7 @@ def unescape(s):
 
 
 STR = r'"((?:[^"\\]|\\.)*)"'
-ROW = re.compile(r'\{\s*"([a-z0-9_]+)"\s*,\s*&\w+\s*,\s*(-?[0-9.]+[fF]?)\s*,\s*' + STR + r'\s*\}', re.S)
+ROW = re.compile(r'\{\s*"([a-z0-9_]+)"\s*,\s*&[\w.]+\s*,\s*(-?[0-9.]+[fF]?)\s*,\s*' + STR + r'\s*\}', re.S)   # &p_var or &V.field (core/vehicle.h)
 
 
 def parse_table(path):

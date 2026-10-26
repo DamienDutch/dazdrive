@@ -27,7 +27,7 @@ static float p_eco_ceil, p_mode_char, p_enabled, p_takeover, p_on_kmh, p_off_kmh
     p_max_skip, p_skip_acc, p_skip_wait, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
-    p_crr, p_cda, p_eta, p_idle, p_trace, p_lookahead, p_roll, p_roll_cruise, p_roll_cruise_min, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_stop, p_tones, p_crest_band, p_relax;
+    p_idle, p_trace, p_lookahead, p_roll, p_roll_cruise, p_roll_cruise_min, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_stop, p_tones, p_crest_band, p_relax;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = TrueShift on, 0 = the game's own automatic" },
@@ -75,9 +75,10 @@ static param g_params[] = {
     { "launch_slip_s", &p_slip_s, 1.0f, "longest clutch-slip time accepted for a start gear" },
     { "launch_torque", &p_launch_torque, 0.6f, "share of max torque the clutch passes while starting" },
     { "launch_rpm", &p_launch_rpm, 1000, "rpm at which the clutch closes when starting" },
-    { "rolling_resistance", &p_crr, 0.006f, "rolling resistance coefficient" },
-    { "drag_area", &p_cda, 6.0f, "air drag Cd*A in m2 for trucks (vehicles under 4.5 t use 1.0: cars, pickups)" },
-    { "efficiency", &p_eta, 0.9f, "driveline efficiency" },
+    // the vehicle model's resistance (core/vehicle.cpp); the keys stay here so every ini keeps working
+    { "rolling_resistance", &V.crr, 0.006f, "rolling resistance coefficient" },
+    { "drag_area", &V.cda, 6.0f, "air drag Cd*A in m2 for trucks (vehicles under 4.5 t use 1.0: cars, pickups)" },
+    { "efficiency", &V.eta, 0.9f, "driveline efficiency" },
     { "idle_rpm", &p_idle, 550, "engine idle rpm to start with (learned while standing still)" },
     { "lookahead", &p_lookahead, 1, "1 = use the navigation route ahead (climbs, tops, junctions); without a route TrueShift stays careful" },
     { "crest_band_kmh", &p_crest_band, 5, "with the route (predictive cruise, PCC): no downshift for a top ahead that this gear gets over at full throttle while losing at most this much below the set speed (without cruise: below the speed when the top came into view) and staying on the torque plateau. Full at 40 t, 60 % solo, 60 % in Power; 0 = off" },
@@ -193,7 +194,6 @@ static struct {
     void *self;
     int eng_seen;           // the engine line is logged for the engine the vehicle model (V.eng) has now ...
     float eng_torque, eng_limit;   // ... which had these values
-    float rpm_k;            // measured rpm / speed-model rpm (tire size etc.)
     float thr;              // throttle that counts: pedal, or damped cruise control
     float cc_thr;           // cruise control throttle, smoothed
     float demand;           // smoothed demand 0..1
@@ -226,7 +226,6 @@ static struct {
     double top_at;          // last time a top ahead was reachable in this gear (the last ~50 m to it are not seen as a climb)
     float top_floor;        // and the lowest speed (m/s) that was allowed for it
     double grade_at;
-    float f_bias;           // learned extra resistance (N): what the model misses
     const char *why;        // reason of the last decision, the text, for the trace
     int want, target;
     double blocked_log_at;
@@ -299,40 +298,13 @@ static int n_gears()
     return n > 0 && n < 32 ? n : 0;
 }
 
-// Engine rpm in gear g at speed v (m/s), from the driveline, corrected by the
-// measured ratio to the real rpm.
-static float rpm_at(int g, float v)
-{
-    float r = wheel_radius();
-    if (g < 1 || g > n_gears() || r <= 0.1f || T.diff <= 0) return 0;
-    return v / r * T.ratio[g - 1] * T.diff * 9.5493f * S.rpm_k;
-}
-
-// Tractive force (N) in gear g at speed v with a share of the available torque.
-static float force_at(int g, float v, float share)
-{
-    float r = wheel_radius();
-    if (g < 1 || g > n_gears() || r <= 0.1f) return 0;
-    float rpm = rpm_at(g, v);
-    float t = V.eng.torque * curve_factor(&V.eng, rpm) * share;
-    if (rpm > V.eng.rpm_limit) t = 0;
-    return t * T.ratio[g - 1] * T.diff * p_eta / r;
-}
-
-// Air drag area: the truck value from the ini, a car-like one for light vehicles.
-static float cda() { return V.mass > 0 && V.mass < 4500 ? 1.0f : p_cda; }
-
-static float resist(float v)
-{
-    float s = sinf(V.grade_deg * 0.0174533f);
-    return V.mass * 9.81f * (s + p_crr) + 0.5f * 1.2f * cda() * v * v + S.f_bias;
-}
-
-static float resist_grade(float v, float pct)
-{
-    float s = sinf(atanf(pct / 100));
-    return V.mass * 9.81f * (s + p_crr) + 0.5f * 1.2f * cda() * v * v + S.f_bias;
-}
+// The vehicle model's forces (core/vehicle.cpp), the short names the decisions below are written in: engine rpm in gear g
+// at speed v (m/s), tractive force (N) in g at v with a share of the torque, the resistance (N) on the grade of now or
+// on another grade (%).
+static float rpm_at(int g, float v) { return vehicle_rpm_at(g, v); }
+static float force_at(int g, float v, float share) { return vehicle_force_at(g, v, share); }
+static float resist(float v) { return vehicle_resist(v); }
+static float resist_grade(float v, float pct) { return vehicle_resist_grade(v, pct); }
 
 // ---------------------------------------------------------------- shift points
 
@@ -546,7 +518,6 @@ static void ts_reset(int level, const char *why)
     S.gap_since = 0;                        // a pause in the gap state is not a stuck shift (the timer starts again)
     S.pedal_prev = clampf(T.in_thr, 0, 1);
     if (level >= RESET_LOAD) {
-        S.f_bias = 0;
         S.f_need = 0;
         S.up_gear = 0;
         S.strain = 0;
@@ -559,7 +530,6 @@ static void ts_reset(int level, const char *why)
         S.self = NULL;                      // refresh() starts over from the gearbox it sees next
         S.eng_seen = 0;                     // the engine line is logged again
         S.idle = 0;                         // idle is learned again (engine on 5 s, standing still)
-        S.rpm_k = 1;
         S.rpm_odd_s = 0;
         S.unsupported = NULL;
         memset(S.grade_hist, 0, sizeof S.grade_hist);
@@ -596,7 +566,6 @@ static void refresh(void *self)
                 e->torque, e->rpm_limit, e->n_curve, V.plateau, e->range[0][0], e->range[0][1], e->range[1][0],
                 e->range[1][1], e->range[2][0], e->range[2][1], e->range[3][0], e->range[3][1], e->shift_time);
         S.letter_state = -1;
-        S.f_bias = 0;
         S.eng_seen = 1; S.eng_torque = e->torque; S.eng_limit = e->rpm_limit;
     }
     if (!V.eng_ok && S.eng_seen) { logline("engine data unreadable, TrueShift pauses"); S.eng_seen = 0; }
@@ -614,7 +583,7 @@ static void refresh(void *self)
         memmove(S.grade_hist + 1, S.grade_hist, sizeof S.grade_hist - sizeof S.grade_hist[0]);
         S.grade_hist[0] = grade_pct();
     }
-    if (!(S.rpm_k > 0.5f)) S.rpm_k = 1;
+    if (!(V.rpm_k > 0.5f)) V.rpm_k = 1;
 
     float v = fabsf(T.speed), kmh = v * 3.6f;
     int was = S.ours;
@@ -624,14 +593,14 @@ static void refresh(void *self)
     else if (p_on_rpm > 0 ? ((T.rpm >= p_on_rpm && T.gear > 0 && clutch_seen() < 0.1f) || kmh >= fmaxf(p_on_kmh, 20.0f)) : kmh >= p_on_kmh) S.ours = 1;
     if (S.ours && !was) { S.ours_at = now; S.ours_launch = kmh < 25; }
 
-    // Learn the rpm correction while the clutch is closed and the speed steady.
+    // Learn the vehicle model's rpm correction while the clutch is closed and the speed steady.
     int g = gb_gear(self);
     if (g > 0 && v > 5 && clutch_seen() < 0.02f && T.rpm > 700) {
-        float raw = rpm_at(g, v) / S.rpm_k;
+        float raw = rpm_at(g, v) / V.rpm_k;
         if (raw > 300) {
             float kr = T.rpm / raw;
             float k = clampf(kr, 0.7f, 1.4f);
-            S.rpm_k += 0.02f * (k - S.rpm_k);
+            V.rpm_k += 0.02f * (k - V.rpm_k);
             // The rpm of a manual-style box follows the speed within a few percent. If it is far off for a long time
             // with the clutch closed, this is not a box we model (torque converter, hybrid, unusual mod): stay off.
             float step = (float)clampf((float)(now - S.demand_at), 0, 0.5f);
@@ -674,14 +643,14 @@ static void refresh(void *self)
         else { float tf = f > S.f_need ? 0.3f : 3.0f; S.f_need += (float)(dt / (tf + dt)) * (f - S.f_need); }
     }
 
-    // Extra resistance the model misses (tires, wind, a wrong mass): force the
+    // Extra resistance the vehicle model misses (tires, wind, a wrong mass), learned into it: force the
     // engine gives minus modeled resistance minus mass x acceleration, while
     // pulling steadily with the clutch closed. Slow (20 s), limited to +-2 % grade.
     if (g > 0 && clutch_seen() < 0.02f && V.eng_ok && v > 6 && eff > 0.1f && T.in_brake < 0.02f && !T.motor_brake &&
         !T.retarder && S.eb_level < 0.01f && now - S.shift_at > 2) {
-        float r = force_at(g, v, eff) - (resist(v) - S.f_bias) - V.mass * T.accel;
+        float r = force_at(g, v, eff) - (resist(v) - V.f_bias) - V.mass * T.accel;
         float lim = V.mass * 9.81f * 0.02f;
-        S.f_bias = clampf(S.f_bias + (float)(dt / (20 + dt)) * (r - S.f_bias), -lim, lim);
+        V.f_bias = clampf(V.f_bias + (float)(dt / (20 + dt)) * (r - V.f_bias), -lim, lim);
     }
 
     if (T.in_thr > 0.02f) S.pedal_on_at = now;
@@ -1556,7 +1525,7 @@ static int launch_pick(int stock, float thr)
         for (int g = raise ? n_gears() : stock; g >= 1; g--) {
             float ratio = T.ratio[g - 1] * T.diff;
             float v_lock = lrpm / (ratio * 9.5493f) * r;
-            float a = (V.eng.torque * p_launch_torque * ratio * p_eta / r - f_res) / V.mass;
+            float a = (V.eng.torque * p_launch_torque * ratio * V.eta / r - f_res) / V.mass;
             if (g > stock && v_lock * 3.6f > (lcx ? 30.0f : p_launch_max)) continue;
             if (a > 0 && v_lock / a <= limit) { pick = g; break; }
         }
@@ -1771,8 +1740,8 @@ static void ts_frame()
             "%c,%.2f,%.1f,%.0f,%d,%.2f,%.2f,%.2f,%.0f,%d,%d,%.0f,%.0f,%.0f\n",
             now, fabsf(T.speed) * 3.6f, T.rpm, T.gear, S.target, S.want, S.why ? S.why : "", T.in_thr,
             T.eff_thr, T.in_brake, T.motor_brake, T.retarder, T.cruise * 3.6f, grade_pct(), V.mass / 1000, S.demand,
-            S.up_pt, S.dn_pt, S.hold_until > sim, S.kick_until > sim, T.accel, S.rpm_k, T.eff_clutch,
-            mode_letter[S.mode], S.thr, S.f_need / 1000, S.floor_rpm, S.ours, S.eb_level, S.f_bias / 1000, S.strain, learned().rpm, S.rolling, route_ok(),
+            S.up_pt, S.dn_pt, S.hold_until > sim, S.kick_until > sim, T.accel, V.rpm_k, T.eff_clutch,
+            mode_letter[S.mode], S.thr, S.f_need / 1000, S.floor_rpm, S.ours, S.eb_level, V.f_bias / 1000, S.strain, learned().rpm, S.rolling, route_ok(),
             route_crest_m(2000), route_junction_m(), idle_rpm());
     static double flushed;
     if (now - flushed > 2) { flushed = now; fflush(g_trace); csv_cap(&g_trace, "trueshift.csv"); }
