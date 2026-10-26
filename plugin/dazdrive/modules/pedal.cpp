@@ -8,7 +8,8 @@
 //  1. shape      q = p^exponent(mode), the exponent scaled by the truck's power per tonne (curve_ref_kw_t)
 //  2. rise limit q_f may rise at most rise_rate(mode) per second, falls at once; never delayed from blend_from up (kickdown)
 //  3. kick       Power only: a fast pedal step from near zero to the middle adds a little to the wish for a moment
-//  4. wish       P_wish = q_f * P_ref (the engine's peak power); force F = min(P_wish * eta / v, q_f * F_cap), F_cap = the force the
+//  4. wish       P_wish = q_f * P_ref (ref_now: the power the truck can give at this speed in the best gear the gearbox may use,
+//                else the engine's peak power); force F = min(P_wish * eta / v, q_f * F_cap), F_cap = the force the
 //                start gear pulls at the speed of its torque plateau (what the truck itself can put on the road at walking pace)
 //  5. throttle   gas = F / (the force this gear gives at full throttle at this speed), 0..1 (1 where the gear cannot deliver the wish)
 //  6. blend      above blend_from the wish fades into the plain pedal, and at a flat pedal the gas is 1 (kickdown)
@@ -20,7 +21,7 @@
 #include <math.h>
 #include <string.h>
 
-static float p_wish, p_blend, p_kick_rate, p_kick, p_kick_s, p_exp_eco, p_exp_norm, p_exp_pw, p_rise_eco, p_rise_norm, p_rise_pw, p_ref_kwt;
+static float p_wish, p_blend, p_kick_rate, p_kick, p_kick_s, p_exp_eco, p_exp_norm, p_exp_pw, p_rise_eco, p_rise_norm, p_rise_pw, p_ref_kwt, p_ref_now;
 
 static param g_params[] = {
     { "wish", &p_wish, 0, "1 = the pedal is a wish for power: the throttle is what delivers it in the gear the truck is in, so the same pedal gives the same push at the same speed in any gear. 0 = the pedal asks a share of the engine's torque, as before. Not with the cruise on, not while the clutch slips, not at pulling-away speed, not in reverse" },
@@ -35,6 +36,7 @@ static param g_params[] = {
     { "rise_rate_normal", &p_rise_norm, 3.0f, "Normal: the same" },
     { "rise_rate_power", &p_rise_pw, 8.0f, "Power: the same" },
     { "curve_ref_kw_t", &p_ref_kwt, 12, "the exponents above are for a truck with this much engine power per tonne (kW/t); a heavier, slower truck gets a more direct curve (a lower exponent, at most x0.8), a lighter, stronger one a softer one (at most x1.15). 0 = the exponents as they are" },
+    { "ref_now", &p_ref_now, 1, "1 = a full wish is the power the truck can give at this speed in the best gear the gearbox may use (the forward gears whose revs lie in the usable window), the same in every gear, so a full pedal asks what the truck can give at this speed and not more. 0 = a full wish is the engine's peak power" },
 };
 
 // The levels of the kick's gesture (a pedal that starts almost released and stops in the middle) and the lock test of the clutch (the
@@ -51,7 +53,7 @@ static struct {
     float from;       // where that fast rise started
     float kick_age;   // seconds since the kick started, < 0 = none
     double on_at;     // sim_s() of the last tick that gave a wish, < 0 = the pedal goes through (TrueShift reads the wish: pedal_wish_force)
-    float pref, fcap; // that tick's peak power (W) and force cap (N)
+    float pref, fcap; // that tick's reference power (W) and force cap (N)
     float truck_k;    // the curve factor for this truck and load (truck_curve), 1 = the exponents as they are
 } S = { NAN, 0, 0, 0, 0, 0, -1, -1, 0, 0, 1 };
 
@@ -71,6 +73,21 @@ static float peak_power()
     for (float rpm = 100; rpm <= V.eng.rpm_limit; rpm += 50)
         best = fmaxf(best, V.eng.torque * curve_factor(&V.eng, rpm) * rpm * 0.10472f);
     return best;
+}
+
+// ref_now: the power (W, at the engine like peak_power) the truck can deliver at speed v, the best forward gear whose revs lie in the
+// usable window at full throttle. The window is the score-based gear choice's (core/gearscore.h): from idle + 60 % of the way up to the
+// torque plateau (at least idle + 150) to the top of the power range or 93 % of the limit. Never the gear of now, so a shift does not
+// move it; 0 = no gear in the window.
+static float power_now(float v)
+{
+    float idle = ts_idle_rpm(), lo = fmaxf(idle + 0.6f * fmaxf(0.0f, V.plateau - idle), idle + 150);
+    float hi = fminf(V.eng.range[R_POWER][1], 0.93f * V.eng.rpm_limit), best = 0;
+    for (int g = 1; g <= T.fwd_gears; g++) {
+        float r = vehicle_rpm_at(g, v);
+        if (r >= lo && r <= hi) best = fmaxf(best, vehicle_force_at(g, v, 1.0f) * v);
+    }
+    return V.eta > 0 ? best / V.eta : 0;
 }
 
 // The curve factor per truck: power per tonne against curve_ref_kw_t (sqrt, x0.8 ... x1.15). Taken only at a standstill, so the pedal
@@ -152,7 +169,8 @@ int pedal_wish(float p, float dt, int other, float *out)
     S.q = fminf(1.0f, S.q_f + kick_now());
 
     // 4, 5: the wish as a force at this speed, then the throttle that gives it in this gear
-    float fg = vehicle_force_at(g, v, 1.0f), pref = pw;
+    float fg = vehicle_force_at(g, v, 1.0f), pref = p_ref_now > 0 ? power_now(v) : 0;
+    if (!(pref > 0)) pref = pw;   // no gear in the window (or ref_now 0): the peak power
     float fcap = sg > 0 ? vehicle_force_at(sg, vehicle_kmh_at(sg, V.plateau) / 3.6f, 1.0f) : 0;
     if (!(fg > 0) || !(pref > 0) || !(fcap > 0) || !(V.eta > 0)) { follow(p); return 0; }   // e.g. over the rev limit: the old path, as a pass-through
     float f = fminf(S.q * pref * V.eta / v, S.q * fcap);
