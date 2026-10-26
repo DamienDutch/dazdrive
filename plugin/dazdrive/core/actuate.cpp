@@ -166,6 +166,34 @@ static float act_stub(void *ga, float dt, float pedal)
     return r;
 }
 
+// ---------------------------------------------------------------- the clutch
+// The drivetrain gets its clutch from one copy (inner+0x142c -> drive+0x330, 0x1408c82cf, creep-re notes); the hook
+// (game_patch_clutch_floor, 1.60 only) makes that copy our value for the player's vehicle while s_cf.inner is set and leaves
+// every other vehicle alone. The vehicle's own clutch state (the gearbox sequencer, the stop rule) stays as the game has it,
+// unless the owner asks for a mirror: the smooth start does, so Auto Hold, TrueShift and the sequencer read its value too.
+enum { V_CLUTCH = 0x142c };   // the vehicle's clutch, 0 = closed .. 1 = open
+static clutch_floor s_cf;     // read by the drivetrain hook: player vehicle + our value
+static int s_clutch_in;
+volatile float g_clutch_ours = __builtin_nanf("");
+int act_clutch_ok() { return s_clutch_in; }
+
+void act_clutch(char *inner, float v, int mirror)
+{
+    s_cf.floor = v;
+    s_cf.inner = inner;
+    g_clutch_ours = inner ? v : NAN;
+    if (mirror && inner && mem_readable(inner + V_CLUTCH, 4)) *(volatile float *)(inner + V_CLUTCH) = v;
+}
+// The game's own clutch until the owner posts again; the value and g_clutch_ours stay (the owner is still deciding this frame).
+void act_clutch_release() { s_cf.inner = NULL; }
+// The vehicle's own clutch value, once (the smooth start hands a closed clutch back when it is over); 1 = written.
+int act_clutch_vehicle(char *inner, float v)
+{
+    if (!inner || !mem_readable(inner + V_CLUTCH, 4)) return 0;
+    *(volatile float *)(inner + V_CLUTCH) = v;
+    return 1;
+}
+
 // ---------------------------------------------------------------- hooks (m_core, config.cpp)
 
 static int s_gate_in, s_haz_in;
@@ -173,6 +201,13 @@ int act_gate_ok() { return s_gate_in; }
 
 void act_start()
 {
+    // The clutch copy (1.60 only; Creep's crawl and smooth start post their clutch value through it).
+    if (L && !strcmp(L->name, "1.60")) {
+        uintptr_t cs = game_scan("8B 83 2C 14 00 00 89 86 30 03 00 00");
+        if (!cs) logline("Actuator: clutch copy not found: no crawl, no smooth start");
+        else if (!game_patch_clutch_floor(cs, &s_cf)) logline("Actuator: clutch hook failed: no crawl, no smooth start");
+        else { s_clutch_in = 1; logline("Actuator: clutch hook in place at %p", (void *)cs); }
+    } else logline("Actuator: no clutch hook (1.60 only): no crawl, no smooth start");
     // The cruise fn call in the game's pedal code (cruise-re notes; the pattern ends at the E8 of the call).
     uintptr_t h = game_scan("48 8B CB F3 44 0F 11 83 E4 1C 00 00 F3 45 0F 5F C3 41 0F 28 D0 E8");
     uintptr_t site = h ? h + 21 : 0;
@@ -213,8 +248,9 @@ void act_reset(int level, const char *why)
 
 const char *act_status()
 {
-    static char b[200];
-    snprintf(b, sizeof b, "throttle hook %s (%d/%d/%d module hooks), brake request: one writer, hazard rule %s, Auto Hold throttle gate %s",
-             s_hooked ? "in" : "NOT in", s_n[ACT_PRE], s_n[ACT_POST], s_n[ACT_DONE], s_haz_in ? "patched" : "not found", s_gate_in ? "patched" : "not found");
+    static char b[240];
+    snprintf(b, sizeof b, "throttle hook %s (%d/%d/%d module hooks), brake request: one writer, hazard rule %s, Auto Hold throttle gate %s, clutch hook %s",
+             s_hooked ? "in" : "NOT in", s_n[ACT_PRE], s_n[ACT_POST], s_n[ACT_DONE], s_haz_in ? "patched" : "not found", s_gate_in ? "patched" : "not found",
+             s_clutch_in ? "in" : "not in");
     return b;
 }

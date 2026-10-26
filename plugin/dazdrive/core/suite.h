@@ -213,6 +213,12 @@ enum { ACT_PRE, ACT_POST, ACT_DONE };
 void act_hook(int phase, void (*fn)(act_tick *));
 int act_hooked();                // the throttle hook (the cruise fn call) is in
 int act_gate_ok();               // the Auto Hold throttle gate is patched: the pedal reaches the engine while only the hold asks
+// The clutch (1.60): our value replaces the drivetrain's copy of the player vehicle's clutch (0 = closed .. 1 = open) while inner is
+// set; inner NULL = the game's own. mirror = also the vehicle's own clutch value (the smooth start). g_clutch_ours follows.
+int act_clutch_ok();             // the drivetrain clutch hook is in
+void act_clutch(char *inner, float v, int mirror);
+void act_clutch_release();       // the game's own clutch until the owner posts again (the value and g_clutch_ours stay)
+int act_clutch_vehicle(char *inner, float v);   // the vehicle's own clutch value, once; 1 = written
 extern float g_air_min_psi;      // [cruise] air_min_psi: below it our brake requests pause (holds and the AEB excepted)
 void act_start();                // m_core (config.cpp): hooks before the modules start
 void act_stop();

@@ -36,7 +36,6 @@ void incident(const char *kind, const char *fmt, ...)
 const char *g_truck_unsupported;
 volatile char g_dash_flash, g_dash_status;
 static float sim_add_thr;   // the added throttle the truck model sees (what Creep posted the tick before, as a floor on the merged throttle)
-volatile float g_clutch_ours = __builtin_nanf("");
 int input_held(int) { return 0; }
 void play_cue(int) {}
 float game_adaptive() { return 3; }

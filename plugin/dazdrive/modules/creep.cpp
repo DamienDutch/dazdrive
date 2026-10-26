@@ -6,9 +6,9 @@
 //
 // How (worked out by static RE; the crawl is driven daily now):
 //  - The drivetrain gets its clutch from one copy (inner+0x142c -> drive+0x330, 0x1408c82cf). We raise
-//    that copy to a floor for the player's truck only (game_patch_clutch_floor). The gearbox sequencer
-//    and the automatic's own rules keep seeing the clutch they set. The engine's idle governor holds
-//    the idle speed against the slipping clutch, so there is crawl torque without any throttle.
+//    that copy to a floor for the player's truck only (the actuator's clutch hook, core/actuate.cpp: act_clutch).
+//    The gearbox sequencer and the automatic's own rules keep seeing the clutch they set. The engine's idle
+//    governor holds the idle speed against the slipping clutch, so there is crawl torque without any throttle.
 //  - The floor comes from a slow speed controller (creep_control): too slow = close the clutch a bit,
 //    too fast or braking = open it. Engine rpm under idle = open (never drag the engine down).
 //  - The automatic selects neutral at a standstill when no pedal is down, and in neutral waits for
@@ -75,8 +75,7 @@ static param g_params[] = {
     { "trace", &p_trace, 1, "1 = write creep.csv (10 per second while the mode is on)" },
 };
 
-static clutch_floor g_cf;           // read by the drivetrain hook: player vehicle + floor
-static int g_hooked, g_tail_ok, g_engage_ok;
+static int g_hooked, g_tail_ok, g_engage_ok;   // g_hooked: the actuator's clutch hook is in
 static void *g_self;                // the player's gearbox (set every frame)
 static FILE *g_csv;
 
@@ -491,12 +490,11 @@ static void ck_reset(int level, const char *why)
     if (level >= RESET_HARD) {
         g_on = 0;
         g_hold = 0;
-        g_ln = 0; g_ln_done = 0; g_clutch_ours = NAN; lcx_off();
+        g_ln = 0; g_ln_done = 0; lcx_off();
         g_f = g_cthr = g_cbrake = g_vt = 0;
         g_armed = 0;
         g_last_dir = 1;
-        g_cf.floor = 0;
-        g_cf.inner = NULL;
+        act_clutch(NULL, 0, 0);
         act_thr_floor(ACT_CREEP, 0);
         act_brake(ACT_CREEP, 0);
         if (g_dash_status == 'C') g_dash_status = 0;
@@ -515,8 +513,8 @@ static void ck_frame()
     void *self = game_gearbox();
     char *inner = self ? gb_inner(self) : NULL;
     g_self = self;
-    g_cf.inner = NULL;  // set below only while crawling: our clutch value then replaces the game's
-    if (!inner) { g_cf.floor = 0; g_f = 0; g_cthr = 0; act_thr_floor(ACT_CREEP, 0); act_brake(ACT_CREEP, 0); g_cbrake = 0; g_on = 0; g_hold = 0; g_ln = 0; g_clutch_ours = NAN; lcx_off(); return; }
+    act_clutch_release();  // posted again below only while crawling or launching: our clutch value then replaces the game's
+    if (!inner) { act_clutch(NULL, 0, 0); g_f = 0; g_cthr = 0; act_thr_floor(ACT_CREEP, 0); act_brake(ACT_CREEP, 0); g_cbrake = 0; g_on = 0; g_hold = 0; g_ln = 0; lcx_off(); return; }
     if (dt > 0.5f) ck_reset(RESET_SOFT, "long frame");
     if (dt <= 0 || dt > 0.5f) return;  // paused or a long hitch: no time step
 
@@ -565,9 +563,8 @@ static void ck_frame()
         li.blocked = g_on || p_launch <= 0 || g_truck_unsupported || T.paused || !T.engine_on || T.parking_brake || T.cruise > 0.1f || g_rolling || !amode || hill > 0 ||
                      !(in.idle > 0) || !g_hooked;
         launch_tick(li);
-        g_clutch_ours = g_ln ? g_lc : g_on ? g_f : NAN;
-        if (g_ln && inner && mem_readable(inner + 0x142c, 4)) *(volatile float *)(inner + 0x142c) = g_lc;  // the game's own clutch follows ours (Auto Hold, TrueShift and the sequencer read it)
-        else if (g_ln_done && inner && mem_readable(inner + 0x142c, 4)) { *(volatile float *)(inner + 0x142c) = 0; g_ln_done = 0; }
+        // a launch that ended normally hands the game a closed clutch, once (while it runs, act_clutch below mirrors ours into the game's)
+        if (!g_ln && g_ln_done && act_clutch_vehicle(inner, 0)) g_ln_done = 0;
     }
     // Why not crawling while slow (ride 0.4: it never came on): every 5 s in the log.
     if (!g_on && g_user_on > 0 && T.engine_on && fabsf(T.speed) * 3.6f < p_on && fabsf(T.speed) > 0.3f) {
@@ -582,8 +579,9 @@ static void ck_frame()
                     gear, in.thr, in.brake, hill);
         }
     }
-    g_cf.floor = g_ln ? g_lc : g_f;
-    g_cf.inner = g_on || g_ln ? inner : NULL;
+    // our clutch value on the drivetrain while crawling (the floor) or launching (the launch's clutch, mirrored into the game's own
+    // value too: Auto Hold, TrueShift and the sequencer read it); otherwise the game's own
+    act_clutch(g_on || g_ln ? inner : NULL, g_ln ? g_lc : g_f, g_ln);
     // heavy loads: a little throttle on top of the pedal (a floor on the merged throttle, 0..heavy_throttle; anything odd above 0.3 is
     // not posted), and the descent brake: both through the actuator (core/actuate.cpp), also with the Cruise module off
     act_thr_floor(ACT_CREEP, g_cthr > 0 && g_cthr < 0.3f ? g_cthr : 0);
@@ -613,13 +611,8 @@ static void ck_start()
 {
     if (p_enabled <= 0 && p_launch <= 0) { logline("Creep and launch disabled in the ini"); snprintf(g_status, sizeof g_status, "off (ini)"); return; }
     if (p_off < p_on + 2) { p_off = p_on + 5; logline("Creep: off_kmh must be above on_kmh, using %.0f", p_off); }  // else it flips every frame
-    snprintf(g_status, sizeof g_status, "off (not the 1.60 layout)");
-    if (!L || strcmp(L->name, "1.60")) { logline("Creep: only for the 1.60 layout, off"); return; }
-    snprintf(g_status, sizeof g_status, "off (clutch code not found)");
-    uintptr_t site = game_scan("8B 83 2C 14 00 00 89 86 30 03 00 00");
-    if (!site) { logline("Creep: clutch copy not found, off"); return; }
-    snprintf(g_status, sizeof g_status, "off (clutch hook failed)");
-    if (!game_patch_clutch_floor(site, &g_cf)) { logline("Creep: clutch hook failed, off"); return; }
+    snprintf(g_status, sizeof g_status, "off (no clutch hook: 1.60 only, see the Actuator lines)");
+    if (!act_clutch_ok()) { logline("Creep: no clutch hook (1.60 only, see the Actuator lines), off"); return; }
     g_hooked = 1;
     g_engage_ok = game_engage_init();
     if (G.tail_site && game_patch_tail(G.tail_site, (void *)tail_pre)) g_tail_ok = 1;
@@ -631,14 +624,14 @@ static void ck_start()
     }
     snprintf(g_status, sizeof g_status, "on, hook in place; launch %s, crawl %s at start, from rest %s, reverse %s", p_launch > 0 ? "on" : "off", p_enabled <= 0 ? "disabled" : p_start_on > 0 ? "on" : "off (hold the toggle)",
              p_rest > 0 && g_tail_ok && g_engage_ok ? "on" : "off", p_rev > 0 ? "on" : "off");
-    logline("Creep: hook in place at %p (crawl %.1f km/h, on below %.0f, off above %.0f, from rest %s, reverse %s)", (void *)site,
+    logline("Creep: on (crawl %.1f km/h, on below %.0f, off above %.0f, from rest %s, reverse %s)",
             p_creep, p_on, p_off, p_rest > 0 && g_tail_ok && g_engage_ok ? "on" : "off", p_rev > 0 ? "on" : "off");
 }
 
 static void ck_stop()
 {
-    g_cf.floor = 0;  // give everything back
-    g_ln = 0; g_clutch_ours = NAN; lcx_off();
+    act_clutch(NULL, 0, 0);  // give everything back
+    g_ln = 0; lcx_off();
     act_thr_floor(ACT_CREEP, 0);
     act_brake(ACT_CREEP, 0);
     g_hold = 0;
