@@ -87,7 +87,7 @@ static param g_params[] = {
     { "junction_handover_kmh", &p_jn_hand_kmh, 6, "the cruise is only cancelled for a junction once the speed is down to the junction speed plus the margin plus this (km/h) ..." },
     { "junction_handover_m", &p_jn_hand_m, 30, "... or when the junction is this close (m), whatever the speed" },
     { "speed_limiter_kmh", &p_own_lim, 0, "our own speed limiter (km/h, 0 = off): the throttle fades out only when the speed is about to pass the limit (where it will be in 1 s, over the last 1.5 km/h), so a climb at 92 keeps its full throttle; in every mode and with the pedal curves, and the cruise set speed never goes above it. Switch the game's own limiter off" },
-    { "speed_limiter_bias_kmh", &p_own_bias, 0.5f, "adds this much to the limit in the calculation so the speedometer shows the configured value instead of a bit under it (km/h, 0 to 3; only with speed_limiter_kmh)" },
+    { "speed_limiter_bias_kmh", &p_own_bias, 0.5f, "adds this much to the limit in the throttle fade so the speedometer shows the configured value instead of a bit under it (km/h, 0 to 3; only with speed_limiter_kmh; the cruise set speed stops at the limit itself)" },
     { "junction_signal_deg", &p_jn_signal, 50, "a junction on the route that turns less than this (degrees, not a roundabout) is only slowed for when you use an indicator: the route is not where you are going, and a crossing you drive straight over needs no braking. 0 = always slow for it" },
     { "junction_cancel_s", &p_jn_cancel_s, 5, "this many seconds before a junction or roundabout we slowed for, the cruise is cancelled with a sound (the game's Resume brings the set speed back). 0 = never" },
     { "junction_min_deg", &p_junc_deg, 25, "turns smaller than this (degrees) are not slowed for" },
@@ -615,6 +615,11 @@ static float own_limit_k(float kmh, float accel)
     if (kmh >= lim) return 0.0f;
     float proj = kmh + accel * 3.6f * 1.0f;
     return fmaxf(0.0f, fminf(1.0f, (lim - proj) / 1.5f));
+}
+// And the cruise set speed never above it: the limit itself (the bias is for the throttle fade above, else the dash shows 96 at 95).
+static void own_limit_set(char *ga)
+{
+    if (ga && *(unsigned char *)(ga + GA_ON) && *(float *)(ga + GA_SET) > p_own_lim) *(float *)(ga + GA_SET) = p_own_lim;
 }
 // Before the game's own cruise controller runs: the keys, and our ACC target into +0x1a0 (the game's controller and its
 // overspeed braking read it right after).
@@ -1983,10 +1988,7 @@ static void cr_frame()
         if (ga && *(unsigned char *)(ga + GA_ON) && *(float *)(ga + GA_SET) < p_min_set) *(float *)(ga + GA_SET) = p_min_set;
     }
     // Our own speed limiter: the set speed never above it
-    if (p_own_lim > 0) {
-        char *ga = game_actor_safe();
-        if (ga && *(unsigned char *)(ga + GA_ON) && *(float *)(ga + GA_SET) > p_own_lim + p_own_bias) *(float *)(ga + GA_SET) = p_own_lim + p_own_bias;
-    }
+    if (p_own_lim > 0) own_limit_set(game_actor_safe());
     // The game's speed limiter on (g_use_speed_limiter): the set speed never above it (Damien: + / hold went to 110).
     if (g_low_ok && p_limiter > 0) {
         char *ga = game_actor_safe();
