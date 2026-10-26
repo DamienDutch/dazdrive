@@ -523,6 +523,7 @@ static void reset_test()
 }
 
 // Own speed limiter on a flat road, the driver at full pedal: the speedometer settles at the configured value (with the bias), not under it.
+// Then the cruise set speed (own_limit_set): it stops at the limit itself, the bias is only in the throttle fade.
 // The fade settles 1.5 km/h x (share of the throttle that holding the speed needs) under the limit + bias: the model of run() needs 0.2 (rolling 0.006),
 // the heavy case (soft ground, rolling 0.02, weaker engine) 0.63, where 0.5 does not bring it all the way up (informational).
 static float limiter_run(float limit, float bias, float roll = 0.006f, float fmax_n = 20000)
@@ -548,6 +549,22 @@ static void limiter_test()
     printf("   heavy truck on soft ground (informational): bias 0.5 -> %.2f km/h, bias 0 -> %.2f km/h\n", h_with, h_without);
     int bad = fabsf(with - 95) > 0.3f || !(without < with) || off != off0;
     printf("own limiter bias test: %s\n", bad ? "FAIL" : "ok");
+    if (bad) exit(1);
+    // the cruise set speed: clamped at the limit itself, never at limit + bias (95.5 showed as 96 on the dash)
+    float sl = p_own_lim, sb = p_own_bias; p_own_lim = 95; p_own_bias = 0.5f;
+    const float sets[] = { 90, 95, 95.4f, 95.5f, 96, 100, 130 };
+    printf("own limiter 95, bias 0.5, cruise set speed:");
+    for (float st : sets) {
+        memset(GA, 0, sizeof GA); *(unsigned char *)(GA + GA_ON) = 1; *(float *)(GA + GA_SET) = st;
+        own_limit_set(GA);
+        float r = *(float *)(GA + GA_SET);
+        printf(" %.1f -> %.1f", st, r);
+        if (r > p_own_lim || r != fminf(st, p_own_lim)) bad = 1;
+    }
+    memset(GA, 0, sizeof GA); *(float *)(GA + GA_SET) = 100; own_limit_set(GA);   // cruise off: left alone
+    if (*(float *)(GA + GA_SET) != 100) bad = 1;
+    p_own_lim = sl; p_own_bias = sb;
+    printf("; cruise off: %.0f\nown limiter set speed test: %s\n", *(float *)(GA + GA_SET), bad ? "FAIL" : "ok");
     if (bad) exit(1);
 }
 
