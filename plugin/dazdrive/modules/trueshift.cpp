@@ -258,6 +258,7 @@ static struct {
     float pk;               // decide_gear: the steepest grade (%) of the last seconds, fading 0.15 %/s (the climb the upshift reckons with)
     double pk_at;           // when it was last updated
     double gap_since;       // tail_pre: parked in the gearbox's gap state (gear 0, a target, clutch open) while moving since; 0 = not
+    int seed_demand, seed_force;   // after a hard reset: demand / f_need start from the pedal of now, not from 0 (one update each)
 } S;
 
 enum { ROLL = 100 };        // decide_gear: "put it in neutral" (eco-roll)
@@ -582,6 +583,7 @@ static void ts_reset(int level, const char *why)
         S.letter_state = -1;
         S.cc_thr = 0;
         S.demand = 0;
+        S.seed_demand = S.seed_force = 1;   // (sim X4: from 0 a full pedal on a climb looked like a light one and skipped to a gear without pull)
         S.rolling = 0;
         S.roll_exit = 0;
         g_rolling = 0;
@@ -692,13 +694,14 @@ static void refresh(void *self)
     // Demand rises fast (0.3 s) and falls slowly (2 s). Load itself does not
     // move the shift points: the force checks handle it.
     float tau = S.thr > S.demand ? by_mode(0.5f, 0.3f, 0.2f) : by_mode(1.5f, 2.0f, 3.0f);
-    S.demand += (float)(dt / (tau + dt)) * (S.thr - S.demand);
+    if (S.seed_demand) { S.demand = S.thr; S.seed_demand = 0; }   // right after a hard reset: the pedal of now, not 0
+    else S.demand += (float)(dt / (tau + dt)) * (S.thr - S.demand);
 
     // Tractive force asked for (clutch closed only): up in 0.3 s, down in 3 s.
     if (g > 0 && clutch_seen() < 0.1f && S.eng_ok) {
         float f = force_at(g, v, S.thr);
-        float tf = f > S.f_need ? 0.3f : 3.0f;
-        S.f_need += (float)(dt / (tf + dt)) * (f - S.f_need);
+        if (S.seed_force) { S.f_need = f; S.seed_force = 0; }   // right after a hard reset: what this pedal asks now, not 0
+        else { float tf = f > S.f_need ? 0.3f : 3.0f; S.f_need += (float)(dt / (tf + dt)) * (f - S.f_need); }
     }
 
     // Extra resistance the model misses (tires, wind, a wrong mass): force the

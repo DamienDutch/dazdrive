@@ -503,11 +503,11 @@ static void c_m_limiter(double t)
 // X4: full pedal up a 6 % climb, at t = 20 s a teleport (HARD reset) onto a 2 % climb at the same speed. The grade peak decide_gear
 // reckons the next upshift with belongs to the road we left: the upshift must come soon on the 2 % road, not ~27 s later when a 6 % peak
 // has faded (it used to be a function-local static that lived through the reset).
-static int g_tp_done, g_tp_ups; static double g_tp_up_at;
+static int g_tp_done, g_tp_ups, g_tp_downs; static double g_tp_up_at;
 static void c_teleport(double t)
 {
     M.pedal = 1; M.grade_pct = t < 20 ? 6 : 2;
-    if (t >= 20 && !g_tp_done) { g_tp_done = 1; g_tp_ups = ups; m_trueshift.reset(RESET_HARD, "sim: teleport onto a 2 % climb"); printf("  (teleport: 6 %% -> 2 %%)\n"); }
+    if (t >= 20 && !g_tp_done) { g_tp_done = 1; g_tp_ups = ups; g_tp_downs = shifts - ups; m_trueshift.reset(RESET_HARD, "sim: teleport onto a 2 % climb"); printf("  (teleport: 6 %% -> 2 %%)\n"); }
     if (g_tp_done && g_tp_up_at < 0 && ups > g_tp_ups) g_tp_up_at = t;
 }
 
@@ -745,10 +745,14 @@ int main(int argc, char **argv)
     use_volvo();
     m_trueshift.reset(RESET_HARD, "sim: the Volvo again");
     g_tp_done = 0; g_tp_up_at = -1;
+    { int f0 = n_failed, i0 = g_n_incidents;
     run("X4 40 t full pedal on 6 %, at 20 s a teleport (HARD reset) onto 2 % at the same speed", {40000, 45, 8, 60}, c_teleport);
-    printf("  first upshift after the teleport: %s (must be within 10 s: the 6 %% peak is gone)\n", g_tp_up_at < 0 ? "none" : "");
-    if (g_tp_up_at >= 0) printf("  first upshift %.1f s after the teleport\n", g_tp_up_at - 20);
-    if (!(g_tp_up_at >= 0 && g_tp_up_at - 20 < 10)) { printf("  X4 FAIL\n"); g_x_failed = 1; }
+    // the upshift must come within 10 s (the 6 % peak is gone), and it must hold: demand and f_need start from the pedal of now, not from 0
+    // (from 0 the full pedal looked like a light one: a skip to a gear without pull, back down, a hunt incident)
+    int downs_after = shifts - ups - g_tp_downs;
+    printf("  first upshift %.1f s after the teleport (must be within 10 s); downshifts after it %d, no-pull lessons %d, incidents %d (all 0)\n",
+           g_tp_up_at < 0 ? -1.0 : g_tp_up_at - 20, downs_after, n_failed - f0, g_n_incidents - i0);
+    if (!(g_tp_up_at >= 0 && g_tp_up_at - 20 < 10) || downs_after || n_failed != f0 || g_n_incidents != i0) { printf("  X4 FAIL\n"); g_x_failed = 1; } }
     // X5: the gearbox parked in its gap state (gear 0, a target, clutch open) at 40 km/h, a pause (SOFT reset) 1.0 s into it. The stuck-in-neutral
     // timer must start again at the reset: the engage then comes 0.3 s after the pause (the pause's gap is normal), not at once as 'stuck for 1.0 s'.
     {
