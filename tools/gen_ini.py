@@ -102,7 +102,7 @@ STANDARD = {
 # or not ridden yet.
 NO_PAGE = ("pedal", "lowspeed", "decel")
 # Single keys of a shown section that stay off the page too (still in the ini, with their help text).
-NO_PAGE_KEYS = (("core", "retarder_hook"), ("core", "dash_messages"), ("cruise", "force_mode"))
+NO_PAGE_KEYS = (("core", "retarder_hook"), ("core", "dash_messages"), ("core", "air_from_truck"), ("cruise", "force_mode"))
 
 STANDARD_HEADER = ("standard preset (stable on, except the look-ahead ones; beta and experimental (ACC, Stop & Go, Auto Hold, ISA, JunctionSense, lane centering, crawl mode, smooth start) off).")
 

@@ -37,6 +37,7 @@ void incident(const char *kind, const char *fmt, ...)
 }
 const char *g_truck_unsupported;
 volatile float g_clutch_ours = __builtin_nanf("");
+float g_air_from_truck;   // [core] air_from_truck (core/actuate.cpp, not linked here)
 void play_cue(int) {}
 void input_poll() {}
 int input_pressed(int, int) { return 0; }

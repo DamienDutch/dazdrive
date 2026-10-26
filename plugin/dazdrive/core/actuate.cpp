@@ -28,6 +28,7 @@ static_assert(ACT_N == 13, "one initializer per owner below");
 static act_wish W[ACT_N] = { { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 },
                              { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 } };
 float g_air_min_psi = 75;
+float g_air_from_truck;          // [core] air_from_truck
 float g_retarder_hook;           // [core] retarder_hook
 volatile float g_ret_scale = 1.0f;   // read by the drivetrain hook: the lowest retarder factor of all owners
 
@@ -90,14 +91,15 @@ void act_brake_write(char *g)
     float *req = (float *)(g + A_REQ);
     // Save the air (Damien 11-10: the tank ran empty): no brake requests of ours while the pressure is low; a
     // request that holds still (hill start) is kept, it uses no new air.
-    if (T.air_warning || (T.air_psi > 1 && T.air_psi < g_air_min_psi)) {
+    float pause_psi = air_pause_psi();
+    if (T.air_warning || (T.air_psi > 1 && T.air_psi < pause_psi)) {
         if (!s_air_low) {
             logline("Actuator: brake air low (%.0f psi): our braking paused", T.air_psi);
             if (fabsf(T.speed) * 3.6f > 10)  // standing after a start or a teleport the tank is simply still filling
                 incident("air", "brake air low: %.0f psi at %.0f km/h, our braking paused", T.air_psi, fabsf(T.speed) * 3.6f);
         }
         s_air_low = 1;
-    } else if (s_air_low && T.air_psi > g_air_min_psi + 15) { s_air_low = 0; logline("Actuator: brake air back (%.0f psi)", T.air_psi); }
+    } else if (s_air_low && T.air_psi > pause_psi + 15) { s_air_low = 0; logline("Actuator: brake air back (%.0f psi)", T.air_psi); }
     // the AEB is never paused: it brakes with what is left (and holds its request steady instead of pulsing)
     if (s_air_low && hill <= 0 && hold <= 0 && aeb <= 0) want = 0;
     // the assist leads when its wish is the biggest one; it closes a loop on the measured deceleration, where the 0.05 dead band
