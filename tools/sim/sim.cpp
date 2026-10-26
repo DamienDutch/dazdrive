@@ -585,6 +585,7 @@ static void sc_show(const char *title, const gs_out &o, int cur)
     }
 }
 static int run_scores_table();
+static int run_scores_cruise();
 static int run_scores()
 {
     printf("\n=== SCORES part 1: the score function on the vehicle model (Renault ATO 12 speeds, diff 3.08) ===\n");
@@ -675,6 +676,7 @@ static int run_scores()
     printf("  time objective, 33 t, 1.0 s box, 10-70 km/h, pedal 0.4-0.8: Normal skips to a gear short of the force asked in %d of %d upshifts; Eco higher than Power in %d, lower in %d\n",
            short_skip, n_up, t_far, t_near);
     sc_check(short_skip > 0 && t_near == 0 && t_far > 0, "time objective: a skip can win under load, Eco skips farther than Power, never less");
+    r |= run_scores_cruise();   // (last: its runs move the clock too)
     return r | g_sc_failed;
 }
 
@@ -764,7 +766,8 @@ static float sim_wish_force(float v)   // the wish pedal's force at v for the pe
     return fminf(g_pl_ped * pref * V.eta / fmaxf(v, 0.5f), g_pl_ped * fcap);
 }
 float pedal_wish_force(float v) { return M.wish_on ? sim_wish_force(v) : -1; }   // TrueShift reads the wish (suite.h)
-float cruise_wish_force(float) { return -1; }   // [cruise] force_mode 1 (the cruise model below)
+static float cf_wish_force(float v);
+float cruise_wish_force(float v) { return cf_wish_force(v); }   // [cruise] force_mode 1 (part 4's cruise model; -1 elsewhere)
 static void c_pull(double t)
 {
     if (t <= 0) { g_pl_t0 = t_now; g_pl_t50 = g_pl_t70 = -1; g_pl_sh70 = -1; g_rec_n = 0; }
@@ -999,6 +1002,91 @@ static int run_scores_table()
             }
         sc_check(bad == 0, "choice 1: no stall-rule shift on a stop, the revs above 5 km/h never under idle - 50");
     }
+    return g_sc_failed;
+}
+
+// ---- part 4: the cruise control's demand as a force ([cruise] force_mode, modules/cruise.cpp) with choice 1
+// The own cruise controller as modules/cruise.cpp runs it in Normal (PI per km/h: kp 0.25, ki 0.08, output rate 0.6/s, twice that down,
+// the look-ahead error of approach_s 2.5 s, held in a shift, no wind-up at the limits, 0 while rolling in neutral). force_mode 0: the output
+// is the throttle and TrueShift sees only that; 1: the output is a share of a full wish (the wish pedal's reference, pedal_wish_full), the
+// throttle is that force in the gear of now, the gains and the rate per throttle the same, and TrueShift reads the force (cruise_wish_force)
+static struct { int on, fm; float i, u, k, acc_f, v_prev; double at; } CF = { 0, 0, 0, 0, 1, 0, 0, -1 };
+static float cf_full(float v)   // pedal.cpp's wish_ref: ref_now power (the best gear in the usable window at full throttle), the start gear's cap
+{
+    float idle = ts_idle_rpm(), lo = fmaxf(idle + 0.6f * fmaxf(0.0f, V.plateau - idle), idle + 150);
+    float hi = fminf(V.eng.range[R_POWER][1], 0.93f * V.eng.rpm_limit), best = 0;
+    for (int g = 1; g <= T.fwd_gears; g++) { float r = vehicle_rpm_at(g, v); if (r >= lo && r <= hi) best = fmaxf(best, vehicle_force_at(g, v, 1.0f) * v); }
+    float pref = best / V.eta;
+    if (!(pref > 0)) for (float r = 100; r <= V.eng.rpm_limit; r += 50) pref = fmaxf(pref, V.eng.torque * curve_factor(&V.eng, r) * r * 0.10472f);
+    int sg = ts_start_gear(0.3f);
+    float fcap = sg > 0 ? vehicle_force_at(sg, vehicle_kmh_at(sg, V.plateau) / 3.6f, 1.0f) : 0;
+    return pref > 0 && fcap > 0 ? fminf(pref * V.eta / fmaxf(v, 0.5f), fcap) : 0;
+}
+static float cf_wish_force(float v) { return CF.on && CF.fm && CF.at >= 0 && t_now - CF.at <= 0.3 ? CF.u * cf_full(v) : -1; }
+static float g_cf_set = 83;
+static void c_cforce(double t)
+{
+    const float dt = 1 / 60.0f;
+    M.cruise_kmh = g_cf_set; M.pedal = 0;
+    float kmh = M.v * 3.6f, e = g_cf_set + g_roll_boost_kmh - kmh;
+    float a = t <= 0 ? 0 : (M.v - CF.v_prev) / dt * 3.6f; CF.v_prev = M.v;
+    if (t <= 0) { CF.on = 0; CF.at = -1; CF.acc_f = 0; }
+    CF.acc_f += (a - CF.acc_f) * fminf(1.0f, dt / 0.5f);
+    float ep = CF.acc_f > 0 ? e - 2.5f * CF.acc_f : e;
+    float kp = 0.25f, ki = 0.08f, rate = 0.6f, k = 1;
+    int shifting = M.state != 0;
+    if (CF.fm) {
+        float full = cf_full(M.v), fg = M.gear > 0 ? vehicle_force_at(M.gear, M.v, 1.0f) : 0;
+        k = !shifting && full > 0 && fg > 0 ? full / fg : CF.k;
+        CF.k = k; kp /= k; ki /= k; rate /= k;
+    }
+    if (!CF.on) { CF.on = 1; CF.u = M.cc / k; CF.i = CF.u - kp * ep; }
+    if (g_rolling) { CF.u = 0; CF.i = -kp * e; M.cc = 0; CF.at = -1; return; }
+    float u_raw = kp * ep + CF.i, u_cap = CF.fm ? fmaxf(1.0f, 1 / k) : 1.0f;
+    float u = u_raw < 0 ? 0 : fminf(u_raw, u_cap), step = shifting ? 0 : rate * dt;
+    if (u > CF.u + step) u = CF.u + step;
+    if (u < CF.u - 2 * step) u = CF.u - 2 * step;
+    int held_up = (u < u_raw - 1e-4f || (CF.fm && u * k > 1)) && e > 0, held_down = u > u_raw + 1e-4f && e < 0;
+    if (!shifting && !held_up && !held_down) CF.i += ki * ep * dt;
+    CF.i = fminf(CF.fm ? fmaxf(1.0f, 1 / k) : 1.0f, fmaxf(CF.fm ? -0.5f / k : -0.5f, CF.i));
+    CF.u = u;
+    M.cc = CF.fm ? fminf(1.0f, u * k) : u;
+    CF.at = M.cc > 0 ? t_now : -1;
+}
+static float r_cf3(double s) { return s < 2000 ? 0 : s < 4000 ? 3.0f : 0; }   // 2 km flat, 2 km at 3 %, flat
+static double g_cf_lo, g_cf_e, g_cf_end; static int g_cf_n;   // the lowest speed and the speed at the end of the climb, |e| on the flat after 30 s; the shifts go to the recorder
+static void c_cforce3(double t)
+{
+    if (t <= 0) { g_cf_lo = 1e9; g_cf_e = 0; g_cf_n = 0; g_cf_end = -1; g_rec_n = 0; g_pl_t0 = t_now; }
+    c_cforce(t);
+    float kmh = M.v * 3.6f;
+    if (M.s >= 2000 && M.s < 4000) g_cf_lo = fmin(g_cf_lo, kmh);
+    if (M.s >= 3950 && M.s < 4000) g_cf_end = kmh;
+    if (t > 30 && M.s < 2000) { g_cf_e += fabsf(kmh - g_cf_set); g_cf_n++; }
+}
+static int run_scores_cruise()
+{
+    printf("\n=== SCORES part 4: the cruise control 83 km/h with choice 1, force_mode 0 (TrueShift sees its throttle) against 1 (its force) ===\n");
+    printf("  ATO, Normal, route, 2 km flat, then 2 km at 3 %%, flat; the own cruise controller (modules/cruise.cpp, Normal) on the simulator\n");
+    printf("  %-24s %s  %6s %6s %8s %8s %9s %9s %9s %9s\n", "scenario", "fm", "shifts", "hunts", "shift s", "mean rpm", "|e| flat", "loss 3 %", "end 3 %", "gear end");
+    use_ato();
+    int bad = 0;
+    for (float mass : { 17000.0f, 33000.0f }) {
+        double lo[2], ef[2];
+        for (int fm = 0; fm < 2; fm++) {
+            CF.fm = fm;
+            char nm[60]; snprintf(nm, sizeof nm, "cruise 83, %.0f t", mass / 1000);
+            g_rec_on = 1;
+            sc_do(nm, {mass, 83, 11, 230, 3, 0.5f, 0, -1, -1, r_cf3, 1}, c_cforce3, 1);
+            g_rec_on = 0;
+            lo[fm] = g_cf_lo; ef[fm] = g_cf_n ? g_cf_e / g_cf_n : 0;
+            printf("  %-24s %d  %6d %6d %8.1f %8.0f %9.2f %9.1f %9.1f %9d\n", nm, fm, sc_last.shifts, sc_last.hunts, sc_last.shift_s, sc_last.rpm, ef[fm], g_cf_set - lo[fm], g_cf_end, M.gear);
+            if (getenv("SC_SHIFTS")) for (int i = 0; i < g_rec_n; i++) printf("      %6.1f  %d->%d (%s) %.0f rpm\n", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why, g_rec[i].rpm);
+        }
+        bad |= lo[1] < lo[0] - 1.0 || ef[1] > ef[0] + 0.2;
+    }
+    CF.fm = 0; CF.on = 0; CF.at = -1;
+    sc_check(!bad, "force_mode 1: the cruise holds 83 on the flat and loses no more than 1 km/h more on the 3 % climb than force_mode 0");
     return g_sc_failed;
 }
 
