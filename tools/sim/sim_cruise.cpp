@@ -60,6 +60,7 @@ float game_cvar_get(void *) { return NAN; }
 void game_cvar_set(void *, float) {}
 uintptr_t game_scan(const char *) { return 0; }
 int game_patch_call(uintptr_t, void *) { return 0; }
+int game_patch_retarder(uintptr_t, const volatile float *) { return 0; }
 float *game_patch_rip_float(uintptr_t, int, int, float) { return NULL; }
 int game_patch_feed_xmm1(uintptr_t, int, float *) { return 0; }
 int game_patch_skip_if(uintptr_t, int, const unsigned char *) { return 0; }

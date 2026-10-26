@@ -229,12 +229,13 @@ float wheel_radius();    // powered wheels, meters (0 if unknown)
 // game tick (the game's cruise fn call, hooked by core whatever the ini says) and writes them. The throttle is the base (the
 // game's cruise output, or what Cruise posts from its own controller), then every floor, then every cap, then every scale.
 // Brake wishes are in the game's request unit 0..1 (the top of actuate.cpp says why not m/s2).
-enum { ACT_CRUISE, ACT_HILL, ACT_HOLD, ACT_BEND, ACT_ACC, ACT_AEB, ACT_RSC, ACT_CREEP, ACT_LCX, ACT_N };
-struct act_wish { float brake, floor, cap, scale; };  // brake request 0..1; throttle at least floor (0 = none), at most cap (1 = none), times scale (1 = none)
+enum { ACT_CRUISE, ACT_HILL, ACT_HOLD, ACT_BEND, ACT_ACC, ACT_AEB, ACT_RSC, ACT_CREEP, ACT_LCX, ACT_RET_DECEL, ACT_RET_NORM, ACT_N };
+struct act_wish { float brake, floor, cap, scale, ret; };  // brake request 0..1; throttle at least floor (0 = none), at most cap (1 = none), times scale (1 = none); retarder torque factor 0..1 (1 = none)
 void act_brake(int owner, float want);
 void act_thr_floor(int owner, float v);
 void act_thr_cap(int owner, float v);
 void act_thr_scale(int owner, float k);
+void act_retarder_scale(int owner, float factor);   // the game's retarder torque times factor (0..1), held until the owner changes it; the lowest factor of all owners applies, none posted = 1 (needs [core] retarder_hook)
 void act_thr_base(float v);      // this tick's base throttle in place of the game's cruise output (Cruise, from its ACT_POST hook only)
 const act_wish *act_wishes();    // [ACT_N]: what every owner holds now (traces, sims)
 float act_request();             // the brake request we hold in game_actor+0x17c now (0 = none)
@@ -245,6 +246,7 @@ struct act_tick { char *ga; float dt, pedal, stock, thr; };
 enum { ACT_PRE, ACT_POST, ACT_DONE };
 void act_hook(int phase, void (*fn)(act_tick *));
 int act_hooked();                // the throttle hook (the cruise fn call) is in
+bool act_retarder_hooked();      // the drivetrain's retarder demand read is patched (the factors act on the game's retarder torque)
 int act_gate_ok();               // the Auto Hold throttle gate is patched: the pedal reaches the engine while only the hold asks
 // The clutch (1.60): our value replaces the drivetrain's copy of the player vehicle's clutch (0 = closed .. 1 = open) while inner is
 // set; inner NULL = the game's own. mirror = also the vehicle's own clutch value (the smooth start). g_clutch_ours follows.
@@ -252,6 +254,8 @@ int act_clutch_ok();             // the drivetrain clutch hook is in
 void act_clutch(char *inner, float v, int mirror);
 void act_clutch_release();       // the game's own clutch until the owner posts again (the value and g_clutch_ours stay)
 int act_clutch_vehicle(char *inner, float v);   // the vehicle's own clutch value, once; 1 = written
+extern volatile float g_ret_scale;  // the merged retarder factor the drivetrain hook applies (1 = the game's own)
+extern float g_retarder_hook;    // [core] retarder_hook: 1 = install the retarder hook
 extern float g_air_min_psi;      // [cruise] air_min_psi: below it our brake requests pause (holds and the AEB excepted)
 void act_start();                // m_core (config.cpp): hooks before the modules start
 void act_stop();

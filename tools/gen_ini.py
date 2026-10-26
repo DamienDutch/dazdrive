@@ -94,6 +94,8 @@ STANDARD = {
 
 # Sections that are not on the setup page (no tile, no knob, no Custom list): developer switches of something not wired in yet.
 NO_PAGE = ("lowspeed",)
+# Single keys of a shown section that stay off the page too (still in the ini, with their help text).
+NO_PAGE_KEYS = (("core", "retarder_hook"),)
 
 STANDARD_HEADER = ("standard preset (stable on, except the look-ahead ones; beta and experimental (ACC, Stop & Go, Auto Hold, ISA, JunctionSense, lane centering, crawl mode, smooth start) off).")
 
@@ -458,6 +460,8 @@ def setup_scopes(order, tables):
         if sec in NO_PAGE:
             continue
         for k, d, h in tables[sec]:
+            if (sec, k) in NO_PAGE_KEYS:
+                continue
             gid = None
             if k == "trace":
                 gid = "log"

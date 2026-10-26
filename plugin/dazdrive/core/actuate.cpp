@@ -23,17 +23,20 @@
 // Fields of game_actor (1.60, cruise-re notes § 4) the layer writes.
 enum { A_REQ = 0x17c };   // the brake request: 0..1, slewed by the game, zeroes the merged throttle while > 0 (neutral-exit-re notes § 3.1)
 
-static const char *const k_owner[ACT_N] = { "cruise", "hill start", "Auto Hold", "bend", "ACC", "AEB", "rollover guard", "crawl", "launch control" };
-static_assert(ACT_N == 9, "one initializer per owner below");
-static act_wish W[ACT_N] = { { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 },
-                             { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 }, { 0, 0, 1, 1 } };
+static const char *const k_owner[ACT_N] = { "cruise", "hill start", "Auto Hold", "bend", "ACC", "AEB", "rollover guard", "crawl", "launch control", "retarder (deceleration)", "retarder (mass)" };
+static_assert(ACT_N == 11, "one initializer per owner below");
+static act_wish W[ACT_N] = { { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 },
+                             { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 } };
 float g_air_min_psi = 75;
+float g_retarder_hook;           // [core] retarder_hook
+volatile float g_ret_scale = 1.0f;   // read by the drivetrain hook: the lowest retarder factor of all owners
 
 static int owner_ok(int o) { return o >= 0 && o < ACT_N; }
 void act_brake(int owner, float want) { if (owner_ok(owner)) W[owner].brake = want; }
 void act_thr_floor(int owner, float v) { if (owner_ok(owner)) W[owner].floor = v; }
 void act_thr_cap(int owner, float v) { if (owner_ok(owner)) W[owner].cap = v; }
 void act_thr_scale(int owner, float k) { if (owner_ok(owner)) W[owner].scale = k; }
+void act_retarder_scale(int owner, float f) { if (owner_ok(owner)) W[owner].ret = f != f ? 1.0f : f < 0 ? 0.0f : f > 1 ? 1.0f : f; }
 const act_wish *act_wishes() { return W; }
 
 // ---------------------------------------------------------------- the brake request
@@ -147,6 +150,14 @@ void act_hook(int phase, void (*fn)(act_tick *))
 int act_hooked() { return s_hooked; }
 void act_thr_base(float v) { s_base = v; }
 
+// The retarder torque factor the drivetrain hook applies: the lowest of what the owners hold, 1 with nobody posting.
+static void act_retarder_merge()
+{
+    float f = 1.0f;
+    for (int o = 0; o < ACT_N; o++) if (W[o].ret < f) f = W[o].ret;
+    g_ret_scale = f;
+}
+
 static float act_stub(void *ga, float dt, float pedal)
 {
     act_tick a = { (char *)ga, dt, pedal, NAN, NAN };
@@ -156,6 +167,7 @@ static float act_stub(void *ga, float dt, float pedal)
     rsc_step(dt);   // the rollover guard (core/rsc.cpp) decides from the telemetry alone and posts its brake wish and throttle cap
     for (int i = 0; i < s_n[ACT_POST]; i++) s_fn[ACT_POST][i](&a);
     if (ga) act_brake_write((char *)ga);
+    act_retarder_merge();
     // the throttle: the base (the game's, or what Cruise posted), then every floor, then every cap, then every scale
     float r = s_base == s_base ? s_base : a.stock;
     for (int o = 0; o < ACT_N; o++) if (W[o].floor > 0 && W[o].floor > r) r = W[o].floor;
@@ -194,6 +206,16 @@ int act_clutch_vehicle(char *inner, float v)
     return 1;
 }
 
+// ---------------------------------------------------------------- the retarder
+// The drivetrain reads the retarder demand (inner+0x1444) once for the torque it applies (0x1408c87a8, ETS2 1.60.1.7; the patch is
+// game_patch_retarder, only with [core] retarder_hook = 1). Our factor scales that one read: the dashboard, the animation and the
+// lever keep the game's own step. No module posts a factor yet, so the hook changes nothing.
+static bool s_ret_in;
+bool act_retarder_hooked() { return s_ret_in; }
+// The pattern ends at the torque read after the curve call; the demand read is the 8 bytes at +7 (unique in the exe too).
+static const char k_ret_pat[] = "48 8B BF D0 04 00 00 F3 0F 10 80 44 14 00 00 E8 ?? ?? ?? ?? F3 44 0F 10 87 A8 00 00 00";
+enum { RET_READ_AT = 7 };
+
 // ---------------------------------------------------------------- hooks (m_core, config.cpp)
 
 static int s_gate_in, s_haz_in;
@@ -208,6 +230,13 @@ void act_start()
         else if (!game_patch_clutch_floor(cs, &s_cf)) logline("Actuator: clutch hook failed: no crawl, no smooth start");
         else { s_clutch_in = 1; logline("Actuator: clutch hook in place at %p", (void *)cs); }
     } else logline("Actuator: no clutch hook (1.60 only): no crawl, no smooth start");
+    // The retarder demand read of the drivetrain (1.60 only, off by default): our factor scales the retarder torque.
+    if (g_retarder_hook >= 0.5f && L && !strcmp(L->name, "1.60")) {
+        uintptr_t rs = game_scan(k_ret_pat);
+        if (!rs) logline("Actuator: retarder demand read not found: retarder scale unavailable");
+        else if (!game_patch_retarder(rs + RET_READ_AT, &g_ret_scale)) logline("Actuator: retarder hook failed: retarder scale unavailable");
+        else { s_ret_in = true; logline("Actuator: retarder hook in place at %p", (void *)(rs + RET_READ_AT)); }
+    } else if (g_retarder_hook >= 0.5f) logline("Actuator: no retarder hook (1.60 only): retarder scale unavailable");
     // The cruise fn call in the game's pedal code (cruise-re notes; the pattern ends at the E8 of the call).
     uintptr_t h = game_scan("48 8B CB F3 44 0F 11 83 E4 1C 00 00 F3 45 0F 5F C3 41 0F 28 D0 E8");
     uintptr_t site = h ? h + 21 : 0;
@@ -234,6 +263,7 @@ void act_start()
 void act_stop()
 {
     release_request();
+    g_ret_scale = 1.0f;
 }
 
 // Continuity broke (see RESET_*): the writer's slew memory and our request go; the owners clear their own wishes.
@@ -248,9 +278,9 @@ void act_reset(int level, const char *why)
 
 const char *act_status()
 {
-    static char b[240];
-    snprintf(b, sizeof b, "throttle hook %s (%d/%d/%d module hooks), brake request: one writer, hazard rule %s, Auto Hold throttle gate %s, clutch hook %s",
+    static char b[260];
+    snprintf(b, sizeof b, "throttle hook %s (%d/%d/%d module hooks), brake request: one writer, hazard rule %s, Auto Hold throttle gate %s, clutch hook %s, retarder hook %s",
              s_hooked ? "in" : "NOT in", s_n[ACT_PRE], s_n[ACT_POST], s_n[ACT_DONE], s_haz_in ? "patched" : "not found", s_gate_in ? "patched" : "not found",
-             s_clutch_in ? "in" : "not in");
+             s_clutch_in ? "in" : "not in", s_ret_in ? "in" : "off");
     return b;
 }

@@ -680,6 +680,43 @@ int game_patch_clutch_floor(uintptr_t site, clutch_floor *cf)
     return 1;
 }
 
+// The retarder demand the drivetrain reads (0x1408c87a8, ETS2 1.60.1.7): `48 8B BF D0 04 00 00` (mov rdi,[rdi+0x4d0], the retarder
+// definition), then the 8 bytes at site, `F3 0F 10 80 44 14 00 00` (movss xmm0,[rax+0x1444]: the demand float of the vehicle's
+// inner, rax = inner), then `E8` (a curve lookup of xmm0) and `F3 44 0F 10 87 A8 00 00 00` (movss xmm8,[rdi+0xa8]: the definition's
+// torque). The 8 bytes become a call to our stub plus 3 nops. The stub (retarder_stub_code, game.h) is the original read followed
+// by xmm0 *= *scale, and the one instruction it replaces had no other effect: rax, every other register, xmm1-15 and the flags
+// are as the game expects them after a movss (the stub saves rax and the flags around its own use and never calls anything, so
+// the stack alignment of the game is irrelevant). The HUD, the animation and the pedal function read inner+0x1444 at other
+// places; they are not patched and keep showing the game's own step. The drivetrain runs on a game thread while we patch, so the
+// 8 bytes go in with one locked 8-byte compare-exchange: the site must be 8-aligned (it is, 0x1408c87a8), else we decline.
+int game_patch_retarder(uintptr_t site, const volatile float *scale)
+{
+    static const unsigned char orig[] = { 0xF3, 0x0F, 0x10, 0x80, 0x44, 0x14, 0x00, 0x00 };
+    if (site & 7) return 0;
+    if (memcmp((const void *)site, orig, sizeof orig)) return 0;
+    if (!g_tramp && !(g_tramp = alloc_near(site))) return 0;
+    if (g_tramp_used + 64 > 0x1000) return 0;
+    unsigned char *c = g_tramp + g_tramp_used;
+    size_t n = retarder_stub_code(c, scale);
+    g_tramp_used += (n + 15) & ~(size_t)15;
+    int64_t rel64 = (int64_t)(uintptr_t)c - (int64_t)(site + 5);
+    if (rel64 < INT32_MIN || rel64 > INT32_MAX) return 0;
+    unsigned char rep[sizeof orig];
+    memset(rep, 0x90, sizeof rep);
+    rep[0] = 0xE8;
+    int32_t rel = (int32_t)rel64;
+    memcpy(rep + 1, &rel, 4);
+    LONG64 want, was;
+    memcpy(&want, rep, 8);
+    memcpy(&was, orig, 8);
+    DWORD old;
+    if (!VirtualProtect((void *)site, sizeof rep, PAGE_EXECUTE_READWRITE, &old)) return 0;
+    LONG64 got = InterlockedCompareExchange64((volatile LONG64 *)site, want, was);
+    VirtualProtect((void *)site, sizeof rep, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), (void *)site, sizeof rep);
+    return got == was;
+}
+
 // ---------------------------------------------------------------- object access
 
 int mem_readable(const void *p, size_t n)

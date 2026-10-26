@@ -76,6 +76,33 @@ int game_patch_stop(uintptr_t site, float (*fn)(float idle, float thr, float bra
 // sees max(clutch, floor) for the vehicle `inner` (0 = closed .. 1 = open). The plugin sets inner and floor.
 struct clutch_floor { void *inner; float floor; };
 int game_patch_clutch_floor(uintptr_t site, clutch_floor *cf);
+// Retarder demand in the drivetrain (0x1408c87a8, ETS2 1.60.1.7): after `mov rdi,[rdi+0x4d0]` (the retarder definition) the function
+// reads the retarder DEMAND, movss xmm0,[rax+0x1444] (rax = the vehicle's inner), and calls a curve lookup with it; the definition's
+// torque (movss xmm8,[rdi+0xa8]) follows. site = that 8-byte read. The patched read returns demand x *scale (bit-identical with
+// *scale == 1.0f); the dashboard, the animation and the pedal function read inner+0x1444 elsewhere and are not touched.
+int game_patch_retarder(uintptr_t site, const volatile float *scale);
+// The stub, as bytes (inline so that the sims can run exactly what the game would): the original read, then xmm0 *= *scale unless
+// *scale is exactly 1.0f (compared as an integer, so the demand keeps its bits: NaN payloads, denormals under DAZ). It changes
+// xmm0 (the original does too) and nothing else: rax is saved around its use, the flags (the integer compare) are saved with
+// pushfq/popfq, no other register or xmm is touched, no call, nothing on the stack but the two slots (flags, rax) it pushes under the return address.
+static inline size_t retarder_stub_code(unsigned char *out, const volatile float *scale)
+{
+    static const unsigned char rd[] = { 0xF3, 0x0F, 0x10, 0x80, 0x44, 0x14, 0x00, 0x00 };   // movss xmm0,[rax+0x1444]
+    unsigned char *p = out;
+    for (unsigned i = 0; i < sizeof rd; i++) *p++ = rd[i];
+    *p++ = 0x9C;                                          // pushfq
+    *p++ = 0x50;                                          // push rax
+    *p++ = 0x48; *p++ = 0xB8;                             // mov rax, imm64 (scale)
+    uint64_t a = (uint64_t)(uintptr_t)scale;
+    for (int i = 0; i < 8; i++) *p++ = (unsigned char)(a >> (8 * i));
+    *p++ = 0x81; *p++ = 0x38; *p++ = 0x00; *p++ = 0x00; *p++ = 0x80; *p++ = 0x3F;   // cmp dword [rax], 0x3F800000 (1.0f)
+    *p++ = 0x74; *p++ = 0x04;                             // je +4 (scale is 1: leave xmm0 alone)
+    *p++ = 0xF3; *p++ = 0x0F; *p++ = 0x59; *p++ = 0x00;   // mulss xmm0,[rax]
+    *p++ = 0x58;                                          // pop rax
+    *p++ = 0x9D;                                          // popfq
+    *p++ = 0xC3;                                          // ret
+    return (size_t)(p - out);
+}
 
 typedef float *(*window_fn)(void *self, float *out, unsigned gear);
 typedef int (*gear_fn)(void *self);

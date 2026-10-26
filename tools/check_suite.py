@@ -117,12 +117,24 @@ def discover(P):
 GAME = {"1.60": "eurotrucks2", "1.61": "amtrucks"}
 exe_game = "amtrucks" if "amtrucks" in sys.argv[1].lower() else "eurotrucks2"
 ok = 0
+ok_names = []
 for name, P in LAYOUTS.items():
     if GAME[name] != exe_game: continue
     print(f"[{name} layout]")
     r = discover(P)
     print("  ->", r)
     ok += r == "OK"
+    if r == "OK": ok_names.append(name)
 if not ok:
     print("no layout matches this exe: the plugin would stay inactive on it")
     sys.exit(1)
+
+# The actuator's retarder hook (1.60 only, [core] retarder_hook; k_ret_pat in core/actuate.cpp): the whole pattern and its 8-byte demand
+# read (movss xmm0,[rax+0x1444], at +7) must each be in .text exactly once, and the read 8-aligned (game_patch_retarder swaps the 8
+# bytes in one locked exchange), or the hook stays off. The hook is optional and off by default: a miss is a warning, not a failure.
+RET_PAT = "48 8B BF D0 04 00 00 F3 0F 10 80 44 14 00 00 E8 ?? ?? ?? ?? F3 44 0F 10 87 A8 00 00 00"
+RET_READ = "F3 0F 10 80 44 14 00 00"
+if "1.60" in ok_names:
+    h, r = scan(RET_PAT), scan(RET_READ)
+    good = len(h) == 1 and len(r) == 1 and r[0] == h[0] + 7 and r[0] % 8 == 0
+    print(f"[retarder hook] pattern {len(h)} hit(s){' at ' + H(h[0]) if h else ''}, demand read {len(r)} hit(s): {'OK' if good else 'WARNING: the hook would stay off'}")
