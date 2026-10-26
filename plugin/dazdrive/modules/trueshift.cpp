@@ -55,7 +55,7 @@ static param g_params[] = {
     { "choice_stay", &p_ch_stay, 0.03f, "choice 1, Eco and Normal: bonus for the gear the truck is in, against hunting between two gears that score alike" },
     { "choice_stay_power", &p_ch_stay_pw, 0.2f, "choice 1, Power: the same, higher" },
     { "choice_floor_rpm", &p_ch_floor, 60, "choice 1: under load the revs stay at least this far over the start of the torque plateau (rpm). Coasting and the engine brake are not held to it. 0 = the window reaches below the plateau" },
-    { "choice_objective", &p_ch_obj, 1, "choice 1: 1 = when the scores say up, the gear to shift up to is the one that gains speed soonest (the shift time without pull counted against the pull each gear gives), so a skip can win under load; an upshift waits a little after the last one, and a shift back the other way soon after a shift needs a hard reason. 0 = the gear with the best score, as before" },
+    { "choice_objective", &p_ch_obj, 1, "choice 1: 1 = when the scores say up, the gear to shift up to is the one that gains speed soonest (the shift time without pull counted against the pull each gear gives), so a skip can win under load; an upshift waits a little after the last one, and a shift back the other way soon after a shift needs a hard reason; braking downshifts look at the speed the shift ends at. 0 = the gear with the best score, as before" },
     { "choice_min_accel", &p_ch_amin, 0.10f, "choice_objective 1: a gear that cannot give all the acceleration asked is still a choice if at full throttle it gives at least this (m/s2)" },
     { "choice_time_shift_eco", &p_ch_ts_eco, 3.0f, "choice_objective 1, Eco: a second in a shift counts as this many seconds of driving when the gear up is chosen (higher = fewer shifts, more skips)" },
     { "choice_time_shift", &p_ch_ts_norm, 1.3f, "choice_objective 1, Normal: the same" },
@@ -1085,14 +1085,20 @@ static int decide_gear(void *self, int *why)
         return cur;
     }
 
-    if (brake > 0.05f) {
+    // choice 1 with choice_objective 1: also slowing hard with the pedal off and no brake seen (a brake the telemetry misses, AEB), and the
+    // gear is judged at the speed the shift will end at (ride: braking from 70, 10->8 only at 20 km/h and 638 rpm, then the stall rule twice)
+    int stop_c = p_choice > 0 && p_ch_obj > 0;
+    if (brake > 0.05f || (stop_c && coast_p && T.accel < -0.8f)) {
         // stay above the game's neutral threshold, which rises with brake^2
         float b = fminf(brake, 1.0f), opens = 0.8f * idle_rpm() + b * b * idle_rpm();
         float floor = fmaxf(fmaxf(idle_rpm() + 250, eco_dn(cur) - 100), opens + 250);
         if (slow_ahead) floor = fmaxf(floor, V.plateau + 200);
-        if (rpm < floor && cur > 1 && since > 0.5) {
+        // (choice 1: the speed at the end of a shift started now, at the deceleration of now: under the brake the revs fall through a slow
+        // box's shift, and a gear chosen for the speed of now lands under the floor or at the stall rule)
+        float v_l = stop_c ? fmaxf(0.5f, v - fmaxf(0.0f, -T.accel) * (V.eng.shift_time + 0.25f)) : v;
+        if (rpm_at(cur, v_l) < floor && cur > 1 && since > 0.5) {
             // land high, so that fewer downshifts are needed on the way down
-            int l = pick_down(cur, v, eco_up(1) + by_mode(-300, -200, -100), true);
+            int l = pick_down(cur, v_l, eco_up(1) + by_mode(-300, -200, -100), true);
             if (l < cur) { *why = slow_ahead ? W_BRAKING_JUNCTION : W_BRAKING; return l; }
         }
         *why = W_BRAKING_HOLD;

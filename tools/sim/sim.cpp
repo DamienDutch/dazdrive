@@ -137,7 +137,7 @@ static void use_car()  // a pickup-like car: 6 speeds, 450 Nm
 }
 static struct {
     int gear, target, state, parked, engaged; double shift_end; float v, mass, grade_pct, pedal, cc, brake; int force, ebrake, ret;
-    float cvar, shift_time, cruise_kmh; int eb_toggle; float eb_level, mass_seen, thr_floor; int hint, wish_on; float wish_thr;   // hint: a shift-hint press the game's handler turns into target +-1 before its update
+    float cvar, shift_time, cruise_kmh; int eb_toggle; float eb_level, mass_seen, thr_floor; int hint, wish_on; float wish_thr, brake_unseen;   // brake_unseen: a brake the telemetry does not show (AEB in the ride)   // hint: a shift-hint press the game's handler turns into target +-1 before its update
     double s;                 // distance driven (m)
     float (*road)(double s);  // grade (%) along the road, or NULL (scenario sets grade)
     int route_on;
@@ -353,7 +353,7 @@ static void tick(double dt, int stats)
     }
     if (M.ret && thr < 0.05f) F -= M.ret / 5.0f * 25000 * fminf(1, M.v / 10);
     float s = sinf(atanf(M.grade_pct / 100));
-    float Fres = M.mass * 9.81f * (s + 0.006f) + 0.5f * 1.2f * CDA * M.v * M.v + M.brake * M.mass * 4;
+    float Fres = M.mass * 9.81f * (s + 0.006f) + 0.5f * 1.2f * CDA * M.v * M.v + (M.brake + M.brake_unseen) * M.mass * 4;
     M.v += (F - Fres) / M.mass * dt;
     if (M.v < 0) M.v = 0;
     M.s += M.v * dt;
@@ -808,6 +808,17 @@ static pl_res pl_row(const char *name, setup su, int var)   // var: 0 = choice 0
     if (getenv("SC_SHIFTS")) for (int i = 0; i < g_rec_n; i++) printf("      %6.1f  %d->%d (%s) %.0f rpm\n", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why, g_rec[i].rpm);
     return r;
 }
+// c_stop: from the start speed with the pedal off, g_st_coast seconds coasting, then the brake g_st_brake to a stop; the stall rule and the lowest
+// rpm in gear above 5 km/h (the game's own range below the handback) are counted
+static float g_st_brake = 0.2f, g_st_coast = 0, g_st_rpm_min; static int g_st_stall, g_st_unseen;   // g_st_unseen: the brake is not in the telemetry
+static void c_stop(double t)
+{
+    if (t <= 0) { g_st_rpm_min = 1e9f; g_st_stall = 0; g_rec_n = 0; g_pl_t0 = t_now; }
+    M.pedal = 0;
+    float b = t < g_st_coast ? 0 : fminf(g_st_brake, g_st_brake * (float)(t - g_st_coast) / 0.5f);
+    if (g_st_unseen) M.brake_unseen = b; else M.brake = b;
+    if (M.gear > 0 && !M.state && M.v * 3.6f >= 5) g_st_rpm_min = fminf(g_st_rpm_min, rpm_now());
+}
 static int run_scores_table()
 {
     struct Tr { const char *name; void (*use)(); int g0; } trucks[2] = { { "ATO", use_ato, 1 }, { "XT", use_renault, 3 } };
@@ -961,6 +972,30 @@ static int run_scores_table()
                  "choice 1 (time), 33 t pedal 0.7: fewer shifts and seconds in shifts than choice 0, 70 km/h no later");
         sc_check(r[2].gap_ok && w[2].gap_ok && h[2].gap_ok && l[2].gap_ok, "choice 1 (time): no two upshifts closer than 1.5 x the shift time below the rev limit");
         sc_check(l[2].skips >= l[1].skips, "choice 1 (time), 17 t pedal 0.3: at least as many skips as the previous objective");
+    }
+    // 6. braking to a stop from 70 km/h (ride: 10->8 'braking' only at 20 km/h and 638 rpm, then the stall rule 8->6 at 419 rpm and 6->1): no
+    // stall-rule shift, and the revs above 5 km/h never under the idle - 50
+    printf("\n  braking to a stop from 70 km/h (ATO, Normal, pedal off): shifts, stall-rule shifts, lowest rpm in gear above 5 km/h\n");
+    {
+        struct St { const char *name; float mass, brake, coast; int unseen; } st[5] = { { "17 t brake 0.2", 17000, 0.2f, 0, 0 }, { "17 t coast 4 s, brake 0.6", 17000, 0.6f, 4, 0 },
+            { "17 t coast 4 s, unseen 0.6", 17000, 0.6f, 4, 1 }, { "33 t brake 0.3", 33000, 0.3f, 0, 0 }, { "33 t brake 1.0", 33000, 1.0f, 0, 0 } };
+        int bad = 0;
+        for (auto &s : st)
+            for (int v = 0; v < 3; v++) {
+                g_st_brake = s.brake; g_st_coast = s.coast; g_st_unseen = s.unseen;
+                set_param("choice_objective", v == 1 ? 0.0f : 1.0f);
+                g_rec_on = 1;
+                sc_do(s.name, {s.mass, 70, sc_gear_for(70, 1100), 40, 3, 1.0f}, c_stop, v > 0);
+                g_rec_on = 0;
+                set_param("choice_objective", 1);
+                for (int i = 0; i < g_rec_n; i++) if (!strcmp(g_rec[i].why, "stall")) g_st_stall++;
+                char seq[160] = ""; int k = 0;
+                for (int i = 0; i < g_rec_n && k < (int)sizeof seq - 8; i++) k += snprintf(seq + k, sizeof seq - k, i ? ">%d" : "%d>%d", i ? g_rec[i].b : g_rec[i].a, g_rec[i].b);
+                printf("  %-26s %-22s %2d shifts, %d stall, lowest %4.0f rpm  %s\n", s.name, g_pl_label[v], g_rec_n, g_st_stall, g_st_rpm_min, seq);
+                if (getenv("SC_SHIFTS")) for (int i = 0; i < g_rec_n; i++) printf("      %6.1f  %d->%d (%s) %.0f rpm\n", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why, g_rec[i].rpm);
+                if (v == 2 && (g_st_stall > 0 || g_st_rpm_min < 600 - 50)) bad++;
+            }
+        sc_check(bad == 0, "choice 1: no stall-rule shift on a stop, the revs above 5 km/h never under idle - 50");
     }
     return g_sc_failed;
 }
