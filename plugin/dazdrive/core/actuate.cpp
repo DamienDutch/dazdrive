@@ -23,10 +23,10 @@
 // Fields of game_actor (1.60, cruise-re notes § 4) the layer writes.
 enum { A_REQ = 0x17c };   // the brake request: 0..1, slewed by the game, zeroes the merged throttle while > 0 (neutral-exit-re notes § 3.1)
 
-static const char *const k_owner[ACT_N] = { "cruise", "hill start", "Auto Hold", "bend", "ACC", "AEB", "rollover guard", "crawl", "launch control", "retarder (deceleration)", "retarder (mass)" };
-static_assert(ACT_N == 11, "one initializer per owner below");
+static const char *const k_owner[ACT_N] = { "cruise", "hill start", "Auto Hold", "bend", "ACC", "AEB", "rollover guard", "crawl", "launch control", "retarder (deceleration)", "retarder (mass)", "deceleration assist" };
+static_assert(ACT_N == 12, "one initializer per owner below");
 static act_wish W[ACT_N] = { { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 },
-                             { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 } };
+                             { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 } };
 float g_air_min_psi = 75;
 float g_retarder_hook;           // [core] retarder_hook
 volatile float g_ret_scale = 1.0f;   // read by the drivetrain hook: the lowest retarder factor of all owners
@@ -47,6 +47,8 @@ static float s_req_ours;         // the request we hold in game_actor+0x17c (0 =
 static int s_air_low;            // brake air low: our requests paused
 static double s_br_at;           // time of the last write (slew)
 static int s_hill_was, s_hold_was, s_aeb_was;   // hill start / Auto Hold / the AEB was asking at the last write (they ramp by themselves)
+static int s_dec_was;            // the deceleration assist led at the last write (it ramps by itself)
+static const float k_dec_slew = 20.0f;  // request per second: only a backstop above the assist's own ramps (its steps at a shift, up to max_brake 0.6, come within 0.03 s: the brake's own lag of ~0.15 s is the slew)
 static unsigned char s_thr_pass;     // Auto Hold alone holds the brake: the driver's throttle still reaches the engine (patch of the game's 0x17c throttle gate)
 static unsigned char s_hazard_mute;  // our request must not switch the hazards on (game rule for 0x17c > 0)
 static int s_log_owner = -1;     // the owner last named in the log (-1 = nobody braking)
@@ -58,6 +60,8 @@ void act_brake_write(char *g)
     float hill = W[ACT_HILL].brake, hold = W[ACT_HOLD].brake, bend = W[ACT_BEND].brake, crawl = W[ACT_CREEP].brake, acc = W[ACT_ACC].brake;
     float aeb = fmaxf(W[ACT_AEB].brake, W[ACT_RSC].brake);   // the rollover guard's brake rides on the AEB's fast request path
     float want = fmaxf(fmaxf(fmaxf(fmaxf(fmaxf(hill, hold), bend), crawl), acc), aeb);
+    float dec = W[ACT_DECEL].brake;   // the deceleration assist (modules/decel.cpp): shapes its own ramps, see the branch below
+    if (dec > 0) want = fmaxf(want, dec);
     float *req = (float *)(g + A_REQ);
     // Save the air (Damien 11-10: the tank ran empty): no brake requests of ours while the pressure is low; a
     // request that holds still (hill start) is kept, it uses no new air.
@@ -71,8 +75,12 @@ void act_brake_write(char *g)
     } else if (s_air_low && T.air_psi > g_air_min_psi + 15) { s_air_low = 0; logline("Actuator: brake air back (%.0f psi)", T.air_psi); }
     // the AEB is never paused: it brakes with what is left (and holds its request steady instead of pulsing)
     if (s_air_low && hill <= 0 && hold <= 0 && aeb <= 0) want = 0;
+    // the assist leads when its wish is the biggest one; it closes a loop on the measured deceleration, where the 0.05 dead band
+    // below would be a limit cycle and the 0.25 / 0.6 per second slews far too slow for a gap of 0.2 s (it ramps by itself)
+    int dec_lead = dec > 0 && want > 0 && dec >= want - 1e-6f, dec_done = s_dec_was && !dec_lead;
+    s_dec_was = dec_lead;
     // a small change is not worth a new brake application (each one costs air): hold it. Auto Hold shapes its own ramp.
-    if (hold <= 0 && aeb <= 0 && want > 0 && s_req_ours > 0 && fabsf(want - s_req_ours) < 0.05f) want = s_req_ours;
+    if (hold <= 0 && aeb <= 0 && !dec_lead && want > 0 && s_req_ours > 0 && fabsf(want - s_req_ours) < 0.05f) want = s_req_ours;
     // soft onset and release (Damien: subtler, smoother); the hill-start hold comes at once
     {
         double now = wall_s(), dt = now - s_br_at;  // the hill-start hold lets go at once too (else it fights the driver's gas)
@@ -84,6 +92,10 @@ void act_brake_write(char *g)
         else if (s_hold_was) s_hold_was = 0;                           // ... and its last step to 0 is not dragged out either
         else if (s_aeb_was) s_aeb_was = 0;                             // a bigger wish took over from the AEB
         else if (s_hill_was) { s_hill_was = 0; want = 0; }
+        else if (dec_lead) {                                           // the assist: a wide slew, its own ramps do the shaping
+            if (dt > 0 && dt < 0.5) { float lim = k_dec_slew * (float)dt; want = fminf(fmaxf(want, s_req_ours - lim), s_req_ours + lim); }
+        }
+        else if (dec_done && want <= 0) { }                             // ... and its last step to 0 is its own
         else if (dt > 0 && dt < 0.5) {
             float up = acc > 0 ? 1.0f : 0.25f;  // following a lead: firm enough, still ramped (no valve dump)
             float lo = s_req_ours - 0.6f * (float)dt, hi = s_req_ours + up * (float)dt, asked = want;
@@ -270,7 +282,7 @@ void act_stop()
 void act_reset(int level, const char *why)
 {
     (void)why;
-    s_aeb_was = 0; s_hill_was = s_hold_was = 0; s_br_at = 0;
+    s_aeb_was = 0; s_hill_was = s_hold_was = s_dec_was = 0; s_br_at = 0;
     release_request();
     s_log_owner = -1; s_log_at = 0;
     if (level >= RESET_HARD) s_air_low = 0;
