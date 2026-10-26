@@ -27,7 +27,7 @@
 #include <string.h>
 
 static float p_herm;
-static float p_sg_rearm, p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_air_min, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
+static float p_sg_rearm, p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade;
 static float p_rb_curves;  // roundabout_curves
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
@@ -74,7 +74,7 @@ static param g_params[] = {
     { "emergency_decel", &p_ess_dec, 4.0f, "deceleration (m/s2) that counts as an emergency stop" },
     { "emergency_off_decel", &p_ess_off, 2.5f, "below this deceleration (m/s2) before the truck stops, the hazards go off again (real trucks: 2.5)" },
     { "emergency_kmh", &p_ess_kmh, 50, "only above this speed (km/h)" },
-    { "air_min_psi", &p_air_min, 75, "below this brake air pressure (psi) the module stops its own brake requests (bends, crawl descent) and leaves descents to the engine brake" },
+    { "air_min_psi", &g_air_min_psi, 75, "below this brake air pressure (psi) the module stops its own brake requests (bends, crawl descent) and leaves descents to the engine brake" },
     { "curve_lat", &p_curve_lat, 3.125f, "sideways acceleration (m/s2) allowed in bends at about 92 km/h, the same in every mode (higher = faster through bends). Slower bends get more, up to 1.23x (4 m/s2), like the allowance in a Mercedes-Benz patent" },
     { "route_hermite", &p_herm, 1, "1 = with navigation: the road between two route points is read as a curve through the directions of the points, so tight bends are seen earlier and sharper (0 = straight lines between the points, the older way)" },
     { "junctions", &p_junc, 1, "1 = with navigation: also slow down before junctions where the route turns, and before roundabouts (needs curves = 1; always on with own_acc = 1)" },
@@ -146,9 +146,6 @@ static int s_cb_was_on;
 static struct { float i, u; int on; } C;
 
 // State that cr_reset() must reach (was function-local).
-static int s_air_low;                                   // brake air low: our requests paused
-static double s_br_at;                                  // brake_request: time of the last call (slew)
-static int s_hill_was, s_hold_was;                      // brake_request: hill-start / Auto Hold was asking last call
 static int s_hs_armed;                                  // hill_start: stopped with the brake pressed on a slope
 static double s_hs_until;                               // hill_start: hold until
 static float s_lead_prev = -1, s_gap_rate;              // lead_rel_speed: gap filter
@@ -255,65 +252,11 @@ static float band_up()
 // through the game's brake request (game_actor+0x17c; the game slews to it
 // and zeroes the throttle while it is > 0) until the pedal, a timeout or
 // moving. Runs every tick (the cruise fn is called with cruise off too).
-// The brake request is never cleared by the game when its emergency brake
-// option is off: what we write stays (ts3c: brakes on, hazards forced on,
-// throttle dead, neutral-exit-re notes § 3). So all our wishes meet here,
-// once per tick, and what we wrote goes back to 0 when we no longer want it.
+// The wishes below (s_want_*) are posted to the actuator (core/actuate.cpp) once per tick in the stub; that is the one
+// writer of the brake request, with the slew, the air guard and the hazard mute.
 static int s_sg_wait;  // Stop&Go: standing longer than stop_go_auto_s, the driver has to press Resume or the pedal: the dash shows B
-static float s_want_hill, s_want_hold, s_want_curve, s_want_acc, s_want_aeb, s_req_ours;
-static int s_aeb_was;                                  // brake_request: the AEB was asking last call (it ramps by itself)
+static float s_want_hill, s_want_hold, s_want_curve, s_want_acc, s_want_aeb;
 static float s_lv_prev = NAN, s_a_lead;                 // own ACC: lead speed history (reset without a lead)
-static unsigned char s_thr_pass;     // Auto Hold alone holds the brake: the driver's throttle still reaches the engine (patch of the game's 0x17c throttle gate)
-static unsigned char s_hazard_mute;  // our request must not switch the hazards on (game rule for 0x17c > 0)
-static void brake_request(char *g, float want)
-{
-    float *req = (float *)(g + GA_BRAKE_REQ);
-    // Save the air (Damien 11-10: the tank ran empty): no brake requests of ours while the pressure is low; a
-    // request that holds still (hill start) is kept, it uses no new air.
-    if (T.air_warning || (T.air_psi > 1 && T.air_psi < p_air_min)) {
-        if (!s_air_low) {
-            logline("Cruise: brake air low (%.0f psi): our braking paused", T.air_psi);
-            if (fabsf(T.speed) * 3.6f > 10)  // standing after a start or a teleport the tank is simply still filling
-                incident("air", "brake air low: %.0f psi at %.0f km/h, our braking paused", T.air_psi, fabsf(T.speed) * 3.6f);
-        }
-        s_air_low = 1;
-    } else if (s_air_low && T.air_psi > p_air_min + 15) { s_air_low = 0; logline("Cruise: brake air back (%.0f psi)", T.air_psi); }
-    // the AEB is never paused: it brakes with what is left (and holds its request steady instead of pulsing)
-    if (s_air_low && s_want_hill <= 0 && s_want_hold <= 0 && s_want_aeb <= 0) want = 0;
-    // a small change is not worth a new brake application (each one costs air): hold it. Auto Hold shapes its own ramp.
-    if (s_want_hold <= 0 && s_want_aeb <= 0 && want > 0 && s_req_ours > 0 && fabsf(want - s_req_ours) < 0.05f) want = s_req_ours;
-    // soft onset and release (Damien: subtler, smoother); the hill-start hold comes at once
-    {
-        double now = wall_s(), dt = now - s_br_at;  // the hill-start hold lets go at once too (else it fights the driver's gas)
-        s_br_at = now;
-        if (s_want_hill > 0) s_hill_was = 1;
-        else if (s_want_aeb > 0 && s_want_aeb >= want - 1e-6f) { s_aeb_was = 1; s_hill_was = 0; }  // the AEB ramps by itself (up fast, down at its own pace)
-        else if (s_aeb_was && want <= 0) s_aeb_was = 0;                  // ... its last step to 0 is its own
-        else if (s_want_hold > 0) { s_hold_was = 1; s_hill_was = 0; }  // Auto Hold ramps by itself: no extra filter
-        else if (s_hold_was) s_hold_was = 0;                           // ... and its last step to 0 is not dragged out either
-        else if (s_aeb_was) s_aeb_was = 0;                             // a bigger wish took over from the AEB
-        else if (s_hill_was) { s_hill_was = 0; want = 0; }
-        else if (dt > 0 && dt < 0.5) {
-            float up = s_want_acc > 0 ? 1.0f : 0.25f;  // following a lead: firm enough, still ramped (no valve dump)
-            float lo = s_req_ours - 0.6f * (float)dt, hi = s_req_ours + up * (float)dt, asked = want;
-            want = want < lo ? fmaxf(lo, 0) : (want > hi ? hi : want);
-            // only a fading request is cut off: a rising one starts below 0.01 (0.25/s × 1/60 s = 0.004), and
-            // cutting that kept bend / roundabout braking at 0 for good (ts4q 643-648 s: 63 km/h held to 50 m before
-            // a roundabout, then a hard stop to 16)
-            if (want < 0.01f && asked < 0.01f) want = 0;
-        }
-    }
-    if (want > 0) {
-        if (*req < want || *req == s_req_ours) *req = want;
-        s_req_ours = want;
-    } else if (s_req_ours > 0) {
-        if (*req == s_req_ours) *req = 0;
-        s_req_ours = 0;
-    }
-    s_hazard_mute = s_req_ours > 0 && *req <= s_req_ours;  // a stronger request (the game's AEB) keeps its hazards
-    // the driver's gas reaches the engine while only the Auto Hold asks (it lets go as the torque builds)
-    s_thr_pass = s_hazard_mute && s_want_hold > 0 && s_want_hill <= 0 && s_want_curve <= 0 && g_creep_brake <= 0;
-}
 
 static void hill_start(char *g)
 {
@@ -335,11 +278,11 @@ static void hill_start(char *g)
 
 // ---------------------------------------------------------------- Auto Hold (autohold-acc notes)
 // After a stop with the brake (speed < 0.5 km/h, pedal > 0.1) the truck stays held through the same brake
-// request as hill start (game_actor+0x17c, one writer: brake_request()), at any grade and without a timer,
+// request as hill start (game_actor+0x17c, one writer: the actuator, core/actuate.cpp), at any grade and without a timer,
 // until the driver gives gas. Real cars (Damien: VW Crafter, Lynk & Co 01) struggle to let go when you pull
 // away hard: the hold drops at a fixed moment and the car lurches or rolls. Here the release follows the drive:
 //  - the game zeroes the merged throttle while 0x17c > 0 (neutral-exit-re notes § 3.1); a patch of that
-//    one compare (s_thr_pass) lets the driver's gas through while only we hold, so the engine builds torque
+//    one compare (the actuator's throttle gate) lets the driver's gas through while only we hold, so the engine builds torque
 //    against the brake and the box engages as usual;
 //  - the request falls with the drive force: r = hold x (1 - F_drive / F_needed), F_needed = the grade force plus
 //    what it takes to start moving; never faster than the pedal allows (gentle ~1.2 s, hard ~0.25 s: still a ramp)
@@ -678,14 +621,16 @@ static float stub_cruise(void *ga, float dt, float pedal)
     if (ga) own_acc((char *)ga, dt);  // our ACC target goes into +0x1a0 before the game's controller and its overspeed braking read it
     float r = cruise_body(ga, dt, pedal);
     if (ga) aeb((char *)ga, dt);
-    rsc_step(dt);                                  // rollover guard (core/rsc.cpp): its brake rides on the AEB's fast request path
-    s_want_aeb = fmaxf(s_want_aeb, g_rsc_brake);
+    rsc_step(dt);                                  // rollover guard (core/rsc.cpp): posts its own brake wish
     if (AE.st > 0 && r > pedal) r = pedal;  // AEB warns or brakes: no cruise throttle
     // The driver's gas always wins over our own braking (Damien, ts4w: full gas near a stop did nothing until he
     // switched cruise off; the game zeroes the throttle while a brake request is set). Auto Hold lets go by itself.
     if (pedal > 0.1f) { s_want_curve = 0; s_want_acc = 0; }  // (the AEB has its own override: kick-down)
     if ((s_want_acc > 0.04f || s_want_curve > 0.04f) && r > pedal) r = pedal;  // we brake: no throttle of ours against it (ts4r 213 s, ts4w 532 s)
-    if (ga) brake_request((char *)ga, fmaxf(fmaxf(fmaxf(fmaxf(fmaxf(s_want_hill, s_want_hold), s_want_curve), g_creep_brake), s_want_acc), s_want_aeb));
+    // our brake wishes to the actuator, which merges them with the other modules' and writes the one request
+    act_brake(ACT_HILL, s_want_hill); act_brake(ACT_HOLD, s_want_hold); act_brake(ACT_BEND, s_want_curve);
+    act_brake(ACT_ACC, s_want_acc); act_brake(ACT_AEB, s_want_aeb);
+    if (ga) act_brake_write((char *)ga);
     // Eco: flatter pedal, Power: front-loaded pedal (Damien 25-10). Only the throttle the engine gets; not under cruise, not crawling,
     // not at parking speed; M and Normal stay linear
     g_pedal_mapped = 0;
@@ -957,7 +902,7 @@ static float cruise_body(void *ga, float dt, float pedal)
     // cruise gave full throttle for 14 s, engine racing in neutral): low air, or full throttle without moving for 2 s
     // → our throttle 0 and the integrator reset, until the truck moves again.
     {
-        int air_bad = T.air_warning || (T.air_psi > 1 && T.air_psi < p_air_min);
+        int air_bad = T.air_warning || (T.air_psi > 1 && T.air_psi < g_air_min_psi);
         int stuck = u > 0.5f && kmh < 2 && T.in_thr < 0.02f;
         if (!stuck) s_stuck_since = 0;
         else if (!s_stuck_since) s_stuck_since = wall_s();
@@ -1262,13 +1207,13 @@ static void cruise_trace(char *g, float u)
     static double at;
     if (!g_csv) return;
     int on = *(unsigned char *)(g + GA_ON);
-    if (!on && AH.st == AH_OFF && AH.r <= 0 && s_req_ours <= 0 && AE.st == AEB_OFF) return;
+    if (!on && AH.st == AH_OFF && AH.r <= 0 && act_request() <= 0 && AE.st == AEB_OFF) return;
     double now = wall_s();
     if (now - at < 0.1) return;
     at = now;
     fprintf(g_csv, "%.2f,%.2f,%.1f,%.1f,%.1f,%.1f,%.2f,%.1f,%.1f,%.1f,%.1f,%.3f,%.3f,%.3f,%d,%.3f,%.2f,%.2f,%d,%.2f,%.0f,%.2f,%.1f,%d,%.2f,%.2f,%.2f,%.2f,%.1f,%.2f\n", now, T.speed * 3.6f,
             on ? *(float *)(g + GA_SET) : 0.0f, *(float *)(g + GA_LEAD_M), s_radar.gap < 1e6f ? s_radar.gap : 0.0f, s_lead_v * 3.6f,
-            s_lead_v == s_lead_v ? s_lead_v - fabsf(T.speed) : NAN, s_acc_game, s_acc_own, *(float *)(g + GA_ACC_TARGET), s_dstar, u, s_req_ours,
+            s_lead_v == s_lead_v ? s_lead_v - fabsf(T.speed) : NAN, s_acc_game, s_acc_own, *(float *)(g + GA_ACC_TARGET), s_dstar, u, act_request(),
             *(float *)(g + GA_BRAKE_REQ), AH.st, AH.r, T.in_thr, T.in_brake, T.gear, T.eff_clutch, T.rpm, pitch_grade(), T.air_psi,
             AE.st, AE.ttc < 99 ? AE.ttc : 99.0f, AE.a_need, AE.a_cmd, -T.accel,
             s_bend_coast_kmh, fabsf(T.speed) * T.yaw * 6.2832f);   // sideways acceleration now (m/s2, + = left): v x yaw rate
@@ -1359,22 +1304,12 @@ static void cr_start()
             logline("Cruise: own smooth cruise throttle in place");
         } else logline("Cruise: cruise throttle call not found, the game's cruise stays");
     }
-    // Our brake request (bends, hill start) is > 0 for a while; the game's
-    // auto-hazard rule (neutral-exit-re notes § 3) would switch the hazards
-    // on every time (ts3d). Its compare is skipped while only we ask.
-    if (g_cruise_smooth && (p_curve_brake > 0 || p_hill > 0 || p_ah > 0)) {
-        uintptr_t hz = game_scan("85 C0 74 17 F6 87 D0 01 00 00 10 75 0E 44 0F 2F 8F 7C 01 00 00 73 04 B2 01");
-        if (hz && game_patch_cf0_if(hz + 13, 8, &s_hazard_mute)) logline("Cruise: our brake requests leave the hazards alone");
-        else logline("Cruise: hazard rule not found: braking for bends / hill start may switch the hazards on");
-    }
-    // Auto Hold: the game zeroes the merged throttle while the brake request is > 0. Skip that one compare while only
-    // Auto Hold holds, so the pedal builds torque against the brake and the release can follow it (autohold-acc notes).
+    // Auto Hold: the actuator patches the game's throttle gate (the merged throttle is zeroed while the brake request is > 0)
+    // so the pedal builds torque against the brake while only the hold asks, and the release can follow it (autohold-acc notes).
     if (p_ah > 0 && g_cruise_smooth && g_low_ok) {
-        uintptr_t gt = game_scan("0F 2F CF 76 ?? 83 BB 50 01 00 00 02 75 ?? 0F 2F BB 7C 01 00 00 72 0A F3 0F 11 81 24 14");
-        if (gt && game_patch_cf0_if(gt + 14, 7, &s_thr_pass)) {
-            s_gate_ok = 1;
-            logline("Cruise: Auto Hold in place (throttle passes while it holds, hold %.2f, release %.2f-%.2f s)", p_ah_req, p_ah_hard, p_ah_gentle);
-        } else logline("Cruise: Auto Hold: throttle gate not found, the release is paced by the pedal only (no drive feedback)");
+        s_gate_ok = act_gate_ok();
+        if (s_gate_ok) logline("Cruise: Auto Hold in place (throttle passes while it holds, hold %.2f, release %.2f-%.2f s)", p_ah_req, p_ah_hard, p_ah_gentle);
+        else logline("Cruise: Auto Hold: throttle gate not found, the release is paced by the pedal only (no drive feedback)");
     } else if (p_ah > 0) logline("Cruise: Auto Hold needs the minimum-speed patch and our cruise throttle: off (hill start stays)");
     // Lead speed: wrap the radar call in the ACC fn (the game keeps the lead's speed in a local only).
     if (L && !strcmp(L->name, "1.60")) {
@@ -1805,7 +1740,7 @@ static void aeb(char *g, float dt)
     } else AE.i = 0;
     float up = st == AEB_FULL ? 6.0f : 3.0f, dn = 1.5f;
     // low air: no pulsing while braking (each new application costs air), hold it steady
-    if (T.air_warning || (T.air_psi > 1 && T.air_psi < p_air_min)) AE.air_low = 1;  // for the rest of this event
+    if (T.air_warning || (T.air_psi > 1 && T.air_psi < g_air_min_psi)) AE.air_low = 1;  // for the rest of this event
     if (AE.air_low && (st == AEB_PARTIAL || st == AEB_FULL) && vc > 0) dn = 0;
     // one application, not a pumping one: while braking and still closing in, small dips of the target are ignored (each
     // release and re-apply costs air; the sim pumped 56 times following at 7 m with the fast filters)
@@ -1824,7 +1759,7 @@ static void cr_frame()
         static double gr_since, gr_log;
         char *gga = game_actor_safe();
         float brk = fmaxf(T.in_brake, T.eff_brake);
-        int src = (T.retarder > 0 ? 1 : 0) | (T.motor_brake ? 2 : 0) | (brk > 0.05f ? 4 : 0) | (s_req_ours > 0.05f ? 8 : 0) |
+        int src = (T.retarder > 0 ? 1 : 0) | (T.motor_brake ? 2 : 0) | (brk > 0.05f ? 4 : 0) | (act_request() > 0.05f ? 8 : 0) |
                   (AH.r > 0.05f ? 16 : 0) | (AE.st > 0 ? 32 : 0) | (T.parking_brake ? 64 : 0);
         if (!T.paused && T.eff_thr > 0.1f && src && fabsf(T.speed) * 3.6f > 1.0f) {
             if (!gr_since) gr_since = wall_s();
@@ -1833,7 +1768,7 @@ static void cr_frame()
                 logv(2, "gas together with braking [%s%s%s%s%s%s%s]: %.0f km/h, engine throttle %.2f (pedal %.2f), brake %.2f, own request %.2f, retarder %d, cruise %s set %.0f, smart %.1f, grade %.1f%%, mode %d",
                      src & 1 ? "retarder " : "", src & 2 ? "engine-brake " : "", src & 4 ? "service-brake " : "", src & 8 ? "our-brake-request " : "",
                      src & 16 ? "auto-hold " : "", src & 32 ? "aeb " : "", src & 64 ? "parking-brake" : "", fabsf(T.speed) * 3.6f, T.eff_thr, T.in_thr, brk,
-                     s_req_ours, (int)T.retarder, T.cruise > 0.5f ? "on" : "off", T.cruise * 3.6f, g_smart_ours == g_smart_ours ? g_smart_ours : -1.0f,
+                     act_request(), (int)T.retarder, T.cruise > 0.5f ? "on" : "off", T.cruise * 3.6f, g_smart_ours == g_smart_ours ? g_smart_ours : -1.0f,
                      pitch_grade(), mode_of(game_adaptive()));
             }
         } else gr_since = 0;
@@ -2021,7 +1956,7 @@ static void cr_frame()
             if (steep) { s_down_now = 1; s_flat_since = 0; }
             else if (s_down_now && flat) { if (!s_flat_since) s_flat_since = wall_s(); else if (wall_s() - s_flat_since > 5) s_down_now = 0; }
             else s_flat_since = 0;
-            int air_ok = !T.air_warning && !(T.air_psi > 1 && T.air_psi < p_air_min);
+            int air_ok = !T.air_warning && !(T.air_psi > 1 && T.air_psi < g_air_min_psi);
             int down = T.cruise > 0.5f && s_down_now && air_ok;
             // A dip (PCC, Damien 11-10): a climb follows the descent, so let the truck run up to the band over the set
             // speed and carry that into the climb instead of braking it away. Latched to the bottom (there the road
@@ -2093,9 +2028,8 @@ static void cr_frame()
 static void cr_stop()
 {
     if (s_inc) { fclose(s_inc); s_inc = NULL; }
-    AH.r = 0; s_want_hold = 0; s_thr_pass = 0;
+    AH.r = 0; s_want_hold = 0; act_brake(ACT_HOLD, 0);   // (the actuator's own stop puts the request back to 0)
     if (g_csv) fflush(g_csv);
-    if (s_req_ours > 0) { char *ga = game_actor_safe(); if (ga) brake_request(ga, 0); }
     if (g_smart && g_smart_player == g_smart_player) game_cvar_set(g_smart, g_smart_player);
     if (g_acc && g_acc_player == g_acc_player && g_acc_ours == g_acc_ours) {
         game_cvar_set(g_acc, g_acc_player);
@@ -2120,26 +2054,17 @@ static void cr_reset(int level, const char *why)
     s_acc_armed = 0; s_hold_before = NAN;
     s_press_before = NAN;
     s_btn_held = 0;
-    // Auto Hold / hill start / our brake request back to 0
+    // Auto Hold / hill start / our brake wishes back to 0 (the actuator's own reset puts the request back to 0)
     AH.st = AH_OFF; AH.r = 0; AH.released = 0; AH.launch_t = 0; AH.grab_until = 0; AH.roll_m = 0; AH.mass_at = -10;
     s_want_hill = s_want_hold = s_want_curve = s_want_aeb = 0;
-    s_aeb_was = 0;
+    act_brake(ACT_HILL, 0); act_brake(ACT_HOLD, 0); act_brake(ACT_BEND, 0); act_brake(ACT_AEB, 0);
     { float m = AE.mass; memset(&AE, 0, sizeof AE); AE.mass = m; AE.gap_prev = AE.rate = AE.vl_prev = NAN; }  // AEB: no event spans a reset
     s_hs_armed = 0; s_hs_until = 0;
-    s_hill_was = s_hold_was = 0;
-    s_br_at = 0;
-    s_thr_pass = 0;
     s_sg_wait = 0;
     s_rearm_active = 0; s_dstar_sm = NAN;
     if (s_park_on && ga) park_release(ga, "reset");   // a parking brake we set does not outlive a teleport, truck change or load
     s_park_on = s_park_ok = 0; s_ah_hold_since = 0;
     if (g_dash_status == 'B') g_dash_status = 0;
-    if (s_req_ours > 0 && ga) {
-        float *req = (float *)(ga + GA_BRAKE_REQ);
-        if (*req == s_req_ours) *req = 0;
-    }
-    s_req_ours = 0;
-    s_hazard_mute = 0;
     s_ahead_ours = NAN; s_ahead_ignore = s_ahead_logged = -1;
     // calm cut-in / own-ACC filters
     s_lead_prev = -1; s_gap_rate = 0;
@@ -2162,7 +2087,6 @@ static void cr_reset(int level, const char *why)
         s_isa_last = -1;
         OA.t = 0;
         s_ah_k = 1;
-        s_air_low = 0;
         s_gacc_seen = NAN;
         if (g_smart && g_smart_player == g_smart_player) game_cvar_set(g_smart, smart_base());
         g_smart_ours = NAN;

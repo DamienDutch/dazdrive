@@ -139,7 +139,6 @@ void play_cue(int cue);
 void input_poll();
 const char *input_wheel_name();  // winmm name of the most button-rich present joystick ("" = none found yet)
 extern float g_volume;
-extern volatile float g_creep_brake;  // Creep: brake request it wants (crawl held on a descent; Cruise applies it)
 extern volatile int g_crawl_on;       // Creep: the driver has crawl switched on
 extern volatile int g_rolling;        // TrueShift has the truck in neutral (eco-roll)
 extern volatile float g_roll_boost_kmh;   // TrueShift asks Cruise for this much over the set speed (km/h) just before an eco-roll starts (0 = none)
@@ -180,7 +179,7 @@ static inline float overspeed_room(float set_ms)
     return r > 0 ? r : 0;
 }
 extern volatile int g_rsc_level;         // rollover guard: 0 off, 1 alert (tone, no throttle), 2 soft brake, 3 firm brake
-extern volatile float g_rsc_brake, g_rsc_thr_cap;   // what Cruise applies for it: a brake request 0..1, a throttle cap 0..1
+extern volatile float g_rsc_thr_cap;     // what Cruise applies for it: a throttle cap 0..1 (its brake wish goes to the actuator)
 extern float g_rsc_mode;                 // ini rollover_guard: 0 off, 1 tone only, 2 + no throttle, 3 + brake
 extern float g_rsc_bend;                 // ini rollover_bend: 1 = also the single-bend thresholds (off: only the swing check)
 void rsc_step(float dt);                // core/rsc.cpp, called from the cruise throttle stub
@@ -193,6 +192,26 @@ extern volatile char g_dash_flash;    // a letter to show on the dashboard for a
 extern volatile char g_dash_status;   // a letter shown while something holds (B hill-start brake, K creep); 0 = none
 extern double g_dash_flash_until;     // wall_s() until which it shows
 float wheel_radius();    // powered wheels, meters (0 if unknown)
+
+// ---------------------------------------------------------------- actuate.cpp
+// The actuator: one layer moves the pedals for every module. A module posts a wish under its owner tag; the wish is held
+// until the owner changes it (so a wish from frame_end lasts until the next frame); the layer merges all wishes once per
+// game tick and writes them. Brake wishes are in the game's request unit 0..1 (the top of actuate.cpp says why not m/s2).
+enum { ACT_CRUISE, ACT_HILL, ACT_HOLD, ACT_BEND, ACT_ACC, ACT_AEB, ACT_RSC, ACT_CREEP, ACT_LCX, ACT_N };
+struct act_wish { float brake, floor, cap, scale; };  // brake request 0..1; throttle at least floor (0 = none), at most cap (1 = none), times scale (1 = none)
+void act_brake(int owner, float want);
+void act_thr_floor(int owner, float v);
+void act_thr_cap(int owner, float v);
+void act_thr_scale(int owner, float k);
+const act_wish *act_wishes();    // [ACT_N]: what every owner holds now (traces, sims)
+float act_request();             // the brake request we hold in game_actor+0x17c now (0 = none)
+void act_brake_write(char *ga);  // merge the brake wishes and write the request (the tick does it; sims)
+int act_gate_ok();               // the Auto Hold throttle gate is patched: the pedal reaches the engine while only the hold asks
+extern float g_air_min_psi;      // [cruise] air_min_psi: below it our brake requests pause (holds and the AEB excepted)
+void act_start();                // m_core (config.cpp): hooks before the modules start
+void act_stop();
+void act_reset(int level, const char *why);
+const char *act_status();
 
 // ---------------------------------------------------------------- optional local build extras
 // A local build may add core/dev.cpp + core/dev.h (build.sh then defines DAZDRIVE_DEV). A release never has them: there

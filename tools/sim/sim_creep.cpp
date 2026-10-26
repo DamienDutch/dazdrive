@@ -35,7 +35,6 @@ void incident(const char *kind, const char *fmt, ...)
     printf("   INCIDENT %s: %s\n", kind, b);
 }
 const char *g_truck_unsupported;
-volatile float g_creep_brake;
 volatile char g_dash_flash, g_dash_status;
 volatile float g_creep_thr;
 volatile float g_clutch_ours = __builtin_nanf("");
@@ -63,6 +62,7 @@ int mem_readable(const void *, size_t) { return 0; }
 uintptr_t game_scan(const char *) { return 0; }
 int game_patch_tail(uintptr_t, void *) { return 0; }
 int game_patch_clutch_floor(uintptr_t, clutch_floor *) { return 0; }
+int game_patch_cf0_if(uintptr_t, int, const unsigned char *) { return 0; }
 int game_engage_init() { return 0; }
 void *game_gearbox() { return NULL; }
 char *game_actor_safe() { return NULL; }
@@ -74,6 +74,7 @@ void gb_set_target(void *, int) {}
 int gb_engage(void *, int) { return 0; }
 
 #include "modules/creep.cpp"
+#include "core/actuate.cpp"
 
 // ---- truck
 static struct { float v; int gear; double engage_at; int lock_ok; } M;

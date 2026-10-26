@@ -42,7 +42,6 @@ void incident(const char *kind, const char *fmt, ...)
     printf("   INCIDENT %s: %s\n", kind, b);
 }
 const char *g_truck_unsupported;
-volatile float g_creep_brake;
 volatile char g_dash_flash, g_dash_status;
 double g_dash_flash_until;
 static double t_now;

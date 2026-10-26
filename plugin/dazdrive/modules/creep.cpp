@@ -140,7 +140,7 @@ static void creep_control(const creep_in &in, float vd, float thr, float brake)
         g_cthr = clampv(want, g_cthr - step, g_cthr + step);
     } else g_cthr = 0;
     // Descent (Damien: like hill descent control): faster than the crawl speed with the pedals free ->
-    // a gentle brake request (Cruise applies it, hazards stay off), gone when you brake or give gas.
+    // a gentle brake request (the actuator applies it, hazards stay off), gone when you brake or give gas.
     float over = vd * 3.6f - fmaxf(p_descent_kmh, g_vt * 3.6f + 1);  // km/h above where braking starts (Damien: from 8)
     if (p_descent_brake > 0 && thr < 0.02f && brake < 0.01f && (over > 0 || (g_cbrake > 0 && over > -1)))
         g_cbrake = fminf(p_descent_brake, g_cbrake + 0.15f * in.dt);
@@ -495,7 +495,7 @@ static void ck_reset(int level, const char *why)
         g_cf.floor = 0;
         g_cf.inner = NULL;
         g_creep_thr = 0;
-        g_creep_brake = 0;
+        act_brake(ACT_CREEP, 0);
         if (g_dash_status == 'C') g_dash_status = 0;
     }
 }
@@ -513,7 +513,7 @@ static void ck_frame()
     char *inner = self ? gb_inner(self) : NULL;
     g_self = self;
     g_cf.inner = NULL;  // set below only while crawling: our clutch value then replaces the game's
-    if (!inner) { g_cf.floor = 0; g_f = 0; g_cthr = 0; g_creep_thr = 0; g_creep_brake = 0; g_cbrake = 0; g_on = 0; g_hold = 0; g_ln = 0; g_clutch_ours = NAN; lcx_off(); return; }
+    if (!inner) { g_cf.floor = 0; g_f = 0; g_cthr = 0; g_creep_thr = 0; act_brake(ACT_CREEP, 0); g_cbrake = 0; g_on = 0; g_hold = 0; g_ln = 0; g_clutch_ours = NAN; lcx_off(); return; }
     if (dt > 0.5f) ck_reset(RESET_SOFT, "long frame");
     if (dt <= 0 || dt > 0.5f) return;  // paused or a long hitch: no time step
 
@@ -582,7 +582,7 @@ static void ck_frame()
     g_cf.floor = g_ln ? g_lc : g_f;
     g_cf.inner = g_on || g_ln ? inner : NULL;
     g_creep_thr = g_cthr;
-    g_creep_brake = g_on ? g_cbrake : 0;
+    act_brake(ACT_CREEP, g_on ? g_cbrake : 0);   // the descent brake, through the one writer (core/actuate.cpp)
     if (p_letter > 0 && g_on) g_dash_status = 'C';
     else if (g_dash_status == 'C') g_dash_status = 0;
 
@@ -635,7 +635,7 @@ static void ck_stop()
     g_cf.floor = 0;  // give everything back
     g_ln = 0; g_clutch_ours = NAN; lcx_off();
     g_creep_thr = 0;
-    g_creep_brake = 0;
+    act_brake(ACT_CREEP, 0);
     g_hold = 0;
     if (g_csv) fflush(g_csv);
 }

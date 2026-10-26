@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-// [core]: settings of the suite itself (no code of its own).
+// [core]: settings of the suite itself; its hooks are the actuator's (core/actuate.cpp), which start before the modules.
 static float p_log_level, p_log_max_mb, p_csv_max_mb, p_incident_mb;
 static param g_params[] = {
     { "incident_mb", &p_incident_mb, 40, "incidents folder: something went wrong (hunting gearbox, a shift you fought, rpm limiter, stuck in neutral, AEB, ...) = one file with the 20 s before and 15 s after, with the log lines of that time. The folder is kept under this size (MB), oldest first; 0 = no incident files" },
@@ -16,7 +16,7 @@ static param g_params[] = {
     { "csv_max_mb", &p_csv_max_mb, 5, "a csv trace (log_level 2 only) moves to <name>.1 and starts again beyond this size (MB, 0.5-200): ~2.5 hours of driving per file" },
     { "log_max_mb", &p_log_max_mb, 5, "dazdrive.log moves to dazdrive.log.1 and starts again beyond this size (MB, 0.2-100). The log of the previous session stays as dazdrive.prev.log" },
 };
-module m_core = { "core", "Core", g_params, sizeof g_params / sizeof g_params[0], NULL, NULL, NULL, NULL };
+module m_core = { "core", "Core", g_params, sizeof g_params / sizeof g_params[0], act_start, NULL, NULL, act_stop, act_reset, act_status };
 
 static const struct { const char *sec, *key; float v; } k_standard[] = {
 #include "preset_standard.inc"

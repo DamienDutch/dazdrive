@@ -26,7 +26,6 @@ volatile int g_lcx;
 volatile float g_lcx_cap = 1;
 volatile float g_overspeed_cap = 5;
 volatile float g_pcc_need_kmh = NAN;
-volatile float g_creep_brake;
 int g_log_level = 2;
 incident_ctx g_inc = { 0, 0, 0, NAN, NAN };
 double g_incident_mb = 0;
@@ -68,6 +67,7 @@ float *game_patch_rip_float(uintptr_t, int, int, float) { return NULL; }
 int game_patch_feed_xmm1(uintptr_t, int, float *) { return 0; }
 int game_patch_skip_if(uintptr_t, int, const unsigned char *) { return 0; }
 int game_patch_zero_xmm_if(uintptr_t, int, int, const unsigned char *) { return 0; }
+int game_patch_cf0_if(uintptr_t, int, const unsigned char *) { return 0; }
 int mem_readable(const void *p, size_t) { return p != NULL; }
 static float g_sim_mass = 26000;
 static engine_info g_sim_eng;
@@ -109,6 +109,7 @@ void route_probe_limit(float) {}
 
 #include "modules/cruise.cpp"
 #include "core/rsc.cpp"
+#include "core/actuate.cpp"
 
 // ---- the game's cruise (incremental PI, see cruise-re notes § 1)
 static float stock_thr;
@@ -342,7 +343,8 @@ static void keys_test()
                 T.yaw = a / (T.speed * 6.2831853f);
                 rsc_step(1 / 60.0f);
                 if (g_rsc_level >= 2 && *lvl2_at < 0) *lvl2_at = t;
-                if (g_rsc_brake > *brake_max) *brake_max = g_rsc_brake;
+                float rb = act_wishes()[ACT_RSC].brake;   // the guard's brake wish as the actuator holds it
+                if (rb > *brake_max) *brake_max = rb;
                 if (g_rsc_level > *lvl_max) *lvl_max = g_rsc_level;
             }
             T.yaw = 0; rsc_step(1 / 60.0f);
@@ -366,7 +368,7 @@ static void keys_test()
         bad |= !(m0 == 0 && m1 == 1 && m2 >= 2 && w2 > 0.1f);
         printf("rollover guard: growing sway level %d, soft brake from %.1f s (brake %.2f), lane changes level %d, roundabout level %.0f\n", lm, l2, bm, lmb, lvl_normal);
         bad |= !(sway_ok && calm_ok && lvl_normal == 0);
-        T.yaw = 0; T.speed = 0; g_rsc_level = 0; g_rsc_brake = 0; g_rsc_thr_cap = 1;
+        T.yaw = 0; T.speed = 0; rsc_step(1 / 60.0f);   // under 40 km/h the guard resets itself: level 0, no brake wish, no throttle cap
     }
     T.speed_limit = 0;
     printf("keys test: %s\n", bad ? "FAIL" : "ok");
@@ -473,6 +475,7 @@ static ahres ah_run(const char *name, float grade_pct, int hard, int gate, float
     memset(GA, 0, sizeof GA);
     memset(&AH, 0, sizeof AH);
     g_low_ok = 1; g_sg_hold = 0; g_crawl_on = 0; s_gate_ok = gate; s_thr_pass = 0; s_req_ours = 0; s_want_hold = s_want_hill = 0;
+    act_brake(ACT_HOLD, 0); act_brake(ACT_HILL, 0);
     p_ah = old_hill_start ? 0 : 1; p_hill = old_hill_start == 2 ? 0 : 1; p_hill_pct = 3; p_hill_s = 3;
     g_sim_eng.torque = 2400; g_sim_eng.n_curve = 0; g_sim_eng.rpm_limit = 2200;
     g_sim_mass = 26000 / est_k;                      // est_k: the module thinks the truck is lighter / heavier than it is
@@ -769,19 +772,19 @@ int main(int argc, char **argv)
     {
         memset(GA, 0, sizeof GA); T.speed = 0; T.in_brake = 0.5f; T.in_thr = 0;
         T.place.orientation.pitch = atanf(0.05f) / 6.2831853f;
-        for (int k = 0; k < 30; k++) { t_now += 1 / 60.0; hill_start(GA); brake_request(GA, s_want_hill); }
+        for (int k = 0; k < 30; k++) { t_now += 1 / 60.0; hill_start(GA); act_brake(ACT_HILL, s_want_hill); act_brake_write(GA); }
         T.in_brake = 0;
         int held = 0;
-        for (int k = 0; k < 300; k++) { t_now += 1 / 60.0; *(float *)(GA + GA_BRAKE_REQ) = 0; hill_start(GA); brake_request(GA, s_want_hill); if (*(float *)(GA + GA_BRAKE_REQ) > 0) held++; if (k == 90) T.in_thr = 0.3f; }
+        for (int k = 0; k < 300; k++) { t_now += 1 / 60.0; *(float *)(GA + GA_BRAKE_REQ) = 0; hill_start(GA); act_brake(ACT_HILL, s_want_hill); act_brake_write(GA); if (*(float *)(GA + GA_BRAKE_REQ) > 0) held++; if (k == 90) T.in_thr = 0.3f; }
         printf("hill start 5%%: brake held %.1f s after release (gas at 1.5 s)\n", held / 60.0);
     }
     // same, game with its emergency brake option OFF (it never clears 0x17c; ts3c latch)
     {
         memset(GA, 0, sizeof GA); T.speed = 0; T.in_brake = 0.5f; T.in_thr = 0;
-        for (int k = 0; k < 30; k++) { t_now += 1 / 60.0; hill_start(GA); brake_request(GA, s_want_hill); }
+        for (int k = 0; k < 30; k++) { t_now += 1 / 60.0; hill_start(GA); act_brake(ACT_HILL, s_want_hill); act_brake_write(GA); }
         T.in_brake = 0;
         int held = 0;
-        for (int k = 0; k < 300; k++) { t_now += 1 / 60.0; hill_start(GA); brake_request(GA, s_want_hill); if (*(float *)(GA + GA_BRAKE_REQ) > 0) held++; if (k == 90) T.in_thr = 0.3f; }
+        for (int k = 0; k < 300; k++) { t_now += 1 / 60.0; hill_start(GA); act_brake(ACT_HILL, s_want_hill); act_brake_write(GA); if (*(float *)(GA + GA_BRAKE_REQ) > 0) held++; if (k == 90) T.in_thr = 0.3f; }
         printf("hill start 5%%, AEB off: brake held %.1f s, request at the end %.2f (must be 0)\n", held / 60.0, *(float *)(GA + GA_BRAKE_REQ));
     }
     ah_run("no hold at all 0% gentle (reference)", 0, 0, 1, 1.0f, 2, 0); ah_run("no hold at all 0% hard (reference)", 0, 1, 1, 1.0f, 2, 0);
@@ -906,10 +909,10 @@ int main(int argc, char **argv)
                 memset(&AH, 0, sizeof AH); memset(GA, 0, sizeof GA);
                 g_low_ok = 1; p_ah = 1; g_crawl_on = b.crawl; g_sg_hold = b.sg; T.parking_brake = b.park; T.gear = b.rev ? -1 : 0; T.dgear = T.gear;
                 T.engine_on = 1; T.speed = 0; T.in_brake = 0.5f; T.in_thr = 0; s_req_ours = 0;
-                for (int k = 0; k < 120; k++) { t_now += 1 / 60.0; auto_hold(GA, 1 / 60.0f); brake_request(GA, s_want_hold); }
+                for (int k = 0; k < 120; k++) { t_now += 1 / 60.0; auto_hold(GA, 1 / 60.0f); act_brake(ACT_HOLD, s_want_hold); act_brake_write(GA); }
                 T.in_brake = 0;
                 float mx = 0;
-                for (int k = 0; k < 120; k++) { t_now += 1 / 60.0; auto_hold(GA, 1 / 60.0f); brake_request(GA, s_want_hold); mx = fmaxf(mx, *(float *)(GA + GA_BRAKE_REQ)); }
+                for (int k = 0; k < 120; k++) { t_now += 1 / 60.0; auto_hold(GA, 1 / 60.0f); act_brake(ACT_HOLD, s_want_hold); act_brake_write(GA); mx = fmaxf(mx, *(float *)(GA + GA_BRAKE_REQ)); }
                 printf("Auto Hold blocked by %-14s: max request %.2f (must be 0)\n", b.n, mx);
                 bad |= mx > 0;
             }
