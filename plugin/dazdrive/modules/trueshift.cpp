@@ -17,6 +17,7 @@
 #include "../core/suite.h"
 #include "../core/game.h"
 #include "../core/route.h"
+#include "../core/vehicle.h"
 #include <math.h>
 #include <string.h>
 
@@ -190,12 +191,8 @@ static const char *const why_text[W_COUNT] = {
 
 static struct {
     void *self;
-    engine_info eng;
-    int eng_ok;
-    double eng_at;
-    float plateau;          // rpm where the torque curve reaches its plateau
-    float mass, grade_deg;
-    double mass_at;
+    int eng_seen;           // the engine line is logged for the engine the vehicle model (V.eng) has now ...
+    float eng_torque, eng_limit;   // ... which had these values
     float rpm_k;            // measured rpm / speed-model rpm (tire size etc.)
     float thr;              // throttle that counts: pedal, or damped cruise control
     float cc_thr;           // cruise control throttle, smoothed
@@ -293,7 +290,7 @@ static float smooth(float e0, float e1, float x)
     float t = clampf((x - e0) / (e1 - e0), 0, 1);
     return t * t * (3 - 2 * t);
 }
-static float grade_pct() { return tanf(S.grade_deg * 0.0174533f) * 100; }
+static float grade_pct() { return V.grade_pct; }
 static float idle_rpm() { return S.idle > 300 ? S.idle : p_idle; }
 
 static int n_gears()
@@ -317,34 +314,24 @@ static float force_at(int g, float v, float share)
     float r = wheel_radius();
     if (g < 1 || g > n_gears() || r <= 0.1f) return 0;
     float rpm = rpm_at(g, v);
-    float t = S.eng.torque * curve_factor(&S.eng, rpm) * share;
-    if (rpm > S.eng.rpm_limit) t = 0;
+    float t = V.eng.torque * curve_factor(&V.eng, rpm) * share;
+    if (rpm > V.eng.rpm_limit) t = 0;
     return t * T.ratio[g - 1] * T.diff * p_eta / r;
 }
 
 // Air drag area: the truck value from the ini, a car-like one for light vehicles.
-static float cda() { return S.mass > 0 && S.mass < 4500 ? 1.0f : p_cda; }
+static float cda() { return V.mass > 0 && V.mass < 4500 ? 1.0f : p_cda; }
 
 static float resist(float v)
 {
-    float s = sinf(S.grade_deg * 0.0174533f);
-    return S.mass * 9.81f * (s + p_crr) + 0.5f * 1.2f * cda() * v * v + S.f_bias;
+    float s = sinf(V.grade_deg * 0.0174533f);
+    return V.mass * 9.81f * (s + p_crr) + 0.5f * 1.2f * cda() * v * v + S.f_bias;
 }
 
 static float resist_grade(float v, float pct)
 {
     float s = sinf(atanf(pct / 100));
-    return S.mass * 9.81f * (s + p_crr) + 0.5f * 1.2f * cda() * v * v + S.f_bias;
-}
-
-// Start of the torque plateau: first curve point within 3% of the peak.
-static float find_plateau(const engine_info *e)
-{
-    float peak = 0;
-    for (int i = 0; i < e->n_curve; i++) peak = fmaxf(peak, e->curve[i][1]);
-    for (int i = 0; i < e->n_curve; i++)
-        if (e->curve[i][1] >= 0.97f * peak && e->curve[i][0] > 300) return e->curve[i][0];
-    return e->range[R_HIGH][0];
+    return V.mass * 9.81f * (s + p_crr) + 0.5f * 1.2f * cda() * v * v + S.f_bias;
 }
 
 // ---------------------------------------------------------------- shift points
@@ -366,30 +353,30 @@ static float eco_dn(int g)
 {
     int n = n_gears();
     float k = n > 1 ? (float)(g - 1) / (n - 1) : 1;
-    return lerpf(S.eng.range[R_LOW][0], S.eng.range[R_HIGH][0], k);
+    return lerpf(V.eng.range[R_LOW][0], V.eng.range[R_HIGH][0], k);
 }
 static float eco_up(int g)
 {
     int n = n_gears();
     float k = n > 1 ? (float)(g - 1) / (n - 1) : 1;
-    return lerpf(S.eng.range[R_LOW][1], S.eng.range[R_HIGH][1], k);
+    return lerpf(V.eng.range[R_LOW][1], V.eng.range[R_HIGH][1], k);
 }
 static float pw_k() { return smooth(p_power_from, p_power_full, S.demand); }
-static float pw_mid() { return 0.5f * (S.eng.range[R_POWER][0] + S.eng.range[R_POWER][1]); }
+static float pw_mid() { return 0.5f * (V.eng.range[R_POWER][0] + V.eng.range[R_POWER][1]); }
 static float up_pt(int g)
 {
     float mo = mode_rpm();
-    float u = fminf(lerpf(eco_up(g) + mo, S.eng.range[R_POWER][1] + 0.5f * mo, pw_k()), S.eng.rpm_limit * 0.94f);
+    float u = fminf(lerpf(eco_up(g) + mo, V.eng.range[R_POWER][1] + 0.5f * mo, pw_k()), V.eng.rpm_limit * 0.94f);
     // Eco: a soft ceiling (fuel); not during a kickdown
     if (p_mode_char > 0 && p_eco_ceil > 0 && S.mode == MODE_ECO && S.kick_until <= sim_s())
-        u = fminf(u, fmaxf(eco_up(g) + mo, S.eng.range[R_HIGH][1] + p_eco_ceil));
+        u = fminf(u, fmaxf(eco_up(g) + mo, V.eng.range[R_HIGH][1] + p_eco_ceil));
     return u;
 }
 // Light-load downshift point: below the plateau, so that an early upshift to
 // the plateau has room before it has to come back down.
 static float base_dn(int g)
 {
-    return fmaxf(idle_rpm() + 220, fminf(eco_dn(g), S.plateau - 100) + 0.5f * mode_rpm());
+    return fmaxf(idle_rpm() + 220, fminf(eco_dn(g), V.plateau - 100) + 0.5f * mode_rpm());
 }
 // The downshift point only rises with demand near full pedal: pressing on at
 // cruise in a low gear is not a request for power (kickdown and lugging are).
@@ -398,7 +385,7 @@ static float dn_k()
     float from = S.mode == MODE_ECO ? 0.9f : S.mode == MODE_POWER ? 0.75f : 0.85f;
     return smooth(from, p_power_full, S.demand);
 }
-static float dn_pt(int g) { return lerpf(base_dn(g), S.eng.range[R_POWER][0] + 0.5f * mode_rpm(), dn_k()); }
+static float dn_pt(int g) { return lerpf(base_dn(g), V.eng.range[R_POWER][0] + 0.5f * mode_rpm(), dn_k()); }
 // Pull (m/s2) below which a demand downshift makes sense; a light truck with
 // plenty of pull left keeps its gear (and may skip on the way up).
 static float a_power() { return S.mode == MODE_ECO ? 0.2f : S.mode == MODE_POWER ? 0.45f : 0.3f; }
@@ -409,7 +396,7 @@ static lesson learned();
 // downshift point plus hysteresis stays the lower bound, so it does not hunt back.
 static float cruise_floor(int g, float under = 0)
 {
-    return fmaxf(S.plateau + p_cruise_rpm + mode_rpm() - under, base_dn(g) + p_hyst + 50) + learned().rpm;
+    return fmaxf(V.plateau + p_cruise_rpm + mode_rpm() - under, base_dn(g) + p_hyst + 50) + learned().rpm;
 }
 
 static float skip_accel();
@@ -433,7 +420,7 @@ static float land_floor(int h, float a_h, float relax)
 static int skip_allowed() { return (int)p_max_skip; }
 // Pull a skipped-to gear must keep: less with a slow box (every shift is a
 // long gap without power). Damien (ts3b): skip also with a fast (DCT) box.
-static float skip_accel() { return p_skip_acc * (1.0f - 0.25f * smooth(0.4f, 1.5f, S.eng.shift_time)); }
+static float skip_accel() { return p_skip_acc * (1.0f - 0.25f * smooth(0.4f, 1.5f, V.eng.shift_time)); }
 
 // Highest gear above cur+1 (up to max_skip) an upshift at high demand may jump
 // to: lands on the plateau and still pulls hard and keeps most of the pull of
@@ -445,9 +432,9 @@ static int skip_target(int cur, float v, float f_res, float grade)
     if (grade > 0.02f || v * 3.6f < p_on_kmh) return best;
     float a_skip = skip_accel() * 2.0f;
     for (int h = cur + 2; h <= n && h <= cur + 1 + skip_allowed(); h++) {
-        float a_h = (force_at(h, v, 0.95f) - f_res) / S.mass;  // still accelerating hard: the plateau is enough
+        float a_h = (force_at(h, v, 0.95f) - f_res) / V.mass;  // still accelerating hard: the plateau is enough
         if (rpm_at(h, v) < fmaxf((a_h < a_power() ? dn_pt(h) : base_dn(h)) + p_hyst, idle_rpm() + 350)) break;
-        if ((force_at(h, v, 0.85f) - f_res) / S.mass < a_skip) break;
+        if ((force_at(h, v, 0.85f) - f_res) / V.mass < a_skip) break;
         if (force_at(h, v, 1.0f) - f_res < 0.7f * (force_at(cur + 1, v, 1.0f) - f_res)) break;
         best = h;
     }
@@ -462,9 +449,9 @@ static int pick_down(int cur, float v, float target, bool free = false)
     float best_err = 1e9f;
     for (int l = cur - 1; l >= 1; l--) {
         float rpm = rpm_at(l, v);
-        if (rpm > S.eng.rpm_limit * 0.93f) break;
+        if (rpm > V.eng.rpm_limit * 0.93f) break;
         // while braking nobody shifts up, so the upshift point means nothing there: only the limiter and the eco upshift point + 150 count
-        if (l < cur - 1 && rpm > (free ? fminf(S.eng.rpm_limit * 0.85f, eco_up(l) + 150) : up_pt(l) - p_hyst)) break;
+        if (l < cur - 1 && rpm > (free ? fminf(V.eng.rpm_limit * 0.85f, eco_up(l) + 150) : up_pt(l) - p_hyst)) break;
         float err = fabsf(rpm - target);
         if (err < best_err) { best_err = err; best = l; }
     }
@@ -511,11 +498,11 @@ static void up_held()
 // Fade with distance; start over when the load changes a lot (trailer).
 static void learn_fade(float dist_m)
 {
-    if (!(g_learn_mass > 0) || fabsf(S.mass - g_learn_mass) > 0.25f * g_learn_mass) {
+    if (!(g_learn_mass > 0) || fabsf(V.mass - g_learn_mass) > 0.25f * g_learn_mass) {
         if (g_learn_mass > 0 && (g_learn[0].rpm + g_learn[1].rpm + g_learn[2].rpm + g_learn[3].rpm + g_learn[4].rpm) > 0)
-            logline("load changed (%.1f -> %.1f t): learned upshift limits cleared", g_learn_mass / 1000, S.mass / 1000);
+            logline("load changed (%.1f -> %.1f t): learned upshift limits cleared", g_learn_mass / 1000, V.mass / 1000);
         memset(g_learn, 0, sizeof g_learn);
-        g_learn_mass = S.mass;
+        g_learn_mass = V.mass;
     }
     if (p_learn_km <= 0) return;
     float k = expf(-dist_m * 0.6931f / (p_learn_km * 1000));
@@ -559,7 +546,6 @@ static void ts_reset(int level, const char *why)
     S.gap_since = 0;                        // a pause in the gap state is not a stuck shift (the timer starts again)
     S.pedal_prev = clampf(T.in_thr, 0, 1);
     if (level >= RESET_LOAD) {
-        S.mass_at = none;                   // read the mass again at once
         S.f_bias = 0;
         S.f_need = 0;
         S.up_gear = 0;
@@ -571,9 +557,7 @@ static void ts_reset(int level, const char *why)
         memset(g_learn, 0, sizeof g_learn);
         g_learn_mass = 0;
         S.self = NULL;                      // refresh() starts over from the gearbox it sees next
-        S.eng_ok = 0;
-        S.eng_at = none;
-        S.mass = 0;
+        S.eng_seen = 0;                     // the engine line is logged again
         S.idle = 0;                         // idle is learned again (engine on 5 s, standing still)
         S.rpm_k = 1;
         S.rpm_odd_s = 0;
@@ -593,6 +577,9 @@ static void ts_reset(int level, const char *why)
 static void refresh(void *self)
 {
     double now = sim_s();
+    // The vehicle model (core/vehicle.cpp) first: inside the game's gearbox update the grade is this frame's and the
+    // mass is fresh right after a reset; another gearbox object makes the model start over as well.
+    vehicle_update(self);
     if (self != S.self) {
         // another truck (or the first update): start from its current gear
         if (S.self) ts_reset(RESET_HARD, "gearbox object changed");
@@ -601,33 +588,18 @@ static void refresh(void *self)
         S.hold_until = S.kick_until = 0;
         S.letter_state = -1;
     }
-    if (!S.eng_ok || now - S.eng_at > 5.0 || now < S.eng_at) {
-        engine_info e;
-        memset(&e, 0, sizeof e);
-        int ok = gb_engine(self, &e);
-        if (e.electric) unsupported("electric motor: no gearbox to shift");
-        if (ok && (!S.eng_ok || e.torque != S.eng.torque || e.rpm_limit != S.eng.rpm_limit)) {
-            logline("engine: %.0f Nm, limit %.0f rpm, %d curve points, plateau from %.0f rpm, ranges brake %.0f-%.0f "
-                    "low %.0f-%.0f high %.0f-%.0f power %.0f-%.0f, shift time %.2f s",
-                    e.torque, e.rpm_limit, e.n_curve, find_plateau(&e), e.range[0][0], e.range[0][1], e.range[1][0],
-                    e.range[1][1], e.range[2][0], e.range[2][1], e.range[3][0], e.range[3][1], e.shift_time);
-            S.letter_state = -1;
-            S.f_bias = 0;
-        }
-        if (!ok && S.eng_ok) logline("engine data unreadable, TrueShift pauses");
-        if (ok) { S.eng = e; S.plateau = find_plateau(&e); }
-        S.eng_ok = ok;
-        S.eng_at = now;
+    if (V.electric) unsupported("electric motor: no gearbox to shift");
+    if (V.eng_ok && (!S.eng_seen || V.eng.torque != S.eng_torque || V.eng.rpm_limit != S.eng_limit)) {
+        const engine_info *e = &V.eng;
+        logline("engine: %.0f Nm, limit %.0f rpm, %d curve points, plateau from %.0f rpm, ranges brake %.0f-%.0f "
+                "low %.0f-%.0f high %.0f-%.0f power %.0f-%.0f, shift time %.2f s",
+                e->torque, e->rpm_limit, e->n_curve, V.plateau, e->range[0][0], e->range[0][1], e->range[1][0],
+                e->range[1][1], e->range[2][0], e->range[2][1], e->range[3][0], e->range[3][1], e->shift_time);
+        S.letter_state = -1;
+        S.f_bias = 0;
+        S.eng_seen = 1; S.eng_torque = e->torque; S.eng_limit = e->rpm_limit;
     }
-    if (now - S.mass_at > 0.5 || now < S.mass_at) {
-        float m = game_mass();
-        if (m == m) {
-            if (!(S.mass > 0) || fabsf(m - S.mass) > 0.03f * S.mass)
-                logv(1, "mass %.1f t (trailer %s, cargo %.1f t)", m / 1000, T.trailer ? "yes" : "no", T.cargo_mass / 1000);
-            S.mass = m;
-        } else if (!(S.mass > 0)) S.mass = 20000;
-        S.mass_at = now;
-    }
+    if (!V.eng_ok && S.eng_seen) { logline("engine data unreadable, TrueShift pauses"); S.eng_seen = 0; }
 
     // Mode from the game's adaptive-shift keybind, once a second. The game
     // ignores this cvar while cruise control is on (game_actor+0x199); we don't.
@@ -637,8 +609,6 @@ static void refresh(void *self)
         mode_update();
     }
 
-    float gd = game_grade_deg(self);
-    S.grade_deg = gd == gd ? gd : 0;
     if (now - S.grade_at >= 1 || now < S.grade_at) {
         S.grade_at = now;
         memmove(S.grade_hist + 1, S.grade_hist, sizeof S.grade_hist - sizeof S.grade_hist[0]);
@@ -698,7 +668,7 @@ static void refresh(void *self)
     else S.demand += (float)(dt / (tau + dt)) * (S.thr - S.demand);
 
     // Tractive force asked for (clutch closed only): up in 0.3 s, down in 3 s.
-    if (g > 0 && clutch_seen() < 0.1f && S.eng_ok) {
+    if (g > 0 && clutch_seen() < 0.1f && V.eng_ok) {
         float f = force_at(g, v, S.thr);
         if (S.seed_force) { S.f_need = f; S.seed_force = 0; }   // right after a hard reset: what this pedal asks now, not 0
         else { float tf = f > S.f_need ? 0.3f : 3.0f; S.f_need += (float)(dt / (tf + dt)) * (f - S.f_need); }
@@ -707,10 +677,10 @@ static void refresh(void *self)
     // Extra resistance the model misses (tires, wind, a wrong mass): force the
     // engine gives minus modeled resistance minus mass x acceleration, while
     // pulling steadily with the clutch closed. Slow (20 s), limited to +-2 % grade.
-    if (g > 0 && clutch_seen() < 0.02f && S.eng_ok && v > 6 && eff > 0.1f && T.in_brake < 0.02f && !T.motor_brake &&
+    if (g > 0 && clutch_seen() < 0.02f && V.eng_ok && v > 6 && eff > 0.1f && T.in_brake < 0.02f && !T.motor_brake &&
         !T.retarder && S.eb_level < 0.01f && now - S.shift_at > 2) {
-        float r = force_at(g, v, eff) - (resist(v) - S.f_bias) - S.mass * T.accel;
-        float lim = S.mass * 9.81f * 0.02f;
+        float r = force_at(g, v, eff) - (resist(v) - S.f_bias) - V.mass * T.accel;
+        float lim = V.mass * 9.81f * 0.02f;
         S.f_bias = clampf(S.f_bias + (float)(dt / (20 + dt)) * (r - S.f_bias), -lim, lim);
     }
 
@@ -784,7 +754,7 @@ static int pick_for_speed(float v, float target)
     float best_err = 1e9f;
     for (int g = 1; g <= n_gears(); g++) {
         float r = rpm_at(g, v);
-        if (r > S.eng.rpm_limit * 0.9f || r < base_dn(g) + p_hyst) continue;
+        if (r > V.eng.rpm_limit * 0.9f || r < base_dn(g) + p_hyst) continue;
         float err = fabsf(r - target);
         if (err < best_err) { best_err = err; best = g; }
     }
@@ -798,7 +768,7 @@ static int pick_for_speed(float v, float target)
 // Back into drive after a roll: a gear for what is asked now.
 static int roll_exit_gear(float v, int ebrake, float brake)
 {
-    float target = ebrake ? S.eng.range[R_BRAKE][0] + 100
+    float target = ebrake ? V.eng.range[R_BRAKE][0] + 100
                    : brake > 0.02f ? eco_up(1) - 200
                    : lerpf(cruise_floor(n_gears()) + 100, pw_mid(), pw_k());
     return pick_for_speed(v, target);
@@ -837,7 +807,7 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
     // how far under the set speed it may roll: Eco most, Power least (Damien 11-10: between 1 and 2 km/h)
     float under = (S.mode == MODE_ECO ? p_roll_under_eco : S.mode == MODE_POWER ? p_roll_under_pw : p_roll_under) * band_scale(T.cruise);
     if (cc && (S.rolling ? (kmh > set + 3 || kmh_soon < set - under) : (kmh > set + 2 + boost || kmh < set - 0.5f))) return 0;
-    float a_n = -f_res / S.mass;  // acceleration in neutral
+    float a_n = -f_res / V.mass;  // acceleration in neutral
     int rk = p_lookahead > 0 && route_ok();
     if (rk) {
         float steep = route_min_grade(0, fmaxf(200, v * 15));
@@ -855,7 +825,7 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
         float a_pred = a_n;
         if (rk) {
             float g = route_grade(0, v * 20);
-            if (g == g) a_pred = -(resist_grade(v, g)) / S.mass;
+            if (g == g) a_pred = -(resist_grade(v, g)) / V.mass;
         }
         // at most ~3 km/h lost in 20 s (Damien 11-10: it rolled at 90 on the flat down to 85, pointless;
         // -0.15 allowed a flat road at speed): in practice a slight descent
@@ -896,10 +866,10 @@ static int decide_manual(int cur, float rpm, float v, double since, int *why)
     float brake = fmaxf(T.in_brake, T.eff_brake);
     *why = W_M;
     if (p_m_style < 1) return cur;
-    if (rpm > S.eng.rpm_limit * (ebrake ? 0.99f : 0.96f) && cur < n) { *why = W_M_REV_LIMIT; return cur + 1; }
+    if (rpm > V.eng.rpm_limit * (ebrake ? 0.99f : 0.96f) && cur < n) { *why = W_M_REV_LIMIT; return cur + 1; }
     if (rpm < idle_rpm() + 120 && cur > 1) { *why = W_M_STALL; return pick_down(cur, v, eco_dn(1) + 300); }
     if (p_m_style < 2) return cur;
-    if (S.kick_until > now && rpm < S.eng.range[R_POWER][0] + 100 && cur > 1 && since > 0.3) {
+    if (S.kick_until > now && rpm < V.eng.range[R_POWER][0] + 100 && cur > 1 && since > 0.3) {
         int l = pick_down(cur, v, pw_mid() + 100);
         if (l < cur) { *why = W_M_KICKDOWN; return l; }
     }
@@ -909,7 +879,7 @@ static int decide_manual(int cur, float rpm, float v, double since, int *why)
     }
     float fmax = force_at(cur, v, 1.0f);
     if (S.thr > 0.8f && rpm < p_m_lug && cur > 1 && since > 2 &&
-        (T.accel < 0.05f || fmax - resist(v) < S.mass * 0.03f)) {
+        (T.accel < 0.05f || fmax - resist(v) < V.mass * 0.03f)) {
         *why = W_M_LUGGING;
         return cur - 1;
     }
@@ -924,16 +894,16 @@ static int decide_manual(int cur, float rpm, float v, double since, int *why)
 // The band under the set speed (m/s): full at 40 t, 60 % solo, 60 % in Power.
 static float crest_band()
 {
-    float k = fminf(1.0f, fmaxf(0.0f, (S.mass - 12000) / 28000));
+    float k = fminf(1.0f, fmaxf(0.0f, (V.mass - 12000) / 28000));
     return p_crest_band > 0 ? p_crest_band * (0.6f + 0.4f * k) * (S.mode == MODE_POWER ? 0.6f : 1.0f) / 3.6f : 0;
 }
 // Lowest rpm the band may pull the gear down to: just under the torque plateau.
-static float band_rpm() { return fmaxf(S.plateau - 150, idle_rpm() + 200); }
+static float band_rpm() { return fmaxf(V.plateau - 150, idle_rpm() + 200); }
 
 static int top_reachable(int cur, float v, float *top_m, float *floor_kmh)
 {
     *top_m = -1;
-    float c = p_crest_band > 0 && p_lookahead > 0 && route_ok() && S.mass > 500 ? route_crest_m(fmaxf(400, v * 25)) : -1;
+    float c = p_crest_band > 0 && p_lookahead > 0 && route_ok() && V.mass > 500 ? route_crest_m(fmaxf(400, v * 25)) : -1;
     // a false flat is no top: the road must not climb again right after it
     // (the reference speed is forgotten only after 3 s without a top: one tick without one must not lower it)
     double now = sim_s();
@@ -950,7 +920,7 @@ static int top_reachable(int cur, float v, float *top_m, float *floor_kmh)
     float g = route_grade(0, c);
     if (v <= v_floor || !(g == g)) return 0;
     float f = fminf(force_at(cur, v, 1.0f), force_at(cur, v_floor, 1.0f)), r = resist_grade(v, g);
-    return v * v + 2 * c * (f - r) / S.mass >= v_floor * v_floor;
+    return v * v + 2 * c * (f - r) / V.mass >= v_floor * v_floor;
 }
 
 // PCC momentum (Damien 11-10: only what is needed; solo differs from loaded): the extra speed over the set speed at
@@ -960,7 +930,7 @@ static int top_reachable(int cur, float v, float *top_m, float *floor_kmh)
 static float climb_need_kmh()
 {
     float set = T.cruise;
-    if (!(set > 5) || !route_ok() || !S.eng_ok || S.mass < 500 || p_lookahead <= 0) return NAN;
+    if (!(set > 5) || !route_ok() || !V.eng_ok || V.mass < 500 || p_lookahead <= 0) return NAN;
     int g = 0;
     for (int i = n_gears(); i >= 1; i--) if (rpm_at(i, set) >= band_rpm()) { g = i; break; }
     if (!g) return NAN;
@@ -974,7 +944,7 @@ static float climb_need_kmh()
             float gr = route_grade(x, x + 25);
             if (!(gr == gr)) break;
             if (x > foot + 50 && route_grade(x, x + 50) < 0.3f) break;  // over the top
-            float a = (force_at(g, v, 1.0f) - resist_grade(v, gr)) / S.mass;
+            float a = (force_at(g, v, 1.0f) - resist_grade(v, gr)) / V.mass;
             v = sqrtf(fmaxf(1.0f, v * v + 2 * 25 * a));
             if (v > top) v = top;  // the cruise does not run away above the speed it started with
             if (v < set - 1 / 3.6f || rpm_at(g, v) < band_rpm()) { ok = 0; break; }
@@ -990,7 +960,7 @@ static int decide_gear(void *self, int *why)
     int cur = gb_gear(self), n = n_gears();
     float v = fabsf(T.speed);
     double now = sim_s();
-    if (!S.eng_ok || n < 2 || cur < 0 || cur > n || wheel_radius() <= 0.1f) { *why = W_NO_DATA; return 0; }
+    if (!V.eng_ok || n < 2 || cur < 0 || cur > n || wheel_radius() <= 0.1f) { *why = W_NO_DATA; return 0; }
 
     float f_res = resist(v);
     float brake = fmaxf(T.in_brake, T.eff_brake);
@@ -1012,7 +982,7 @@ static int decide_gear(void *self, int *why)
     if (!S.ours) { *why = W_LOW_SPEED; return 0; }
 
     float rpm = rpm_at(cur, v);
-    float lim = S.eng.rpm_limit;
+    float lim = V.eng.rpm_limit;
     float thr = S.thr;
     // lift-off by the pedal itself: the game's throttle reads 0.08 at pedal 0 (24-10, 1831 s), which hid the coast and the junction check
     int coast_p = (T.cruise > 0.5f ? thr : clampf(T.in_thr, 0, 1)) < 0.05f;
@@ -1028,7 +998,7 @@ static int decide_gear(void *self, int *why)
     // gear after neutral): straight to a gear that fits the speed.
     if (rpm > lim * 1.05f) { *why = W_WRONG_GEAR; return pick_for_speed(v, pw_mid()); }
     if (rpm > lim * (ebrake ? 0.99f : 0.96f) && cur < n) {
-        int h = ebrake || S.thr < 0.75f ? cur + 1 : skip_target(cur, v, f_res, sinf(S.grade_deg * 0.0174533f));
+        int h = ebrake || S.thr < 0.75f ? cur + 1 : skip_target(cur, v, f_res, sinf(V.grade_deg * 0.0174533f));
         *why = h > cur + 1 ? W_REV_LIMIT_SKIP : W_REV_LIMIT;
         S.hold_until = 0;  // a held hint gear ends here, the next gear is TrueShift's again (friend 11-10: 2-3-4-5-6 all at the limiter)
         return h;
@@ -1036,17 +1006,17 @@ static int decide_gear(void *self, int *why)
     if (rpm < idle_rpm() + 120 && cur > 1) { *why = W_STALL; return pick_down(cur, v, eco_dn(1) + 300); }
 
     // not right after a launch shift (ts4o: 1->3 by the game at 10 km/h with the pedal floored, then 3->2->3)
-    if (kick && rpm < S.eng.range[R_POWER][0] + 100 && cur > 1 && since > 2.0 && clutch_seen() < 0.1f && v * 3.6f > 15) {
+    if (kick && rpm < V.eng.range[R_POWER][0] + 100 && cur > 1 && since > 2.0 && clutch_seen() < 0.1f && v * 3.6f > 15) {
         int l = pick_down(cur, v, pw_mid() + 100);
         // never into a gear that is at its upshift point a moment later (ts3a: 3->2->3 at 13 km/h)
-        while (l < cur && rpm_at(l, v) > S.eng.range[R_POWER][1] - 100) l++;
+        while (l < cur && rpm_at(l, v) > V.eng.range[R_POWER][1] - 100) l++;
         if (l < cur) { *why = W_KICKDOWN; return l; }
     }
 
     // A hint gear is held, but not up to the limiter: pulling past the top of the power range hands it back
     // (friend 11-10: hint down to 2 at 8 km/h, then 2->3->4->5->6 each at ~1900 rpm with 30% throttle).
     if (S.hold_until > now) {
-        if (!(rpm > S.eng.range[R_POWER][1] && S.thr > 0.05f)) { *why = W_HINT_HOLD; return cur; }
+        if (!(rpm > V.eng.range[R_POWER][1] && S.thr > 0.05f)) { *why = W_HINT_HOLD; return cur; }
         S.hold_until = 0;
         logv(1, "hint hold ended at %.0f rpm (top of the power range)", rpm);
     }
@@ -1083,7 +1053,7 @@ static int decide_gear(void *self, int *why)
     // Engine brake / retarder: keep the rpm up, more for a stronger stage; the
     // full brake range when the game's "downshift with engine brake" is on.
     if ((T.motor_brake || S.eb_level > 0.01f) && thr < 0.05f) {
-        float lo = S.eng.range[R_BRAKE][0], hi = S.eng.range[R_BRAKE][1];
+        float lo = V.eng.range[R_BRAKE][0], hi = V.eng.range[R_BRAKE][1];
         int full = p_eb_down > 0 || (p_eb_down < 0 && S.eb_full);
         float keep = full ? lo : lerpf(fminf(by_mode(p_eb_light - 100, p_eb_light, p_eb_light + 150), lo), lo, S.eb_level);
         if (rpm < keep - 50 && cur > 1 && since > p_min_gap) {
@@ -1092,7 +1062,7 @@ static int decide_gear(void *self, int *why)
             // from the game (Damien 11-10: "gas and engine brake at once", 9->8->...->2 one by one)
             if (p_eb_skip > 0 && l == cur - 1 && cur > 2) {
                 float r2 = rpm_at(cur - 2, v);
-                if (r2 < hi - 100 && r2 < S.eng.rpm_limit * 0.93f) l = cur - 2;
+                if (r2 < hi - 100 && r2 < V.eng.rpm_limit * 0.93f) l = cur - 2;
             }
             if (l < cur && rpm_at(l, v) < hi) { *why = full ? W_ENGINE_BRAKE : W_ENGINE_BRAKE_LEVEL; return l; }
         }
@@ -1104,7 +1074,7 @@ static int decide_gear(void *self, int *why)
         // stay above the game's neutral threshold, which rises with brake^2
         float b = fminf(brake, 1.0f), opens = 0.8f * idle_rpm() + b * b * idle_rpm();
         float floor = fmaxf(fmaxf(idle_rpm() + 250, eco_dn(cur) - 100), opens + 250);
-        if (slow_ahead) floor = fmaxf(floor, S.plateau + 200);
+        if (slow_ahead) floor = fmaxf(floor, V.plateau + 200);
         if (rpm < floor && cur > 1 && since > 0.5) {
             // land high, so that fewer downshifts are needed on the way down
             int l = pick_down(cur, v, eco_up(1) + by_mode(-300, -200, -100), true);
@@ -1143,18 +1113,18 @@ static int decide_gear(void *self, int *why)
     // ACC raise it slowly) or for the rpm to sag (Damien 24-10, 545-553 s: 10-11 % at 43 km/h in 12, held to 759 rpm and 35 km/h, the lead
     // pulled away 13 -> 58 m). It needs real throttle (> 0.25) and a speed that is falling, so a burst of gas on the flat does nothing.
     int cannot_hold = thr > 0.25f && fmax < 1.05f * f_res && T.accel < -0.1f;
-    int lug = (thr > 0.8f || cannot_hold) && T.accel < 0 && fmax - f_res < S.mass * 0.03f && rpm < S.eng.range[R_POWER][0] + 100;
+    int lug = (thr > 0.8f || cannot_hold) && T.accel < 0 && fmax - f_res < V.mass * 0.03f && rpm < V.eng.range[R_POWER][0] + 100;
     // The demand-raised point only counts when this gear lacks pull.
-    float dn_eff = (fmax - f_res) / S.mass < a_power() ? S.dn_pt : base_dn(cur);
+    float dn_eff = (fmax - f_res) / V.mass < a_power() ? S.dn_pt : base_dn(cur);
     // A gear that can still just hold the speed on a climb (needs 75-100 % of its full-throttle force) while the speed falls under real
     // throttle: the downshift point rises smoothly to the torque plateau, so the revs do not sag first (Damien 24-10: "subtieler, zonder bog
     // down"). No kickdown behavior: it needs the load, not a burst of throttle; over 100 % the lugging rule above takes over.
     float load = fmax > 1 ? f_res / fmax : 0, dn_base = dn_eff;
-    if (p_load_from < 1 && thr > 0.25f && T.accel < -0.1f && load > p_load_from) dn_eff = fmaxf(dn_eff, lerpf(dn_eff, S.plateau + 50, smooth(p_load_from, 1.0f, load)));
+    if (p_load_from < 1 && thr > 0.25f && T.accel < -0.1f && load > p_load_from) dn_eff = fmaxf(dn_eff, lerpf(dn_eff, V.plateau + 50, smooth(p_load_from, 1.0f, load)));
     if (cur > 1 && (rpm < dn_eff || lug)) {
         // maneuvering (Damien 24-10, 3856-3877 s: 6>4>5>3>4>5>6>7>8>9 in 21 s between 6 and 25 km/h): at a gentle pedal and a low speed only
         // a near-stall or lugging takes a gear off, not the demand-based downshift point
-        if (p_calm > 0 && S.mass > 6000 && v * 3.6f < p_calm && !lug && !kick && thr < 0.6f && rpm > idle_rpm() + 230) { *why = W_LOW_SPEED_HOLD; return cur; }
+        if (p_calm > 0 && V.mass > 6000 && v * 3.6f < p_calm && !lug && !kick && thr < 0.6f && rpm > idle_rpm() + 230) { *why = W_LOW_SPEED_HOLD; return cur; }
         int deep = rpm < dn_base - 100 || rpm < idle_rpm() + 250;   // the load-raised point does not skip the anti-hunt dwell
         if (S.shift_dir > 0 && since < p_dwell_ud && !deep && !lug) { *why = W_ANTI_HUNT_DOWN; return cur; }
         // Almost over the top: hold on, it gets easier in a moment.
@@ -1172,7 +1142,7 @@ static int decide_gear(void *self, int *why)
         // In the cruise band (PCC): a few km/h under the set speed and this gear still pulls on this grade (not
         // just lugging along): let the speed come back slowly instead of a downshift for pull. Not with the driver's
         // own pedal (overtaking with cruise on wants the pull).
-        if (T.cruise > 0.5f && !kick && T.in_thr < 0.1f && v >= T.cruise - crest_band() && rpm > band_rpm() && (fmax - f_res) / S.mass > 0.06f) {
+        if (T.cruise > 0.5f && !kick && T.in_thr < 0.1f && v >= T.cruise - crest_band() && rpm > band_rpm() && (fmax - f_res) / V.mass > 0.06f) {
             *why = W_CRUISE_BAND;
             return cur;
         }
@@ -1190,7 +1160,7 @@ static int decide_gear(void *self, int *why)
         if (sim_s() - said > 10) { said = sim_s(); logline("air %.0f psi: keeping the rpm up to charge it", T.air_psi); }
         if (rpm < p_air_rpm - 250 && cur > 1) {
             int l = pick_down(cur, v, p_air_rpm + 100);
-            if (l < cur && rpm_at(l, v) < S.eng.rpm_limit * 0.9f) { *why = W_AIR_CHARGE; return l; }
+            if (l < cur && rpm_at(l, v) < V.eng.rpm_limit * 0.9f) { *why = W_AIR_CHARGE; return l; }
         }
         if (cur < n && rpm_at(cur + 1, v) < p_air_rpm) { *why = W_AIR_CHARGE; return cur; }
     }
@@ -1199,7 +1169,7 @@ static int decide_gear(void *self, int *why)
 
     int coast = coast_p;
     int skips = skip_allowed();
-    float grade = sinf(S.grade_deg * 0.0174533f);
+    float grade = sinf(V.grade_deg * 0.0174533f);
     // No skipping right after taking over from the game (it may have started
     // in a high gear) or close above the takeover speed.
     // The launch is the exception (Damien 12-10: 1 -> 2 -> 3 -> 4 -> 5 one by one between 12 and 20 km/h, "skip one, also in Eco"): from
@@ -1207,7 +1177,7 @@ static int decide_gear(void *self, int *why)
     // (while pulling away only 1 s after the takeover, else 3: the game starts a light truck in 4 and the next two shifts come within
     // seconds; after a pause or a teleport the gear may be wrong; the rpm and pull checks below still stop a skip that lands too low)
     if (!(cur <= 2 && v * 3.6f >= p_on_kmh) && (now - S.ours_at < (S.ours_launch ? 1.0 : 3.0) || v * 3.6f < p_on_kmh + 5)) skips = 0;
-    float v2 = fmaxf(0.5f, v - f_res / S.mass * S.eng.shift_time);
+    float v2 = fmaxf(0.5f, v - f_res / V.mass * V.eng.shift_time);
 
     // Early upshift: light load, the new gear lands on the torque plateau and
     // gives the force asked for now with reserve to spare. Failed attempts
@@ -1243,7 +1213,7 @@ static int decide_gear(void *self, int *why)
             if (force_at(h, v2, 1.0f) < k * need) break;
             // on a climb not into a gear the load rule (load_down_from) would take off again as soon as the speed dips
             if (p_load_from < 1 && grade > 0.01f && need > p_load_from * force_at(h, v2, 1.0f)) break;
-            if (h > cur + 1 && (grade > 0.02f || (force_at(h, v2, 0.85f) - f_res) / S.mass < 0)) break;
+            if (h > cur + 1 && (grade > 0.02f || (force_at(h, v2, 0.85f) - f_res) / V.mass < 0)) break;
             best = h;
         }
         // Light pull and no skip fits yet: do not take the single early upshift but keep the gear and let the revs build up past the
@@ -1260,7 +1230,7 @@ static int decide_gear(void *self, int *why)
             // the landing at today's speed, so the skip then failed on 'rpm too low after shift' and became a single step)
             skip_rpm = rh > 1 ? fmaxf(low * (rc / rh) * (v / fmaxf(v2, 0.5f)), S.up_pt + 10) : 0;
             float t_to = (skip_rpm - rpm) / fmaxf(1.0f, rpm * T.accel / v);
-            if (skip_rpm > 0 && skip_rpm <= fminf(S.up_pt + p_skip_over, 0.85f * S.eng.rpm_limit) && t_to <= p_skip_wait &&
+            if (skip_rpm > 0 && skip_rpm <= fminf(S.up_pt + p_skip_over, 0.85f * V.eng.rpm_limit) && t_to <= p_skip_wait &&
                 (S.skip_wait_at == 0 || now - S.skip_wait_at <= p_skip_wait)) {
                 if (S.skip_wait_at == 0) S.skip_wait_at = now;
                 S.skip_wait_last = now;
@@ -1281,7 +1251,7 @@ static int decide_gear(void *self, int *why)
     float g_up = gp > 1.5f ? fmaxf(gp, S.pk) : gp;   // the peak only while still climbing (over the crest it is the route's job)
     if (g_ahead == g_ahead) g_up = fmaxf(g_up, g_ahead);
     float f_up = fmaxf(f_res, resist_grade(v, g_up));
-    float v2u = fmaxf(0.5f, v - f_up / S.mass * S.eng.shift_time);
+    float v2u = fmaxf(0.5f, v - f_up / V.mass * V.eng.shift_time);
     if (cur < n && rpm > S.up_pt + (coast ? by_mode(50.0f, 200.0f, 200.0f) : 0)) {
         // Power: just off the pedal the gear stays (3 s), unless the revs are nearly at the limit
         if (coast && S.mode == MODE_POWER && p_mode_char > 0 && now - S.pedal_on_at < 3 && rpm < lim * 0.9f) { *why = W_POWER_HOLDS; return cur; }
@@ -1297,12 +1267,12 @@ static int decide_gear(void *self, int *why)
         const char *block = "";
         for (int h = cur + 1; h <= n && h <= maxg; h++) {
             float rh = rpm_at(h, v2u);
-            float a_h = (force_at(h, v2u, 0.95f) - f_up) / S.mass;
-            if (rh < land_floor(h, a_h, h > cur + 1 ? skip_relax(v2u, (force_at(h, v2u, clampf(S.demand, 0.1f, 1.0f)) - f_up) / S.mass) : 0)) {
+            float a_h = (force_at(h, v2u, 0.95f) - f_up) / V.mass;
+            if (rh < land_floor(h, a_h, h > cur + 1 ? skip_relax(v2u, (force_at(h, v2u, clampf(S.demand, 0.1f, 1.0f)) - f_up) / V.mass) : 0)) {
                 block = "rpm too low after shift";
                 break;
             }
-            if (!coast && (force_at(h, v2u, 0.95f) - f_up) / S.mass < a_req) { block = "not enough pull"; break; }
+            if (!coast && (force_at(h, v2u, 0.95f) - f_up) / V.mass < a_req) { block = "not enough pull"; break; }
             // on a climb the new gear must carry the load under load_down_from, or the load rule shifts straight back (10 > 9 > 10 > 8, 25-10)
             if (!coast && p_load_from < 1 && g_up > 1.0f && f_up > p_load_from * force_at(h, v2u, 1.0f)) { block = "too much load after shift"; break; }
             if (!coast && learned().res > 0 && rh < fmaxf(dn_pt(h) + p_hyst, idle_rpm() + 350) + learned().rpm &&
@@ -1311,7 +1281,7 @@ static int decide_gear(void *self, int *why)
                 // At high demand only when the skipped-to gear still pulls hard (light truck).
                 bool pull_away = v2u < 20 / 3.6f;   // (25-10, Damien: under 20 km/h a skip is fine even at full pedal)
                 float a_skip = skip_accel() * (S.demand > 0.75f && !pull_away ? 2.0f : 1.0f);
-                if (grade > 0.02f || (force_at(h, v2u, 0.85f) - f_up) / S.mass < a_skip) {   // (coasting never gets here: maxg)
+                if (grade > 0.02f || (force_at(h, v2u, 0.85f) - f_up) / V.mass < a_skip) {   // (coasting never gets here: maxg)
                     block = grade > 0.02f ? "skip: climbing" : "skip: too little pull in the skipped-to gear";
                     break;
                 }
@@ -1326,14 +1296,14 @@ static int decide_gear(void *self, int *why)
             if (best == cur + 1 && maxg > cur + 1 && cur + 2 <= n && (T.in_thr < 0.3f || v < 25 / 3.6f) && now - S.skip_log_at > 5) {
                 S.skip_log_at = now;
                 logv(2, "single up %d->%d, no skip: %s (%.0f km/h, %.0f rpm, pedal %.2f, demand %.2f, grade %.1f%%, %.1f t)", cur, best,
-                     block[0] ? block : "the next gear above was not tried", v * 3.6f, rpm, T.in_thr, S.demand, grade_pct(), S.mass / 1000);
+                     block[0] ? block : "the next gear above was not tried", v * 3.6f, rpm, T.in_thr, S.demand, grade_pct(), V.mass / 1000);
             }
             S.skip_wait_at = 0; *why = best - cur > 1 ? W_UP_SKIP : W_UP; return best;
         }
         if (now - S.blocked_log_at > 10) {
             S.blocked_log_at = now;
             logline("up blocked in %d: %s (%.0f km/h, %.0f rpm, demand %.2f, grade %.1f%%, %.1f t)", cur, block,
-                    v * 3.6f, rpm, S.demand, grade_pct(), S.mass / 1000);
+                    v * 3.6f, rpm, S.demand, grade_pct(), V.mass / 1000);
         }
         *why = W_UP_BLOCKED;
         return cur;
@@ -1411,7 +1381,7 @@ static void note_gear_change(void *self)
         logv(1, "shift %d->%d by hint at %.0f km/h: hold %.0f s", prev, g, v * 3.6f, hh);
     } else {
         logv(1, "shift %d->%d (%s) at %.0f km/h, %.0f rpm, pedal %.2f, demand %.2f, grade %.1f%%, %.1f t, %s", prev,
-                g, why ? why_text[why] : "?", v * 3.6f, T.rpm, T.in_thr, S.demand, grade_pct(), S.mass / 1000,
+                g, why ? why_text[why] : "?", v * 3.6f, T.rpm, T.in_thr, S.demand, grade_pct(), V.mass / 1000,
                 mode_name[S.mode]);
     }
 }
@@ -1430,14 +1400,14 @@ static void launch_correct(void *self)
     if (lcx && !prev_lcx) done = 0;  // launch control just armed: pick the start gear again, with the brake held
     prev_lcx = lcx;
     if (kmh > 6) { done = 0; return; }
-    if (done || kmh > 2.5f || !g_active || p_launch_fix <= 0 || p_start_fix <= 0 || p_launch_max <= 0 || T.parking_brake || (T.in_brake > 0.3f && !lcx) || !S.eng_ok || (!lcx && (S.mode == MODE_M || S.mode == MODE_POWER))) return;
+    if (done || kmh > 2.5f || !g_active || p_launch_fix <= 0 || p_start_fix <= 0 || p_launch_max <= 0 || T.parking_brake || (T.in_brake > 0.3f && !lcx) || !V.eng_ok || (!lcx && (S.mode == MODE_M || S.mode == MODE_POWER))) return;
     int cur = gb_gear(self);
-    if (cur < 1 || gb_state(self) != 0 || now - S.shift_at < 1.0 || S.rolling || g_crawl_on || S.mass < 3000) return;
+    if (cur < 1 || gb_state(self) != 0 || now - S.shift_at < 1.0 || S.rolling || g_crawl_on || V.mass < 3000) return;
     // at a standstill with the pedal still up: the gear for a gentle pull-away (0.3); with the pedal down: for that pedal
     int pick = launch_pick(cur, fmaxf(clampf(T.in_thr, 0, 1), 0.3f));
     done = 1;
     if (pick > cur && takeover_launch_ok(kmh)) {
-        logline("launch: the game started in %d, the physics say %d (%.1f t, grade %.1f%%): shifting at %.1f km/h", cur, pick, S.mass / 1000, grade_pct(), kmh);
+        logline("launch: the game started in %d, the physics say %d (%.1f t, grade %.1f%%): shifting at %.1f km/h", cur, pick, V.mass / 1000, grade_pct(), kmh);
         S.launch_want = pick; S.launch_at = now;
         gb_set_target(self, pick); gb_force(self);
         S.commanded = pick; S.cmd_why = W_START_CORRECTED;
@@ -1574,7 +1544,7 @@ static void tail_pre(void *self)
 static int launch_pick(int stock, float thr)
 {
     int pick = stock;
-    if (p_start_fix > 0 && takeover() && S.eng_ok && wheel_radius() > 0.1f && stock <= n_gears()) {
+    if (p_start_fix > 0 && takeover() && V.eng_ok && wheel_radius() > 0.1f && stock <= n_gears()) {
         float r = wheel_radius(), f_res = resist(0);
         // Above the game's pick: only by physics (lock speed and slip time at this mass and grade), never by a gear count,
         // because every gearbox numbers its gears differently (Damien 13-10: "look at the gear ratio, not the number").
@@ -1586,7 +1556,7 @@ static int launch_pick(int stock, float thr)
         for (int g = raise ? n_gears() : stock; g >= 1; g--) {
             float ratio = T.ratio[g - 1] * T.diff;
             float v_lock = lrpm / (ratio * 9.5493f) * r;
-            float a = (S.eng.torque * p_launch_torque * ratio * p_eta / r - f_res) / S.mass;
+            float a = (V.eng.torque * p_launch_torque * ratio * p_eta / r - f_res) / V.mass;
             if (g > stock && v_lock * 3.6f > (lcx ? 30.0f : p_launch_max)) continue;
             if (a > 0 && v_lock / a <= limit) { pick = g; break; }
         }
@@ -1598,12 +1568,12 @@ static int stub_start(void *self)
 {
     int stock = o_start(self);
     if (!g_active || stock <= 0) return stock;
-    S.mass_at = -1e9;  // fresh mass for the start
+    vehicle_mass_stale();  // fresh mass for the start
     refresh(self);
     // Engaging while moving (after an eco-roll or neutral): never the start
     // gear, a gear that fits the speed.
     float v = fabsf(T.speed);
-    if (takeover() && S.eng_ok && v * 3.6f > p_off_kmh && wheel_radius() > 0.1f) {
+    if (takeover() && V.eng_ok && v * 3.6f > p_off_kmh && wheel_radius() > 0.1f) {
         S.rolling = 0;
         S.roll_at = sim_s();
         // the demand filter lags a pedal that goes down hard right at the engage (25-10, 2397 s: full pedal at a junction, demand 0.02, gear 10
@@ -1620,7 +1590,7 @@ static int stub_start(void *self)
     static double logged_at;
     if (sim_s() - logged_at > 2) {
         logged_at = sim_s();
-        logv(1, "start gear %d (game %d), %.1f t, grade %.1f%%, pedal %.2f", pick, stock, S.mass / 1000, grade_pct(),
+        logv(1, "start gear %d (game %d), %.1f t, grade %.1f%%, pedal %.2f", pick, stock, V.mass / 1000, grade_pct(),
                 thr);
     }
     S.commanded = pick;
@@ -1702,7 +1672,7 @@ static void watch_engine()
     static int armed = 1;
     double now = sim_s();
     int driving = g_active && !S.unsupported && takeover() && S.mode != MODE_M && T.engine_on && !T.paused && T.gear > 0;
-    float lim = S.eng.rpm_limit > 500 ? S.eng.rpm_limit : T.rpm_limit;
+    float lim = V.eng.rpm_limit > 500 ? V.eng.rpm_limit : T.rpm_limit;
     if (driving && lim > 500 && T.rpm > 0.985f * lim && T.retarder == 0 && !T.motor_brake) {
         if (!hi_at) hi_at = now;
         if (armed && now - hi_at > 0.6) {
@@ -1732,7 +1702,7 @@ static void overspeed_tone()
     static int said;
     double now = sim_s();
     if (now < tone_at) tone_at = 0;  // the sim clock started again (new session)
-    float lim = S.eng.rpm_limit > 500 ? S.eng.rpm_limit : T.rpm_limit;
+    float lim = V.eng.rpm_limit > 500 ? V.eng.rpm_limit : T.rpm_limit;
     int on = g_active && takeover() && S.mode == MODE_M && T.engine_on && !T.paused && T.gear > 0 && lim > 500;
     if (!on || T.rpm < 0.98f * lim) { over_at = 0; said = 0; return; }
     if (T.rpm < 1.03f * lim) return;
@@ -1760,7 +1730,7 @@ static void ts_frame()
         g_inc.flags = (g_inc.flags & ~(INC_ROLL | INC_HOLD)) | (g_rolling ? INC_ROLL : 0) | (S.hold_until > sim_s() ? INC_HOLD : 0);
         if (on) { watch_engine(); overspeed_tone(); }
     }
-    DEV_NOTE(gearbox(g_active && !S.unsupported && !manual_box() ? mode_letter[S.mode] : 0, S.mass, grade_pct()));
+    DEV_NOTE(gearbox(g_active && !S.unsupported && !manual_box() ? mode_letter[S.mode] : 0, V.mass, grade_pct()));
     {
         static double at;
         if (wall_s() - at > 0.5 || wall_s() < at) { at = wall_s(); g_pcc_need_kmh = g_active && !S.unsupported ? climb_need_kmh() : NAN; }
@@ -1800,7 +1770,7 @@ static void ts_frame()
     fprintf(g_trace, "%.2f,%.1f,%.0f,%d,%d,%d,%s,%.2f,%.2f,%.2f,%d,%u,%.0f,%.2f,%.2f,%.2f,%.0f,%.0f,%d,%d,%.2f,%.3f,%.2f,"
             "%c,%.2f,%.1f,%.0f,%d,%.2f,%.2f,%.2f,%.0f,%d,%d,%.0f,%.0f,%.0f\n",
             now, fabsf(T.speed) * 3.6f, T.rpm, T.gear, S.target, S.want, S.why ? S.why : "", T.in_thr,
-            T.eff_thr, T.in_brake, T.motor_brake, T.retarder, T.cruise * 3.6f, grade_pct(), S.mass / 1000, S.demand,
+            T.eff_thr, T.in_brake, T.motor_brake, T.retarder, T.cruise * 3.6f, grade_pct(), V.mass / 1000, S.demand,
             S.up_pt, S.dn_pt, S.hold_until > sim, S.kick_until > sim, T.accel, S.rpm_k, T.eff_clutch,
             mode_letter[S.mode], S.thr, S.f_need / 1000, S.floor_rpm, S.ours, S.eb_level, S.f_bias / 1000, S.strain, learned().rpm, S.rolling, route_ok(),
             route_crest_m(2000), route_junction_m(), idle_rpm());

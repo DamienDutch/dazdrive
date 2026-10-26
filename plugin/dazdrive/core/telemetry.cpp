@@ -4,6 +4,7 @@
 #include <string.h>
 #include <math.h>
 #include "route.h"
+#include "vehicle.h"
 
 #include "eurotrucks2/scssdk_eut2.h"
 #include "eurotrucks2/scssdk_telemetry_eut2.h"
@@ -67,6 +68,7 @@ void session_reset(int level, const char *why)
         route_reset();
         g_truck_unsupported = NULL;  // judged again for the (possibly other) truck
     }
+    vehicle_reset(level);
     for (int m = 0; m < g_n_modules; m++)
         if (g_modules[m]->reset) g_modules[m]->reset(level, why);
     DEV_NOTE(reset(level, why));

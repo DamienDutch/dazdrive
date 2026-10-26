@@ -4,6 +4,7 @@
 #include "suite.h"
 #include "game.h"
 #include "route.h"
+#include "vehicle.h"
 #include <string.h>
 
 #include "common/scssdk_telemetry_common_configs.h"
@@ -35,6 +36,7 @@ static SCSAPI_VOID ev_frame_end(const scs_event_t, const void *const, const scs_
 {
     telemetry_frame();
     if (L) route_update();
+    vehicle_frame();
     input_poll();
     for (int m = 0; m < g_n_modules; m++)
         if (g_modules[m]->frame) g_modules[m]->frame();

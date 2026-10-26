@@ -6,6 +6,7 @@
 #include "core/suite.h"
 #include "core/game.h"
 #include "core/route.h"
+#include "core/vehicle.h"
 #include <math.h>
 #include <initializer_list>
 #include <stdarg.h>
@@ -262,11 +263,14 @@ static double up_rpm_sum; static int up_n;
 static double up_rpm_min, rpm_all_sum, rpm_all_t, skip_rpm_min, skip_pull_min; static int skips_up, hunts_ts, shifts_ts;   // RELAX study: landing rpm, mean rpm below 50 km/h, skips, and shifts/hunting above the takeover speed
 static double rpm_sum, rpm_t;   // time-weighted rpm in the second half
 
+// A session reset as core/telemetry.cpp session_reset does it: the vehicle model first, then the module.
+static void sim_reset(int level, const char *why) { vehicle_reset(level); if (m_trueshift.reset) m_trueshift.reset(level, why); }
+
 static int g_rst_every = 0, g_rst_level = 0;   // robustness runs: inject a session reset every N seconds
 static void tick(double dt, int stats)
 {
     t_now += dt;
-    if (g_rst_every > 0 && fmod(t_now, g_rst_every) < dt && m_trueshift.reset) m_trueshift.reset(g_rst_level, "sim");
+    if (g_rst_every > 0 && fmod(t_now, g_rst_every) < dt) sim_reset(g_rst_level, "sim");
     T.sim_time = (scs_timestamp_t)(t_now * 1e6);
     float rpm = rpm_now();
     float idle = TORQUE < 1000 ? 750 : 600;
@@ -277,6 +281,7 @@ static void tick(double dt, int stats)
     T.engine_on = 1; T.gear = M.gear; T.dgear = M.gear;
     if (M.road) M.grade_pct = M.road(M.s);
     telemetry_frame();
+    vehicle_frame();
     m_trueshift.frame();
     // gearbox
     if (M.state && t_now >= M.shift_end) {
@@ -505,7 +510,7 @@ static int g_tp_done, g_tp_ups, g_tp_downs; static double g_tp_up_at;
 static void c_teleport(double t)
 {
     M.pedal = 1; M.grade_pct = t < 20 ? 6 : 2;
-    if (t >= 20 && !g_tp_done) { g_tp_done = 1; g_tp_ups = ups; g_tp_downs = shifts - ups; m_trueshift.reset(RESET_HARD, "sim: teleport onto a 2 % climb"); printf("  (teleport: 6 %% -> 2 %%)\n"); }
+    if (t >= 20 && !g_tp_done) { g_tp_done = 1; g_tp_ups = ups; g_tp_downs = shifts - ups; sim_reset(RESET_HARD, "sim: teleport onto a 2 % climb"); printf("  (teleport: 6 %% -> 2 %%)\n"); }
     if (g_tp_done && g_tp_up_at < 0 && ups > g_tp_ups) g_tp_up_at = t;
 }
 
@@ -693,7 +698,7 @@ int main(int argc, char **argv)
         m_trueshift.config(&cfg);
         run("X3 electric / 2-gear truck: TrueShift must leave the gears to the game", {40000, 80, 2, 60}, c_full);
         T.fwd_gears = 12;
-        m_trueshift.reset(RESET_HARD, "sim: back to the diesel");
+        sim_reset(RESET_HARD, "sim: back to the diesel");
     }
     float st;
     run("L1 13.4 t, Eco, game starts in 4 at 12 km/h, full throttle (ride 12-10 1 > 4 > 5 > 6)", {13400, 12, 4, 50, 10.0f, 1.0f}, c_full);
@@ -741,7 +746,7 @@ int main(int argc, char **argv)
     run("CAR3 2.5 t pickup holds 100", {2500, 100, 6, 60}, c_car_100);
     // Reset scenarios, last: they move the clock and the module's once-a-second polls, which would shift the runs above a little.
     use_volvo();
-    m_trueshift.reset(RESET_HARD, "sim: the Volvo again");
+    sim_reset(RESET_HARD, "sim: the Volvo again");
     g_tp_done = 0; g_tp_up_at = -1;
     { int f0 = n_failed, i0 = g_n_incidents;
     run("X4 40 t full pedal on 6 %, at 20 s a teleport (HARD reset) onto 2 % at the same speed", {40000, 45, 8, 60}, c_teleport);
@@ -760,7 +765,7 @@ int main(int argc, char **argv)
         for (int k = 0; k < 120 && M.parked; k++) {
             t_now += 1 / 60.0; T.sim_time = (scs_timestamp_t)(t_now * 1e6);
             T.speed = M.v; T.gear = 0; T.dgear = 0; T.in_thr = 0; T.eff_thr = 0; T.eff_clutch = 1; T.engine_on = 1; T.rpm = 600;
-            if (k == 60) m_trueshift.reset(RESET_SOFT, "sim: pause menu");
+            if (k == 60) sim_reset(RESET_SOFT, "sim: pause menu");
             s_tail(SELF);
         }
         printf("\nX5 gap state at 40 km/h, a pause 1.0 s into it: engaged %.2f s after the pause as 'stuck for %.1f s' (expect ~0.3 and 0.3), incidents %d (expect 0)\n",
