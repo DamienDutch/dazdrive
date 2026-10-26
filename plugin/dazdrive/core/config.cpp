@@ -16,8 +16,9 @@ static param g_params[] = {
     { "csv_max_mb", &p_csv_max_mb, 5, "a csv trace (log_level 2 only) moves to <name>.1 and starts again beyond this size (MB, 0.5-200): ~2.5 hours of driving per file" },
     { "log_max_mb", &p_log_max_mb, 5, "dazdrive.log moves to dazdrive.log.1 and starts again beyond this size (MB, 0.2-100). The log of the previous session stays as dazdrive.prev.log" },
     { "retarder_hook", &g_retarder_hook, 0, "1 = install a hook on the retarder torque of the game's drivetrain, so that the suite can scale it for the player's truck (only the deceleration assist's soften does; otherwise the torque stays as it is). The dashboard, the animation and the lever keep showing the game's own retarder step. 0 = the game's retarder is left alone" },
+    { "dash_messages", &g_dash_messages, 0, "1 = the short dashboard letters of the other modules (ACC distance, ISA, lane keeping, crawl mode, hill start and Auto Hold) are also shown while TrueShift does not show its mode letter (TrueShift off, its dash_letter 0, or a truck it leaves to the game); when they are over, the letter the game had comes back. 0 = they are only shown over TrueShift's mode letter" },
 };
-module m_core = { "core", "Core", g_params, sizeof g_params / sizeof g_params[0], act_start, NULL, NULL, act_stop, act_reset, act_status };
+module m_core = { "core", "Core", g_params, sizeof g_params / sizeof g_params[0], act_start, disp_frame, NULL, act_stop, act_reset, act_status };
 
 static const struct { const char *sec, *key; float v; } k_standard[] = {
 #include "preset_standard.inc"
@@ -26,7 +27,7 @@ static const struct { const char *sec, *key; float v; } k_standard[] = {
 // Bounds for the keys where a stray value would do harm (steer to the stop, brake for every bend, stop for roundabouts,
 // a brake request above 1, a log that rotates every line). Everything else only has to be finite and sane in size.
 static const struct { const char *sec, *key; float lo, hi; } k_bounds[] = {
-    { "core", "log_level", 0, 2 }, { "core", "incident_mb", 0, 500 }, { "core", "csv_max_mb", 0.5f, 200 }, { "core", "log_max_mb", 0.2f, 100 }, { "core", "retarder_hook", 0, 1 },
+    { "core", "log_level", 0, 2 }, { "core", "incident_mb", 0, 500 }, { "core", "csv_max_mb", 0.5f, 200 }, { "core", "log_max_mb", 0.2f, 100 }, { "core", "retarder_hook", 0, 1 }, { "core", "dash_messages", 0, 1 },
     { "trueshift", "takeover_kmh", 0, 60 }, { "trueshift", "handback_kmh", 0, 60 }, { "trueshift", "takeover_rpm", 0, 3000 }, { "trueshift", "hint_hold_s", 0, 120 },
     { "trueshift", "min_gap_s", 0, 10 }, { "trueshift", "max_skip", 0, 6 }, { "trueshift", "kickdown_pedal", 0.3f, 1 },
     { "trueshift", "power_from", 0.05f, 1 }, { "trueshift", "power_full", 0.1f, 1 }, { "trueshift", "eco_reserve", 1, 5 },

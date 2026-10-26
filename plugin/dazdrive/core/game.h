@@ -143,7 +143,7 @@ float game_grade_deg(void *self);           // positive uphill; NAN if unknown
 float game_adaptive();                      // g_adaptive_shift: 0 off, 10 eco, 3 normal, 1.67 power; NAN if unknown
 int game_adaptive_blocked();                // game_actor flag that disables adaptive mode; -1 if unknown
 void *game_gearbox();                       // the player truck's gearbox object via game_actor; NULL if not sane
-int game_letter(void *self, char c);        // dashboard: transmission auto_mode_name := c; 1 done, 0 not found
+int game_letter(void *self, char c);        // dashboard: transmission auto_mode_name := c (0 = the letter the game had before our first write); 1 done, 0 not found
 int game_ebrake_downshift(void *self);      // the game wants a downshift into the engine-brake range now: 1/0, -1 unknown
 float game_ebrake_level(void *self);        // engine brake strength 0..1 (stage/stages, held = 1, auto); -1 unknown
 float curve_factor(const engine_info *e, float rpm);

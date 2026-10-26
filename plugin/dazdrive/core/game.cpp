@@ -918,6 +918,8 @@ void *game_gearbox()
     return in && readable(in + L->i_gear, 4) ? gb : NULL;
 }
 
+static char *s_letter_buf;       // the buffer we wrote last
+static char s_letter_game;       // the letter the game had in it before our first write
 int game_letter(void *self, char c)
 {
     char *in = gb_inner(self);
@@ -928,6 +930,8 @@ int game_letter(void *self, char c)
         if (o && readable(o + L->x_tx_alt, 8)) a = auto_name(*(char **)(o + L->x_tx_alt));
     }
     if (!a) return 0;
+    if (a != s_letter_buf) { s_letter_buf = a; s_letter_game = *a; }
+    if (!c) c = s_letter_game;
     if (*a != c) *a = c;
     return 1;
 }

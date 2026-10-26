@@ -284,6 +284,8 @@ int disp_post(int owner, int level, char c, double secs);       // c 0 = withdra
 char disp_pick();                // the letter the writer would show now (0 = nobody posts)
 int disp_write(void *gb, char *shown);   // write the picked letter (the mode owner calls it at its own rate): 1 done, 0 buffer not found, -1 nothing to show
 const char *disp_letters();      // every letter that may be shown (game.cpp's check of the buffer uses it)
+void disp_frame();               // m_core (config.cpp): the writer while no mode letter is posted ([core] dash_messages)
+extern float g_dash_messages;    // [core] dash_messages: 1 = flashes and statuses also without a mode letter
 
 // ---------------------------------------------------------------- optional local build extras
 // A local build may add core/dev.cpp + core/dev.h (build.sh then defines DAZDRIVE_DEV). A release never has them: there

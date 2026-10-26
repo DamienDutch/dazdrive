@@ -18,6 +18,8 @@ const char *disp_letters() { return k_letters; }
 struct disp_wish { char c; double until; unsigned seq; };   // c 0 = none; until 0 = held until changed, else wall_s(); seq = order of the posts
 static disp_wish D[DISP_N][DISP_LEVELS];
 static unsigned s_seq;
+static int s_ours;               // the buffer holds a letter we wrote (the game's own goes back when nobody posts, dash_messages only)
+float g_dash_messages;           // [core] dash_messages
 
 int disp_post(int owner, int level, char c, double secs)
 {
@@ -56,5 +58,36 @@ int disp_write(void *gb, char *shown)
     char c = disp_pick();
     if (shown) *shown = c;
     if (!c) return -1;
-    return game_letter(gb, c);
+    int r = game_letter(gb, c);
+    if (r > 0) s_ours = 1;
+    return r;
+}
+
+// [core] dash_messages: while no mode letter is posted (TrueShift off, its dash_letter 0, a truck it leaves to the game) the
+// flashes and statuses are written here, at TrueShift's rate, over the game's own letter, which comes back when they are over.
+// With a mode letter posted its owner runs the writer.
+void disp_frame()
+{
+    static double at;
+    static int state = -1;       // one log line per change: -1 unknown, 0 not found, 1 written
+    double now = wall_s();
+    if (g_dash_messages <= 0 || now - at < 0.25) return;
+    for (int o = 0; o < DISP_N; o++) if (D[o][DISP_MODE].c) return;
+    at = now;
+    if (T.shifter[0] && strcmp(T.shifter, "automatic") && strcmp(T.shifter, "arcade")) return;   // a manual box shows its gear
+    void *gb = game_gearbox();
+    if (!gb) return;
+    char c;
+    int r = disp_write(gb, &c);
+    if (r < 0) {
+        if (!s_ours) return;
+        s_ours = 0;
+        c = 0;
+        r = game_letter(gb, 0);   // the game's own letter back
+    }
+    if (r != state) {
+        if (r > 0) logline("dashboard letter without the mode letter works (%c)", c ? c : '-');
+        else logline("dashboard letter without the mode letter: auto_mode_name string not found");
+        state = r;
+    }
 }

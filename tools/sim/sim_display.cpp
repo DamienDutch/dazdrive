@@ -1,6 +1,7 @@
 // Offline test of the dashboard letter (core/display.cpp): the priority (a flash over a status over the mode letter, the latest
 // post within a priority, a flash's time), and that a letter outside the table, which game.cpp's auto_name() would not accept,
-// can never be posted or written. The layer is included, so its statics are reachable. Build+run: tools/sim/run_display.sh
+// can never be posted or written, and the writer of [core] dash_messages (no mode letter posted: flashes and statuses over the
+// game's own letter, which comes back, at 4 Hz; quiet with the key at 0 or a mode letter posted). The layer is included, so its statics are reachable. Build+run: tools/sim/run_display.sh
 #include "core/suite.h"
 #include "core/game.h"
 #include <string.h>
@@ -10,8 +11,8 @@ void logline(const char *, ...) {}
 static double t_now;
 double wall_s() { return t_now; }
 static char letter = 'A';   // the transmission's buffer
-static int writes;
-int game_letter(void *, char c) { letter = c; writes++; return 1; }
+static int writes, restores;
+int game_letter(void *, char c) { if (!c) { c = 'A'; restores++; } letter = c; writes++; return 1; }   // 0: the game's own (A here)
 static int gb;
 void *game_gearbox() { return &gb; }
 #include "core/display.cpp"
@@ -75,10 +76,56 @@ static void table()
     disp_post(DISP_TS, DISP_MODE, 0, 0);
 }
 
+// The writer of [core] dash_messages, run every 1/60 s for secs; returns the writes.
+static int frames(double secs)
+{
+    int w0 = writes;
+    for (double e = 0; e < secs - 1e-9; e += 1 / 60.0) { disp_frame(); t_now += 1 / 60.0; }
+    return writes - w0;
+}
+
+static void messages()
+{
+    printf("--- without a mode letter ([core] dash_messages)\n");
+    letter = 'A'; s_ours = 0; t_now = 100;
+    g_dash_messages = 0;
+    disp_post(DISP_LANE, DISP_FLASH, 'L', 1.5);
+    int w = frames(1);
+    printf("key 0, flash L: %d writes, letter %c (A)\n", w, letter); check(w == 0 && letter == 'A', "key 0: nothing written");
+    g_dash_messages = 1;
+    disp_post(DISP_TS, DISP_MODE, 'E', 0);
+    w = frames(1);
+    printf("key 1, a mode letter posted: %d writes (0: its owner writes)\n", w); check(w == 0, "mode owner writes, not the frame");
+    disp_post(DISP_TS, DISP_MODE, 0, 0);
+    disp_post(DISP_LANE, DISP_FLASH, 'L', 1.5);
+    w = frames(1);
+    printf("key 1, flash L: %d writes in 1 s (4 Hz), letter %c\n", w, letter); check(w >= 4 && w <= 5 && letter == 'L', "flash written at 4 Hz");
+    w = frames(1);
+    printf("the flash is over: letter %c, %d game's-own write(s)\n", letter, restores); check(letter == 'A' && restores == 1, "game's letter back once");
+    disp_post(DISP_CRUISE, DISP_STATUS, 'B', 0);
+    frames(0.5);
+    printf("status B -> %c\n", letter); check(letter == 'B', "status shown");
+    disp_post(DISP_CREEP, DISP_FLASH, 'X', 1.5);
+    frames(0.5);
+    printf("+ flash X -> %c\n", letter); check(letter == 'X', "flash over the status");
+    frames(1.5);
+    printf("flash over -> %c\n", letter); check(letter == 'B', "back to the status");
+    disp_post(DISP_CRUISE, DISP_STATUS, 0, 0);
+    w = frames(2);
+    printf("status withdrawn -> %c, %d game's-own writes in all, %d writes in the last 2 s (1)\n", letter, restores, w);
+    check(letter == 'A' && restores == 2 && w == 1, "game's letter back once, then quiet");
+    disp_post(DISP_TS, DISP_MODE, 'D', 0); disp_write(&gb, NULL);   // TrueShift shows D, then stops (an unsupported truck)
+    disp_post(DISP_TS, DISP_MODE, 0, 0);
+    frames(0.5);
+    printf("TrueShift wrote D and withdrew -> %c (A)\n", letter); check(letter == 'A' && restores == 3, "game's letter after TrueShift's");
+    g_dash_messages = 0;
+}
+
 int main()
 {
     priority();
     table();
+    messages();
     printf(bad ? "FAILED\n" : "all checks passed\n");
     return bad;
 }
