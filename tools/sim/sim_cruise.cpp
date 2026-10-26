@@ -117,6 +117,9 @@ int low_sg_zone() { return s_low_on && s_low_zone; }
 #include "core/rsc.cpp"
 #include "core/actuate.cpp"
 #include "core/vehicle.cpp"
+namespace dc {   // the deceleration assist (its statics share names with Cruise's), for the stop by the lever
+#include "modules/decel.cpp"
+}
 
 // ---- the game's cruise (incremental PI, see cruise-re notes § 1)
 static float stock_thr;
@@ -635,6 +638,106 @@ static ahres ah_run(const char *name, float grade_pct, int hard, int gate, float
     return r;
 }
 
+// A stop by the lever: the retarder (F/m: step 2 of 4 gives 1.6 m/s2 at 18 t, built up over 0.4 s, faded out between 6 and 4.5
+// km/h), the box in neutral under 5.2 km/h, the service brake gain m/s2 per request 1.0 (4) behind a 0.15 s lag, rolling resistance
+// 0.006. modules/decel.cpp brakes in its frame, Cruise and the actuator in the game tick (both 60 Hz). The driver puts the lever
+// back 2 s after the stop and gives gas 0.35 in 1 s 4 s after it (the engine and the gate as in ah_run).
+// held_min: the lowest request from the stop to the gas; roll_m: the most the truck moved either way in that time;
+// req_after / hold_after: the highest request, and Auto Hold's own, 1-4 s after the stop (the assist brakes a roll back by itself).
+// drop: the most the request fell under its peak from 0.5 km/h on until the gas (the hand-over from the assist to the hold).
+struct lvres { double t_stop; float held_min, roll_m, req_end, t_move, req_after, hold_after, drop; };
+static lvres lever_run(const char *name, float grade_pct, float mass_t, int ah, int lever_key, int engine_only, int owner_late, float gain = 4)
+{
+    memset(GA, 0, sizeof GA);
+    memset(&AH, 0, sizeof AH);
+    g_low_ok = 1; g_sg_hold = 0; g_crawl_on = 0; s_gate_ok = 1; s_thr_pass = 0; s_req_ours = 0; s_want_hold = s_want_hill = 0;
+    for (int o = 0; o < ACT_N; o++) act_brake(o, 0);
+    s_dec_was = 0; s_aeb_was = s_hill_was = s_hold_was = 0; s_br_at = t_now;
+    p_ah = (float)ah; p_ah_lever = (float)lever_key; p_hill = 1; p_hill_pct = 3; p_hill_s = 3; s_ah_k = 1;
+    for (auto &q : dc::g_params) *q.val = q.def;
+    dc::p_enabled = 1; dc::D = decltype(dc::D)();
+    int hooked = s_hooked; s_hooked = 1;
+    s_low_on = owner_late; s_low_stopped = 0;
+    g_sim_eng.torque = 2400; g_sim_eng.n_curve = 0; g_sim_eng.rpm_limit = 2200;
+    const float m = mass_t * 1000, ratio = 12.0f, diff = 2.64f, R = 0.5f;
+    g_sim_mass = m;
+    memset(T.ratio, 0, sizeof T.ratio); T.ratio[0] = ratio; T.diff = diff; T.fwd_gears = 12; T.wheels = 1;
+    T.engine_on = 1; T.parking_brake = 0; T.paused = 0; T.dgear = 0; T.gear = 3; T.eff_thr = 0; T.eff_clutch = 0; T.rpm = 900; T.cruise = 0;
+    T.air_warning = 0; T.in_brake = 0; T.in_thr = 0;
+    T.retarder = engine_only ? 0 : 2; T.retarder_steps = engine_only ? 0 : 4; T.motor_brake = engine_only;
+    o_cruise = stock_cruise; p_smooth = 1; *(unsigned char *)(GA + GA_ON) = 0;
+    float gr = grade_pct / 100, sing = gr / sqrtf(1 + gr * gr);
+    T.place.orientation.pitch = atanf(gr) / 6.2831853f;
+    const float a_ret = (engine_only ? 0.6f : 1.6f) * 18 / mass_t;
+    double v = 30 / 3.6, x = 0, t0 = t_now, t_stop = -1, t_launch = -1, t_gear = -1, x_stop = 0, t_slow = -1, t_mv = -1;
+    float y = 0, thr = 0, rpm = 900, clutch = 0, xmin = 0, xmax = 0, peak = -1;
+    lvres r = {}; r.t_stop = -1; r.held_min = 9; r.t_move = -1;
+    for (int k = 0; t_now - t0 < 25; k++, t_now += 1 / 60.0) {
+        double t = t_now - t0, dt = 1 / 60.0;
+        if (t_stop < 0 && v <= 0.0001 && t > 1) { t_stop = t; x_stop = xmin = xmax = (float)x; }
+        int lever = t_stop < 0 || t < t_stop + 2;
+        if (!lever) { T.retarder = 0; T.motor_brake = 0; }
+        if (t_stop >= 0 && t_launch < 0 && t > t_stop + 4) t_launch = t;
+        float tl = t_launch < 0 ? -1 : (float)(t - t_launch);
+        thr = tl < 0 ? 0 : fminf(0.35f, 0.35f * tl / 1.0f);
+        T.in_thr = thr; T.speed = (float)v;
+        // the owner's standstill (< 0.3 km/h) declared 0.15 s late
+        if (fabs(v) * 3.6 < 0.3) { if (t_slow < 0) t_slow = t; } else t_slow = -1;
+        s_low_stopped = t_slow >= 0 && t - t_slow >= 0.15;
+        // the box: neutral under 5.2 km/h, gear 1 for the launch once the gate passes the pedal (as in ah_run)
+        float req_pre = *(float *)(GA + GA_BRAKE_REQ);
+        int gate_open = req_pre <= 0 || s_thr_pass;
+        T.eff_thr = gate_open ? thr : 0;
+        if (t_launch >= 0 && T.eff_thr > 0.01f && t_gear < 0) t_gear = t;
+        if (t_launch >= 0) { T.gear = (t_gear >= 0 && t - t_gear > 0.15) ? 1 : 0; clutch = T.gear == 1 ? fmaxf(0, 1 - (float)(t - t_gear - 0.15) / 0.35f) : 1; }
+        else { T.gear = v * 3.6 > 5.2 ? 3 : 0; clutch = T.gear ? 0 : 1; }
+        T.eff_clutch = clutch;
+        rpm += (700 + 1300 * T.eff_thr - rpm) * (float)(dt / 0.25); T.rpm = rpm;
+        *(float *)(GA + GA_BRAKE_REQ) = 0;
+        if (s_req_ours > 0) *(float *)(GA + GA_BRAKE_REQ) = s_req_ours;
+        vehicle_frame();
+        dc::de_frame();
+        act_stub(GA, (float)dt, 0);
+        float req = *(float *)(GA + GA_BRAKE_REQ);
+        if (!(req <= 0 || s_thr_pass)) T.eff_thr = 0;
+        y += (req - y) * (float)(dt / (0.15 + dt));
+        float kmh = (float)fabs(v) * 3.6f;
+        float fade = kmh >= 6 ? 1 : kmh <= 4.5f ? 0 : (kmh - 4.5f) / 1.5f;
+        float a_r = lever ? a_ret * fminf(1, (float)t / 0.4f) * fade : 0;
+        float Fb = y * m * gain + (v > 1e-4 ? a_r * m : 0);
+        float te = g_sim_eng.torque * curve_factor(&g_sim_eng, T.rpm) * T.eff_thr;
+        float Fd = T.gear == 1 ? te * ratio * diff * 0.9f * (1 - clutch) / R : 0;
+        float Fg = m * 9.81f * sing + (v > 1e-4 ? m * 9.81f * 0.006f : v < -1e-4 ? -m * 9.81f * 0.006f : 0);
+        float Fnet = Fd - Fg;
+        if (fabs(v) < 1e-4 && fabsf(Fnet) <= y * m * gain) v = 0;
+        else {
+            float Fres = Fb * (v >= 0 ? 1.0f : -1.0f);
+            if (fabs(v) < 1e-4) Fres = y * m * gain * (Fnet > 0 ? 1.0f : -1.0f);
+            double vn = v + (Fnet - Fres) / m * dt;
+            if (v != 0 && ((v > 0) != (vn > 0)) && fabsf(Fnet) <= Fb) vn = 0;   // the brake stops it at zero
+            v = vn;
+        }
+        x += v * dt;
+        if (t_launch < 0 && (peak >= 0 || fabs(v) * 3.6 < 0.5)) { peak = fmaxf(peak, req); r.drop = fmaxf(r.drop, peak - req); }
+        if (t_stop >= 0 && t_launch < 0) {
+            xmin = fminf(xmin, (float)x); xmax = fmaxf(xmax, (float)x);
+            r.held_min = fminf(r.held_min, req);
+            if (t > t_stop + 1 && t < t_stop + 4) { r.req_after = fmaxf(r.req_after, req); r.hold_after = fmaxf(r.hold_after, s_want_hold); }
+        }
+        if (t_launch >= 0 && v > 0.1 && t_mv < 0) t_mv = t - t_launch;
+        if (verbose && k % 3 == 0 && (t_stop < 0 ? v * 3.6 < 1.5 : t < t_stop + 0.6))
+            printf("   t=%6.2f v %6.3f km/h  decel %.3f  hold %.3f  req %.3f  brake %.3f\n", t, v * 3.6, dc::D.u, s_want_hold, req, y);
+    }
+    s_hooked = hooked; s_low_on = 0; s_low_stopped = 0; p_ah = 1; p_ah_lever = 1;
+    r.t_stop = t_stop;
+    r.roll_m = t_stop < 0 ? 99 : fmaxf(x_stop - xmin, xmax - x_stop);
+    r.req_end = *(float *)(GA + GA_BRAKE_REQ);
+    r.t_move = (float)t_mv;
+    if (t_stop < 0) r.held_min = 0;
+    printf("%-52s stops after %5.2f s, request from the stop to the gas: lowest %.2f, 1-4 s after the stop %.2f (Auto Hold %.2f), fell %.2f; moved %.3f m; moves %.2f s after the gas, request at end %.2f\n",
+           name, t_stop, r.held_min, r.req_after, r.hold_after, r.drop, r.roll_m, r.t_move, r.req_end);
+    return r;
+}
 
 // ======================================================================= ACC with a lead (own ACC vs the game's target)
 // A lead vehicle with a scripted speed; the game's ACC fn writes +0x1a8 (gap) and +0x1a0 (its exp target, cruise-re notes § 3)
@@ -1093,6 +1196,30 @@ int main(int argc, char **argv)
         }
         p_aeb_mode = 0; g_aeb_v0 = 80;
         printf("AEB distance mode test: %s\n", bad ? "FAIL" : "ok");
+        if (bad) return 1;
+    }
+    // Auto Hold after a stop by the lever. Last on purpose: its runs move the clock and the actuator's memory.
+    {
+        int bad = 0;
+        printf("--- Auto Hold after a stop by the retarder lever (step 2 of 4) from 30 km/h, the deceleration assist on; lever off 2 s after the stop, gentle gas 4 s after it\n");
+        float gr[] = { 0, 6, -6 }, ms[] = { 18, 36 };
+        for (float m : ms)
+            for (float g : gr) {
+                char nm[96]; snprintf(nm, sizeof nm, "lever stop %2.0f t %+2.0f%%", m, g);
+                lvres r = lever_run(nm, g, m, 1, 1, 0, 0);
+                bad |= r.t_stop < 0 || r.held_min < 0.3f || r.drop > 0.1f || r.roll_m > 0.05f || r.req_end != 0 || r.t_move < 0;
+            }
+        lvres r;
+        r = lever_run("lever stop 36 t +6%, engine brake alone", 6, 36, 1, 1, 1, 0); bad |= r.held_min < 0.3f || r.drop > 0.1f || r.roll_m > 0.05f || r.req_end != 0 || r.t_move < 0;
+        r = lever_run("lever stop 36 t +6%, owner's standstill 0.15 s late", 6, 36, 1, 1, 0, 1); bad |= r.held_min < 0.3f || r.drop > 0.1f || r.roll_m > 0.05f || r.req_end != 0 || r.t_move < 0;
+        printf("--- the same with auto_hold 0 and with auto_hold_lever 0: no Auto Hold, the truck rolls back (as before)\n");
+        for (float m : ms)
+            for (int k = 0; k < 2; k++) {
+                char nm[96]; snprintf(nm, sizeof nm, "lever stop %2.0f t +6%%, %s", m, k ? "auto_hold_lever 0" : "auto_hold 0");
+                r = lever_run(nm, 6, m, !k, 0, 0, 0);
+                bad |= r.hold_after > 0;
+            }
+        printf("Auto Hold lever test: %s\n", bad ? "FAIL" : "ok");
         if (bad) return 1;
     }
     return 0;

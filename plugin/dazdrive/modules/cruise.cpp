@@ -28,7 +28,7 @@
 #include <string.h>
 
 static float p_herm;
-static float p_sg_rearm, p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_own_bias, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade, p_aeb_mode, p_aeb_margin, p_aeb_warn_dec, p_aeb_full_frac;
+static float p_sg_rearm, p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_own_bias, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_lever, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade, p_aeb_mode, p_aeb_margin, p_aeb_warn_dec, p_aeb_full_frac;
 static float p_rb_curves;  // roundabout_curves
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 
@@ -56,6 +56,7 @@ static param g_params[] = {
     { "speed_limit_offset_kmh", &p_isa_off, 3, "set speed = limit plus this (3: 80 -> 83)" },
     { "auto_hold", &p_ah, 1, "1 = Auto Hold: after stopping with the brake the truck stays held when you release the pedal (any slope, no timer) until you give gas; it lets go smoothly as the engine pulls. Not with crawl on, the parking brake, reverse or Stop&Go. With auto_hold on, hill_start is not used" },
     { "auto_hold_request", &p_ah_req, 0.6f, "how hard the hold brakes (brake request 0..1)" },
+    { "auto_hold_lever", &p_ah_lever, 1, "1 = Auto Hold also holds after a stop with only the retarder or engine-brake lever on, or with the deceleration assist braking; 0 = only after a stop with the brake pedal" },
     { "auto_hold_gentle_s", &p_ah_gentle, 0.5f, "letting go after a gentle launch (light pedal) takes about this long (s)" },
     { "auto_hold_hard_s", &p_ah_hard, 0.15f, "after a hard launch (pedal 0.8+) about this long (s), still ramped" },
     { "auto_hold_park_s", &p_ah_park, 60, "Auto Hold: after standing held this long (s) the parking brake goes on and the service brake lets go (no air spent, like a real truck); gas or Resume releases it, with the hold taken over for the pull-away. The plugin checks that the game really shows the parking brake and switches this off for the session if not. 0 = off" },
@@ -293,6 +294,8 @@ static void hill_start(char *g)
 //    what it takes to start moving; never faster than the pedal allows (gentle ~1.2 s, hard ~0.25 s: still a ramp)
 //    and never up again, except when the truck starts to roll back: then it grabs again;
 //  - moving off (speed > 0.3 km/h): target 0 at the pedal's own pace; after 2.5 s of launch: the hard rate at least.
+// With auto_hold_lever a stop with only the retarder / engine-brake lever on, or with the deceleration assist (modules/decel.cpp)
+// braking, arms it the same way.
 // Without the patch (pattern not found) the throttle is dead while we hold, so the request just ramps with
 // the pedal (the old hill-start behavior, but ramped).
 enum { AH_OFF, AH_HOLD, AH_LAUNCH };
@@ -368,7 +371,10 @@ static void auto_hold(char *g, float dt)
     switch (AH.st) {
     case AH_OFF:
         AH.r = AH.r > 0 ? fmaxf(0, AH.r - 3 * dt) : 0;   // fade out, ~0.2 s
-        if (!blocked && ah_stopped(kmh) && T.in_brake > 0.1f) {
+        // (or by the lever: the retarder / engine brake on, or the assist's brake still posted; at 0.5 km/h, not at the low-speed
+        // owner's standstill: no pedal holds the truck meanwhile, and on a climb the assist has let go before it stands)
+        if (!blocked && ((ah_stopped(kmh) && T.in_brake > 0.1f) ||
+                         (p_ah_lever > 0 && kmh < 0.5f && (T.retarder > 0 || T.motor_brake || act_wishes()[ACT_DECEL].brake > 0)))) {
             AH.st = AH_HOLD; AH.roll_m = 0;
             logv(2, "Auto Hold: holding at %.1f%% (mass %.0f kg, request %.2f)", grade, ah_mass(), h);
         }
