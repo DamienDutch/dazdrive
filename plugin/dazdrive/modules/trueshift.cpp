@@ -30,7 +30,8 @@ static float p_eco_ceil, p_mode_char, p_enabled, p_takeover, p_on_kmh, p_off_kmh
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
     p_idle, p_trace, p_lookahead, p_roll, p_roll_cruise, p_roll_cruise_min, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_stop, p_tones, p_crest_band, p_relax,
     p_choice, p_ch_eco, p_ch_norm, p_ch_power, p_ch_rpm, p_ch_shift, p_ch_stay, p_ch_stay_pw, p_ch_floor,
-    p_ch_obj, p_ch_amin, p_ch_ts_eco, p_ch_ts_norm, p_ch_ts_pw, p_ch_upwait, p_ch_flip;
+    p_ch_obj, p_ch_amin, p_ch_ts_eco, p_ch_ts_norm, p_ch_ts_pw, p_ch_upwait, p_ch_flip, p_ch_tq_eco, p_ch_tq_norm, p_ch_tq_pw, p_ch_tq_var,
+    p_ch_own_brake, p_ch_route_cap, p_lift_up, p_lift_delay;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = TrueShift on, 0 = the game's own automatic" },
@@ -54,7 +55,7 @@ static param g_params[] = {
     { "choice_shift_weight", &p_ch_shift, 8.0f, "choice 1: weight of the cost of a shift (the shift time of the gearbox times the power asked: the drive time it loses). Higher = fewer, longer shifts, more skipping, mostly with a slow gearbox" },
     { "choice_stay", &p_ch_stay, 0.03f, "choice 1, Eco and Normal: bonus for the gear the truck is in, against hunting between two gears that score alike" },
     { "choice_stay_power", &p_ch_stay_pw, 0.2f, "choice 1, Power: the same, higher" },
-    { "choice_floor_rpm", &p_ch_floor, 60, "choice 1: under load the revs stay at least this far over the start of the torque plateau (rpm). Coasting and the engine brake are not held to it. 0 = the window reaches below the plateau" },
+    { "choice_floor_rpm", &p_ch_floor, 60, "choice 1: under load the revs stay at least this far over the start of the torque plateau (rpm). Coasting and the engine brake are not held to it. 0 = the window reaches below the plateau. Only where choice_floor_torque of the mode is 0" },
     { "choice_objective", &p_ch_obj, 1, "choice 1: 1 = when the scores say up, the gear to shift up to is the one that gains speed soonest (the shift time without pull counted against the pull each gear gives), so a skip can win under load; an upshift waits a little after the last one, and a shift back the other way soon after a shift needs a hard reason; braking downshifts look at the speed the shift ends at. 0 = the gear with the best score, as before" },
     { "choice_min_accel", &p_ch_amin, 0.10f, "choice_objective 1: a gear that cannot give all the acceleration asked is still a choice if at full throttle it gives at least this (m/s2)" },
     { "choice_time_shift_eco", &p_ch_ts_eco, 3.0f, "choice_objective 1, Eco: a second in a shift counts as this many seconds of driving when the gear up is chosen (higher = fewer shifts, more skips)" },
@@ -62,6 +63,14 @@ static param g_params[] = {
     { "choice_time_shift_power", &p_ch_ts_pw, 1.0f, "choice_objective 1, Power: the same (1 = only the time counts)" },
     { "choice_up_wait", &p_ch_upwait, 2.0f, "choice_objective 1: after an upshift the next one waits this many shift times (never less than 1.5), unless the revs near the top of the window. 0 = off" },
     { "choice_flip_s", &p_ch_flip, 4.0f, "choice_objective 1: within this many seconds after a shift, a shift back the other way only for kickdown, the rev limit, a stall, braking or revs at the edge of the window (0 = the dwell times alone)" },
+    { "choice_floor_torque_eco", &p_ch_tq_eco, 0.90f, "choice 1, Eco: under load the revs stay at or above the lowest rpm where the engine still gives this share of its peak torque (read from its torque curve), also right after an upshift; replaces choice_floor_rpm. 0 = choice_floor_rpm" },
+    { "choice_floor_torque", &p_ch_tq_norm, 0.95f, "choice 1, Normal: the same" },
+    { "choice_floor_torque_power", &p_ch_tq_pw, 0.98f, "choice 1, Power: the same" },
+    { "choice_floor_torque_varied", &p_ch_tq_var, 0.03f, "choice 1: added to the share above while the driver's pedal has been varying over the last 10 s (standard deviation of the pressed pedal over 0.05; lifts do not count): more torque in hand for the next push. 0 = off" },
+    { "choice_own_brake", &p_ch_own_brake, 1, "choice 1: 1 = the pause of upshifts after a brake (6 s below 60 km/h) also follows the brake requests of the suite itself (deceleration assist, ACC), not only the brake the game reports. 0 = only the game's brake" },
+    { "choice_route_cap", &p_ch_route_cap, 1, "choice 1 with the route look-ahead: 1 = the speeds the scores look ahead to stop at what the route allows ahead (bends, junctions), so no upshift is chosen for a speed the truck will not reach before it slows. 0 = off" },
+    { "lift_upshift", &p_lift_up, 1, "choice 1: 1 = with the pedal off for lift_up_delay_s, a higher gear the scores prefer is taken at once instead of waiting for the pedal, if this driver's lifts usually last longer than the shift (the median of the lifts of this session, at least 5, over the shift time + 0.5 s). Never on a descent (under -1 %), while braking, with a bend or junction within about 6 s, or into a gear under the floor of choice_floor_torque. 0 = off" },
+    { "lift_up_delay_s", &p_lift_delay, 0.6f, "lift_upshift: seconds the pedal must be off first" },
     { "launch_correct", &p_launch_fix, 1, "1 = when the game picked a lower start gear than the physics of launch_max_kmh / launch_slip_s allow (after reversing, after the engine started, or its own downshift at a stop), the gear is changed at the standstill before the pull-away: no climbing through the low gears (0 = off)" },
     { "load_down_from", &p_load_from, 0.75f, "on a climb: a gear that needs this share of its full-throttle force to hold the speed (and the speed falls under real throttle) gets its downshift point raised towards the torque plateau (1 = off; a gear that cannot hold it at all downshifts at once anyway)" },
     { "skip_wait_over_rpm", &p_skip_over, 400, "skip_wait_s: how far over the upshift point the revs may build up while waiting for a skip (rpm; never above 85 % of the limit)" },
@@ -197,6 +206,7 @@ static float g_learn_mass;
     X(W_M_STOPPING, "M: stopping") \
     X(W_M_LUGGING, "M: lugging") \
     X(W_UP_WAIT, "up wait") \
+    X(W_LIFT_UP, "up on lift") \
     /* end */
 enum why_e {
 #define X(id, text) id,
@@ -250,6 +260,7 @@ static struct {
     int want, target;
     double blocked_log_at;
     double brake_at;        // the last time the brake was on (service brake over 0.05)
+    double own_brake_at;    // the last time the suite itself held a brake request (act_request; choice_own_brake)
     double kd_at;           // the last kickdown or lugging downshift of ours
     double skip_wait_at, skip_wait_last;    // when the early upshift started waiting for a skip (0 = not waiting), and the last frame it waited
     float up_pt, dn_pt, floor_rpm, eb_level;
@@ -277,7 +288,31 @@ static struct {
     double pk_at;           // when it was last updated
     double gap_since;       // tail_pre: parked in the gearbox's gap state (gear 0, a target, clutch open) while moving since; 0 = not
     int seed_demand, seed_force;   // after a hard reset: demand / f_need start from the pedal of now, not from 0 (one update each)
+    float pv[10][3];        // the driver's pressed pedal per second of the last 10 (sum, sum of squares, samples): is it varying (choice_floor_torque_varied)
+    long pv_sec;            // the second pv was last filled for
+    int varied;             // 1 = the pedal has been varying (standard deviation over PV_STD)
+    double lift_at;         // the driver's pedal went off (under 0.05) from a pull above 15 km/h; 0 = not lifted
+    float lift_prev;        // the pedal of the last update (for that)
+    double lift_used;       // lift_at of the lift that already had its upshift (one per lift)
 } S;
+
+// The driver's lifts (pedal off from a pull until the pedal again, a brake or a standstill), for lift_upshift: the last LIFT_N of the
+// session, whatever truck. Measured on one driver: median 2.8 s, 31 % shorter than 1 s.
+enum { LIFT_N = 64, LIFT_MIN = 5 };
+static float g_lift[LIFT_N];
+static int g_lift_n;
+static const float PV_STD = 0.05f;   // standard deviation of the pedal over 10 s above which it counts as varying (a steady foot ~0.01, a foot wavering 0.30-0.54: 0.085)
+
+// The median of the lifts measured so far (s), < 0 = fewer than LIFT_MIN
+static float lift_median()
+{
+    int n = g_lift_n < LIFT_N ? g_lift_n : LIFT_N;
+    if (n < LIFT_MIN) return -1;
+    float a[LIFT_N];
+    memcpy(a, g_lift, n * sizeof a[0]);
+    for (int i = 1; i < n; i++) for (int j = i; j > 0 && a[j] < a[j - 1]; j--) { float t = a[j]; a[j] = a[j - 1]; a[j - 1] = t; }
+    return n & 1 ? a[n / 2] : 0.5f * (a[n / 2 - 1] + a[n / 2]);
+}
 
 enum { ROLL = 100 };        // decide_gear: "put it in neutral" (eco-roll)
 
@@ -542,6 +577,8 @@ static void ts_reset(int level, const char *why)
     S.blocked_log_at = 0;
     S.gap_since = 0;                        // a pause in the gap state is not a stuck shift (the timer starts again)
     S.pedal_prev = clampf(T.in_thr, 0, 1);
+    memset(S.pv, 0, sizeof S.pv); S.varied = 0;   // the pedal's variation starts over (a pause is no steady foot), so does a lift
+    S.lift_at = 0;
     if (level >= RESET_LOAD) {
         S.f_need = 0;
         S.up_gear = 0;
@@ -590,6 +627,14 @@ static void refresh(void *self)
                 "low %.0f-%.0f high %.0f-%.0f power %.0f-%.0f, shift time %.2f s",
                 e->torque, e->rpm_limit, e->n_curve, V.plateau, e->range[0][0], e->range[0][1], e->range[1][0],
                 e->range[1][1], e->range[2][0], e->range[2][1], e->range[3][0], e->range[3][1], e->shift_time);
+        // the whole torque curve (rpm: share of the peak), so a ride log shows where the torque falls off
+        char cv[24 * 16] = "";
+        for (int i = 0, k = 0; i < e->n_curve && i < 24; i++) {
+            int w = snprintf(cv + k, sizeof cv - k, "%s%.0f: %.2f", i ? ", " : "", e->curve[i][0], e->curve[i][1]);
+            if (w < 0 || w >= (int)sizeof cv - k) break;
+            k += w;
+        }
+        logv(1, "engine curve: %s", cv);
         S.letter_state = -1;
         S.eng_seen = 1; S.eng_torque = e->torque; S.eng_limit = e->rpm_limit;
     }
@@ -679,6 +724,45 @@ static void refresh(void *self)
     }
 
     if (T.in_thr > 0.02f) S.pedal_on_at = now;
+    if (act_request() > 0) S.own_brake_at = now;
+    // choice 1: is the driver's pedal varying (choice_floor_torque_varied)? Its standard deviation over the last 10 s, from one sum per second,
+    // over the moments the pedal is pressed (a lift is no varying foot: it would raise the floor of the gear the lift may shift up to)
+    {
+        long sec = (long)floor(now);
+        if (sec != S.pv_sec) {
+            for (long k = S.pv_sec + 1; k <= sec && k <= S.pv_sec + 10; k++) memset(S.pv[(unsigned long)k % 10], 0, sizeof S.pv[0]);
+            if (sec < S.pv_sec) memset(S.pv, 0, sizeof S.pv);   // (the clock went back)
+            S.pv_sec = sec;
+        }
+        float *b = S.pv[(unsigned long)sec % 10];
+        if (pedal >= 0.05f && !cc) { b[0] += pedal; b[1] += pedal * pedal; b[2] += 1; }
+        float n = 0, sm = 0, sq = 0;
+        for (int i = 0; i < 10; i++) { sm += S.pv[i][0]; sq += S.pv[i][1]; n += S.pv[i][2]; }
+        float sd = n > 1 ? sqrtf(fmaxf(0.0f, sq / n - (sm / n) * (sm / n))) : 0;
+        int varied = sd > PV_STD;
+        if (varied != S.varied && p_choice > 0 && p_ch_tq_var > 0) {
+            float base = by_mode(p_ch_tq_eco, p_ch_tq_norm, p_ch_tq_pw), share = fminf(1.0f, base + (varied ? p_ch_tq_var : 0.0f));
+            if (base > 0 && V.eng_ok)
+                logv(2, "choice floor: the pedal %s (sd %.3f over 10 s): %.0f rpm, %.2f of the peak torque", varied ? "varies" : "is steady", sd, gs_torque_rpm(share, idle_rpm()), share);
+        }
+        S.varied = varied;
+    }
+    // lift_upshift: the driver's lifts, from a pull above 15 km/h (pedal under 0.05) until the pedal again, a brake (the game's or our own),
+    // a crawl under 5 km/h or the cruise control (not counted); over 30 s counts 30. A lift that ends in a brake counts that short
+    {
+        int brk = fmaxf(T.in_brake, T.eff_brake) > 0.05f || act_request() > 0;
+        if (S.lift_at > 0) {
+            if (cc) S.lift_at = 0;
+            else if (pedal >= 0.05f || brk || v * 3.6f < 5) {
+                g_lift[g_lift_n % LIFT_N] = fminf(30.0f, (float)(now - S.lift_at));
+                g_lift_n++;
+                S.lift_at = 0;
+                if (p_choice > 0 && p_lift_up > 0 && g_lift_n >= LIFT_MIN && g_lift_n % 10 == LIFT_MIN % 10)
+                    logv(2, "lifts: median %.1f s over the last %d", lift_median(), g_lift_n < LIFT_N ? g_lift_n : (int)LIFT_N);
+            }
+        } else if (pedal < 0.05f && S.lift_prev >= 0.05f && v * 3.6f > 15 && !cc && !brk) S.lift_at = now > 0 ? now : 1e-6;
+        S.lift_prev = pedal;
+    }
     // Power on a flat, light, steady stretch for a while: the shift points sink to Normal's, so a long calm cruise ends in the top gear
     // and Power does not cost fuel for nothing (Damien 25-10: it stayed in the 11th at ~1480 rpm); a firm pedal brings them back at once
     {
@@ -949,7 +1033,13 @@ static float climb_need_kmh()
 }
 
 // choice = 1: the settings of the score function (core/gearscore.h) for the mode of now
-static gs_cfg score_cfg(int skips, int skips_up, int skips_later, int low_edge, int coast, float pedal)
+static float floor_share()   // choice_floor_torque of the mode, + choice_floor_torque_varied while the pedal varies; 0 = choice_floor_rpm
+{
+    float b = by_mode(p_ch_tq_eco, p_ch_tq_norm, p_ch_tq_pw);
+    return b > 0 ? fminf(1.0f, b + (S.varied && p_ch_tq_var > 0 ? p_ch_tq_var : 0.0f)) : 0;
+}
+
+static gs_cfg score_cfg(int skips, int skips_up, int skips_later, int low_edge, int coast, float pedal, float v_cap)
 {
     gs_cfg c = {};
     c.comfort = by_mode(p_ch_eco, p_ch_norm, p_ch_power);
@@ -969,6 +1059,8 @@ static gs_cfg score_cfg(int skips, int skips_up, int skips_later, int low_edge, 
     c.time_obj = p_ch_obj > 0;
     c.a_min = p_ch_amin;
     c.k_shift = by_mode(p_ch_ts_eco, p_ch_ts_norm, p_ch_ts_pw);
+    c.floor_tq = low_edge ? 0 : floor_share();
+    c.v_cap = v_cap;
     return c;
 }
 
@@ -1247,9 +1339,35 @@ static int decide_gear(void *self, int *why)
         float f_wish = p_ch_obj > 0 && !coast_p ? pedal_wish_force(v) : -1;
         if (f_wish >= 0) need = fmaxf(f_wish, f_hold);
         gs_out so;
+        // choice_route_cap: the speeds the scores look ahead to stop at what the route allows: the speed allowed now for the bends and
+        // junctions ahead at a gentle 0.3 m/s2, less what the horizon's 8 s at this speed use of the way there (ride: 7->9 at 34 km/h,
+        // a junction ahead, the engine brake took 9 back to 7 three seconds later)
+        float v_cap = 0;
+        if (rk && p_ch_route_cap > 0) {
+            float vc = route_curve_speed(2.5f, 0.3f);
+            if (vc == vc) v_cap = sqrtf(fmaxf(0.25f, vc * vc - 2 * 0.3f * v * 8));
+        }
         // (no skipping with the pedal off, and no skip up on a climb of 1.5 % and more (the upshift path: 2 %): the gear skipped to had no pull later)
-        gs_eval(&so, cur, n, v, need, f_hold, coast_p, score_cfg(coast_p ? 0 : skips, coast_p || grade > 0.015f ? 0 : skips, grade > 0.015f ? 0 : skips_free, ebrake || (coast_p && S.demand < 0.05f), coast_p, clampf(T.in_thr, 0, 1)));
+        gs_eval(&so, cur, n, v, need, f_hold, coast_p, score_cfg(coast_p ? 0 : skips, coast_p || grade > 0.015f ? 0 : skips, grade > 0.015f ? 0 : skips_free, ebrake || (coast_p && S.demand < 0.05f), coast_p, clampf(T.in_thr, 0, 1), v_cap));
         int w = so.best;
+        // lift_upshift: the pedal off for lift_up_delay_s, and this driver's lifts usually outlast the shift: the gear up the scores prefer
+        // now, not when the pedal comes back (one per lift). Also a gear up that only its shift cost keeps out. Not on a descent, not while
+        // braking (the game's brake or our own request), not with a bend or junction within ~6 s (a stop at v/12 m/s2 over 6 s, at least
+        // 0.3 m/s2) or the engine brake / retarder on, and never into a gear under the floor (at the speed of now and after the shift)
+        int lift_g = 0;
+        if (p_lift_up > 0 && coast_p && T.cruise < 0.5f && S.lift_at > 0 && S.lift_used != S.lift_at && now - S.lift_at >= p_lift_delay && cur < n &&
+            lift_median() > V.eng.shift_time + 0.5f && grade_pct() > -1.0f && act_request() <= 0 && !ebrake && T.accel > -0.5f && !(jn >= 0 && jn < v * 6)) {
+            float vb6 = rk ? route_curve_speed(2.5f, fmaxf(0.3f, v / 12)) : NAN;
+            float fs = floor_share(), fl = fs > 0 ? gs_torque_rpm(fs, idle_rpm()) : V.plateau + p_ch_floor;
+            if (!(vb6 == vb6 && vb6 < v - 0.7f)) {
+                for (int g = cur + 1; g <= n && g <= GS_MAX; g++) {
+                    const gs_term &t = so.t[g];
+                    if (!t.ok || t.rpm < fl || rpm_at(g, v) < fl || !so.cur_ok) continue;
+                    if (g == w || (w == cur && t.score + t.shiftc > so.t[cur].score)) { lift_g = g; break; }
+                }
+            }
+        }
+        if (lift_g && w == cur) w = lift_g;
         if (w == cur) { *why = so.wait ? W_SKIP_WAIT : W_HOLD; return cur; }   // (choice_objective 1: waiting for a skip that lands a little later)
         if (w) {
             bool forced = !so.cur_ok;   // this gear is outside the window or cannot make the demanded pull: a change is due, whatever the timers say
@@ -1277,24 +1395,28 @@ static int decide_gear(void *self, int *why)
                 // while the throttle in effect is far above the filtered demand (cruise control pulling up to its speed: the demand is still
                 // on its way up, and the gear chosen for it has no pull a second later). The engine's throttle, not the raw pedal: under the Eco
                 // pedal curve the pedal stands well above the throttle it gives, and would veto every upshift at a middle pedal
-                bool steady_up = now - S.ours_at > (S.ours_launch ? 1.0 : 3.0) && (now - S.brake_at > 6 || v * 3.6f >= 60) && !climbing &&
+                // (choice_own_brake: our own brake request counts as a brake: the deceleration assist's does not show in the telemetry)
+                double brake_at = p_ch_own_brake > 0 && S.own_brake_at > S.brake_at ? S.own_brake_at : S.brake_at;
+                bool steady_up = now - S.ours_at > (S.ours_launch ? 1.0 : 3.0) && (now - brake_at > 6 || v * 3.6f >= 60) && !climbing &&
                                  !(now - S.kd_at < by_mode(3, p_kick_dwell, 8)) && T.accel > -0.15f && thr >= 0.6f * S.demand &&
                                  T.eff_thr <= fmaxf(thr, S.demand) + 0.15f;
                 if (coast_p && S.mode == MODE_POWER && p_mode_char > 0 && now - S.pedal_on_at < 3 && rpm < lim * 0.9f) ret = cur, why_v = W_POWER_HOLDS;
-                else if (!wants_power && (T.accel < -0.2f || jn_soon) && rpm < lim * 0.9f) ret = cur, why_v = W_UP_VETO;
+                // (lift_upshift: the slowing of a coasting truck is not a reason; its own checks stand)
+                else if (!wants_power && ((T.accel < -0.2f && w != lift_g) || jn_soon) && rpm < lim * 0.9f) ret = cur, why_v = W_UP_VETO;
                 else if (S.shift_dir < 0 && since < dwell && rpm < S.up_pt + 100) ret = cur, why_v = W_ANTI_HUNT_UP;
                 // (choice_objective 1: no flip back up soon after a downshift unless the revs near the top of the window; and no upshift ladder:
                 // after an upshift the next one waits until this gear has pulled for choice_up_wait shift times, the shift it cost)
                 else if (p_ch_obj > 0 && S.shift_dir < 0 && since < p_ch_flip && rpm < so.hi - 100) ret = cur, why_v = W_ANTI_HUNT_UP;
                 else if (p_ch_obj > 0 && p_ch_upwait > 0 && S.shift_dir > 0 && !forced && since < fmaxf(1.5f, p_ch_upwait) * V.eng.shift_time &&
                          rpm < so.hi - 100) ret = cur, why_v = W_UP_WAIT;
-                else if (!forced && !steady_up) {
+                else if (!forced && !steady_up && w != lift_g) {
                     ret = cur, why_v = W_HOLD;
                     // which of the steady conditions failed (for the veto line below)
-                    not_steady = now - S.ours_at <= (S.ours_launch ? 1.0 : 3.0) ? "just taken over" : !(now - S.brake_at > 6 || v * 3.6f >= 60) ? "after a brake" :
+                    not_steady = now - S.ours_at <= (S.ours_launch ? 1.0 : 3.0) ? "just taken over" : !(now - brake_at > 6 || v * 3.6f >= 60) ? "after a brake" :
                                  climbing ? "grade rising" : now - S.kd_at < by_mode(3, p_kick_dwell, 8) ? "kickdown dwell" : T.accel <= -0.15f ? "slowing" :
                                  thr < 0.6f * S.demand ? "lifting" : "throttle over the demand";
                 }
+                else if (w == lift_g) { ret = w; why_v = W_LIFT_UP; }
                 else { ret = w; why_v = w - cur > 1 ? W_UP_SKIP : W_UP; }
             }
             *why = why_v;
@@ -1470,6 +1592,7 @@ static void note_gear_change(void *self)
     int why = hint ? W_HINT : g == S.commanded ? S.cmd_why : W_GAME;
     DEV_NOTE(shift(prev, g, why_text[why], hint, now));
     track_shifts(prev, g, hint, now);
+    if (why == W_LIFT_UP) S.lift_used = S.lift_at;   // one upshift per lift (set when it is in: decide_gear runs twice per update)
 
     // Did the last upshift hold? A downshift out of it for lack of force (or a
     // hint down) within 25 s means it did not.
