@@ -49,6 +49,7 @@ void incident(const char *, const char *, ...) {}
 void play_cue(int) {}
 int input_held(int) { return 0; }
 int input_pressed(int, int) { return 0; }
+float pedal_wish_force(float) { return -1; }   // the wish pedal (modules/pedal.cpp) is not in this sim
 static int verbose, n_failed, n_checks;
 static int n_engage_lines;   // log lines of the form "engage ...": the start gear the owner must never produce
 void logline(const char *fmt, ...)

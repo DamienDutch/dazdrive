@@ -5,7 +5,7 @@
 // same push at the same speed in any gear.
 //
 // Per tick (pedal_wish, called by Cruise where its old pedal-curve stage sits):
-//  1. shape      q = p^exponent(mode)
+//  1. shape      q = p^exponent(mode), the exponent scaled by the truck's power per tonne (curve_ref_kw_t)
 //  2. rise limit q_f may rise at most rise_rate(mode) per second, falls at once; never delayed from blend_from up (kickdown)
 //  3. kick       Power only: a fast pedal step from near zero to the middle adds a little to the wish for a moment
 //  4. wish       P_wish = q_f * P_ref (the engine's peak power); force F = min(P_wish * eta / v, q_f * F_cap), F_cap = the force the
@@ -20,7 +20,7 @@
 #include <math.h>
 #include <string.h>
 
-static float p_wish, p_blend, p_kick_rate, p_kick, p_kick_s, p_exp_eco, p_exp_norm, p_exp_pw, p_rise_eco, p_rise_norm, p_rise_pw;
+static float p_wish, p_blend, p_kick_rate, p_kick, p_kick_s, p_exp_eco, p_exp_norm, p_exp_pw, p_rise_eco, p_rise_norm, p_rise_pw, p_ref_kwt;
 
 static param g_params[] = {
     { "wish", &p_wish, 0, "1 = the pedal is a wish for power: the throttle is what delivers it in the gear the truck is in, so the same pedal gives the same push at the same speed in any gear. 0 = the pedal asks a share of the engine's torque, as before. Not with the cruise on, not while the clutch slips, not at pulling-away speed, not in reverse" },
@@ -34,6 +34,7 @@ static param g_params[] = {
     { "rise_rate_eco", &p_rise_eco, 1.5f, "Eco: the wish may rise at most this much per second (fraction of the full wish); it falls at once, and from blend_from up it is never held back" },
     { "rise_rate_normal", &p_rise_norm, 3.0f, "Normal: the same" },
     { "rise_rate_power", &p_rise_pw, 8.0f, "Power: the same" },
+    { "curve_ref_kw_t", &p_ref_kwt, 12, "the exponents above are for a truck with this much engine power per tonne (kW/t); a heavier, slower truck gets a more direct curve (a lower exponent, at most x0.8), a lighter, stronger one a softer one (at most x1.15). 0 = the exponents as they are" },
 };
 
 // The levels of the kick's gesture (a pedal that starts almost released and stops in the middle) and the lock test of the clutch (the
@@ -49,7 +50,10 @@ static struct {
     int fast;         // the pedal is rising faster than kick_rate
     float from;       // where that fast rise started
     float kick_age;   // seconds since the kick started, < 0 = none
-} S = { NAN, 0, 0, 0, 0, 0, -1 };
+    double on_at;     // sim_s() of the last tick that gave a wish, < 0 = the pedal goes through (TrueShift reads the wish: pedal_wish_force)
+    float pref, fcap; // that tick's peak power (W) and force cap (N)
+    float truck_k;    // the curve factor for this truck and load (truck_curve), 1 = the exponents as they are
+} S = { NAN, 0, 0, 0, 0, 0, -1, -1, 0, 0, 1 };
 
 // Hand over to the pass-through: the state follows the pedal, so the wish starts from where the pedal is, not from zero.
 static void follow(float p)
@@ -57,6 +61,7 @@ static void follow(float p)
     S.q_f = S.q = p == p ? p : 0;
     S.fast = 0;
     S.kick_age = -1;
+    S.on_at = -1;
 }
 
 // The engine's peak power (W) over its torque curve, up to the rpm limit.
@@ -66,6 +71,21 @@ static float peak_power()
     for (float rpm = 100; rpm <= V.eng.rpm_limit; rpm += 50)
         best = fmaxf(best, V.eng.torque * curve_factor(&V.eng, rpm) * rpm * 0.10472f);
     return best;
+}
+
+// The curve factor per truck: power per tonne against curve_ref_kw_t (sqrt, x0.8 ... x1.15). Taken only at a standstill, so the pedal
+// never changes under the foot while driving; an unknown mass (the 20 t fallback), an electric motor or engine data that does not look
+// sane keep the exponents as they are. One log line whenever it changes (another truck, a trailer, a load).
+static void truck_curve()
+{
+    if (fabsf(T.speed) > 0.3f) return;
+    float pw = peak_power(), k = 1.0f;
+    if (p_ref_kwt > 0 && pw > 0 && V.mass_ok && !V.electric && V.eng_ok && V.mass > 1000)
+        k = fminf(1.15f, fmaxf(0.8f, sqrtf(pw / V.mass / p_ref_kwt)));
+    if (fabsf(k - S.truck_k) > 0.005f)
+        logline("Pedal: curve x%.2f for this truck (%.1f kW/t: %.0f kW, %.1f t%s)", k, pw > 0 && V.mass > 0 ? pw / V.mass : 0.0f, pw / 1000,
+                V.mass / 1000, V.mass_ok && !V.electric && V.eng_ok ? "" : ", not known: as it is");
+    S.truck_k = k;
 }
 
 // The extra wish of the kick now: full at the start, fading out to nothing at kick_s.
@@ -104,6 +124,7 @@ int pedal_wish(float p, float dt, int other, float *out)
     *out = p;
     S.prev = p;
     if (!(p_wish > 0) || !(p == p)) { follow(p); return 0; }
+    truck_curve();
     p = fminf(1.0f, fmaxf(0.0f, p));
     int md = ts_mode(), g = 0, sg = 0;
     float v = 0;
@@ -111,6 +132,9 @@ int pedal_wish(float p, float dt, int other, float *out)
 
     // 1, 2: shape, rise limit (the 'delay'). A flat or near-flat pedal is kickdown: never held back
     float expo = md == MODE_ECO ? p_exp_eco : md == MODE_POWER ? p_exp_pw : p_exp_norm;
+    // per truck: the engine's power per tonne against curve_ref_kw_t, sqrt, x0.8 ... x1.15 (a 40 t truck with 350 kW: x0.85, 17 t: x1.15)
+    float pw = peak_power();
+    expo *= S.truck_k;   // set at a standstill only (truck_curve)
     float rise = md == MODE_ECO ? p_rise_eco : md == MODE_POWER ? p_rise_pw : p_rise_norm;
     float bl = fminf(0.999f, fmaxf(0.0f, p_blend));
     float q = powf(p, expo > 0 ? expo : 1.0f);
@@ -128,7 +152,7 @@ int pedal_wish(float p, float dt, int other, float *out)
     S.q = fminf(1.0f, S.q_f + kick_now());
 
     // 4, 5: the wish as a force at this speed, then the throttle that gives it in this gear
-    float fg = vehicle_force_at(g, v, 1.0f), pref = peak_power();
+    float fg = vehicle_force_at(g, v, 1.0f), pref = pw;
     float fcap = sg > 0 ? vehicle_force_at(sg, vehicle_kmh_at(sg, V.plateau) / 3.6f, 1.0f) : 0;
     if (!(fg > 0) || !(pref > 0) || !(fcap > 0) || !(V.eta > 0)) { follow(p); return 0; }   // e.g. over the rev limit: the old path, as a pass-through
     float f = fminf(S.q * pref * V.eta / v, S.q * fcap);
@@ -141,10 +165,19 @@ int pedal_wish(float p, float dt, int other, float *out)
     if (p >= 1.0f) gas = 1.0f;
     if (!(gas == gas)) { follow(p); return 0; }
     *out = gas;
+    S.on_at = sim_s(); S.pref = pref; S.fcap = fcap;
     return 1;
 }
 
-static void pd_reset(int, const char *) { S.prev = NAN; follow(0); }
+float pedal_wish_force(float v)
+{
+    double now = sim_s();
+    if (!(p_wish > 0) || S.on_at < 0 || now < S.on_at || now - S.on_at > 0.3 || !(V.eta > 0)) return -1;
+    return fminf(S.q * S.pref * V.eta / fmaxf(v, 0.5f), S.q * S.fcap);
+}
+
+// Another truck, a trailer or a load: the exponents as they are until the next standstill sets the factor for it.
+static void pd_reset(int level, const char *) { S.prev = NAN; follow(0); if (level >= RESET_LOAD) S.truck_k = 1; }
 
 static char g_status[120] = "off (ini)";
 static const char *pd_status() { return g_status; }

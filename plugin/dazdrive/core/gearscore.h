@@ -27,6 +27,17 @@
 //                another one). That is what makes one skip cheaper than two single shifts, and a slow box pay more per shift.
 //                At a steady speed a gear that stands on the floor already pays it divided by up to 4 (it is held for long).
 //   stay_bonus   the current gear gets a small bonus: no flip-flopping on near-equal scores.
+//
+// time_obj (choice_objective 1): when the score says "up", the gear to shift up to is the one that gains a speed step soonest instead:
+//   time(g)      the shift now, then the speed from v_after up to v + dv (dv = 5 km/h, or more: what the current gear still has up to the
+//                top of the window) at a(g) = the demanded acceleration, capped at what the gear gives at full throttle; at the top of the
+//                window one gear up (a shift: k_shift x shift_time without pull, and the speed lost in it). The next shift of the gear it ends
+//                in counts for the part of that gear's range the step used up (no jump where a shift falls just outside the step).
+//                Shift seconds count k_shift times (per mode: Eco skips most, Power least). A skip may win by saving a shift although it
+//                pulls less, as long as it gives a_min at full throttle (when at least that is asked; else the whole demand, as before). The
+//                gear we are in may be short the same way (no flip back after the skip). The window, the floor and the rpm cost stand.
+//                Staying to wait for a skip that lands a little later (this gear still under the window's top by then) is one of the choices.
+//                Not while less than a_min is asked (holding a speed): there the score alone decides.
 #pragma once
 #include "vehicle.h"
 #include <math.h>
@@ -46,6 +57,9 @@ struct gs_cfg {
     float horizon;     // s: how far ahead the demanded acceleration is followed for the shifts a gear will need later
     float learn_res;   // extra share an upshift must have in hand (what TrueShift learned on this grade)
     float pull;        // 0, or the pedal when it is near the floor: the pull asked is at least this share of the strongest gear in the window
+    int time_obj;      // 1 = an upshift goes to the gear that gains speed soonest (see above), 0 = to the best score
+    float a_min;       // time_obj: m/s2 a gear that is short of the demand must still give at full throttle (only when at least this much is asked)
+    float k_shift;     // time_obj: a second in a shift counts this many seconds of driving
 };
 
 enum { GS_MAX = 32 };
@@ -56,12 +70,16 @@ struct gs_term {
     float rpm, share;  // rpm at the speed after the shift (now for the current gear); share of the full-throttle force needed
     float gas, rpmc, shiftc, stay, score;
     int shifts;        // shifts counted: now + later
+    int in;            // in the window and on the floor (feasible or not)
+    float t_gain;      // time_obj: the time to gain the speed step (s, shift seconds weighted), 0 = not estimated
 };
 
 struct gs_out {
     int n;             // terms filled (gears lo..hi)
     gs_term t[GS_MAX + 1];  // indexed by gear
     int best, second;  // gears with the highest and the second highest score among the candidates (0 = none)
+    int best_score;    // the best by score alone (time_obj may take another gear up)
+    int wait;          // time_obj: the best is to stay and wait for this skip (0 = no)
     int cur_ok;        // the current gear is a candidate
     float lo, hi;      // the usable window
     float hi_g[GS_MAX + 1];  // its top per gear (the same for every gear today)
@@ -76,11 +94,29 @@ static inline float gs_peak_force(float v)
     return f;
 }
 
+// time_obj: seconds from v0 in gear g (just shifted into) to v_t at the demanded acceleration a_d, capped per gear at full throttle; at the
+// window's top hi one gear up, which costs k shift times and the speed f_res loses in it. The next shift of the last gear counts for the
+// share of that gear's range used up. A gear that gives under 0.02 m/s2 counts as 0.02 (it is slow, not impossible).
+static inline float gs_gain_time(int g, int n, float v0, float v_t, float a_d, float f_res, float hi, float k, float ts)
+{
+    const float m = V.mass;
+    float tt = k * ts, v = v0, v_in = v0;
+    for (int i = 0; i < 2000 && v < v_t; i++) {
+        if (g < n && vehicle_rpm_at(g, v) >= hi) { g++; tt += k * ts; v = fmaxf(0.5f, v - f_res / m * ts); v_in = v; continue; }
+        float a = fmaxf(0.02f, fminf(a_d, (vehicle_force_at(g, v, 1.0f) - f_res) / m)), step = fminf(0.25f, v_t - v);
+        tt += step / a;
+        v += step;
+    }
+    float vh = g < n ? vehicle_kmh_at(g, hi) / 3.6f : 0;
+    if (vh > v_in + 0.1f) tt += k * ts * fminf(1, fmaxf(0, (v - v_in) / (vh - v_in)));
+    return tt;
+}
+
 // cur = the gear now, n = the number of forward gears, v = speed (m/s), need = the force asked (N, >= f_res), f_res = the
 // resistance of now (N), coast = the pedal is off (nothing is asked: need counts 0).
 static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float f_res, int coast, const gs_cfg &c)
 {
-    o->n = 0; o->best = o->second = 0; o->cur_ok = 0;
+    o->n = 0; o->best = o->second = o->best_score = o->wait = 0; o->cur_ok = 0;
     for (int g = 0; g <= GS_MAX; g++) o->t[g] = gs_term();
     const float m = V.mass, ts = V.eng.shift_time, idle = c.idle;
     const float plateau = V.plateau, lim = V.eng.rpm_limit;
@@ -132,9 +168,14 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
         t->share = f1 > 1 ? fn / f1 : 9;
         bool in = t->rpm >= o->lo + (g > cur ? c.hyst : 0) && t->rpm <= o->hi_g[g] - (g < cur ? c.hyst : 0) &&
                   (g == cur && !c.floor_cur ? true : t->rpm * (v_floor / vg) >= r_min + (g > cur ? c.hyst : 0));
-        if (!in || t->share > (g == cur ? 1.1f : 1.0f)) continue;   // the gear we are in may be a little short (10 %), a gear to shift to may not: no flip back at full throttle
+        t->in = in;
+        // time_obj: when at least a_min is asked, the gear we are in and a gear up may also be short if at full throttle they still give a_min:
+        // the truck still gains speed usefully; the gas cost stays at that of share 1 (flat out), the time to gain speed weighs the pull it lacks
+        bool short_ok = c.time_obj && g >= cur && !coast && a_d >= c.a_min && (f1 / (g > cur ? 1 + c.learn_res : 1) - f_res) / m >= c.a_min;
+        if (!in || (t->share > (g == cur ? 1.1f : 1.0f) && !short_ok)) continue;   // the gear we are in may be a little short (10 %), a gear to shift to may not: no flip back at full throttle
         t->ok = 1;
         float x = fmaxf(0, t->share - c.comfort) / fmaxf(0.05f, 1 - c.comfort);
+        if (short_ok) x = fminf(x, 1);
         t->gas = x * x;
         float xh = fmaxf(0, t->rpm - plateau) / fmaxf(1, o->hi_g[g] - plateau), xl = fmaxf(0, plateau - t->rpm) / fmaxf(1, plateau - idle);
         t->rpmc = c.w_rpm * hold * (xh * xh + u * xl * xl);
@@ -156,5 +197,41 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
         if (g == cur) o->cur_ok = 1;
         if (t->score > best) { second = best; o->second = o->best; best = t->score; o->best = g; }
         else if (t->score > second) { second = t->score; o->second = g; }
+    }
+    o->best_score = o->best;
+    // time_obj: the score says up; which gear up gains the speed step soonest (the rpm cost stands, the shift seconds weigh as in shift_cost).
+    // Also against waiting in this gear for a skip that does not land yet (under the window's edge or the floor): the speed v_s where it
+    // would, if this gear gets there under the top of the window; then the shift. Waiting wins where the shift it saves outweighs the pull
+    // the step up would give meanwhile (Eco, with its dearer shifts, waits most). Only while at least a_min is asked: holding a speed
+    // or creeping up to it, the score alone decides (the time to gain speed means little there)
+    if (c.time_obj && o->best > cur && !coast && a_d >= c.a_min) {
+        float v_s[GS_MAX + 1] = {}, v_t = v + fmaxf(5 / 3.6f, vehicle_kmh_at(cur, o->hi_g[cur]) / 3.6f - v), loss = f_res / m * ts;
+        for (int g = cur + 2; g <= g1; g++) {
+            if (o->t[g].ok || o->t[g].rpm > o->hi_g[g]) continue;
+            for (float vs = v + 0.25f; vehicle_rpm_at(cur, vs) < o->hi_g[cur] - 50; vs += 0.25f) {
+                float va = fmaxf(0.5f, vs - loss), r = vehicle_rpm_at(g, va), f1 = vehicle_force_at(g, va, 1.0f) / (1 + c.learn_res);
+                if (r >= o->lo + c.hyst && r * ((vs + a_d * 3 * c.horizon) / va) >= r_min + c.hyst && (fminf(need, f1) - f_res) / m >= fminf(c.a_min, a_d)) {
+                    v_s[g] = vs; v_t = fmaxf(v_t, vs + 5 / 3.6f);
+                    break;
+                }
+            }
+        }
+        float jb = 1e30f;
+        int pick = 0;
+        for (int g = cur + 1; g <= g1; g++) {
+            gs_term *t = &o->t[g];
+            if (!t->ok) continue;
+            t->t_gain = gs_gain_time(g, n, v_after, v_t, a_d, f_res, o->hi_g[g], c.k_shift, ts);
+            float j = c.w_shift * u * t->t_gain + t->rpmc;
+            if (j < jb) { jb = j; pick = g; }
+        }
+        for (int g = cur + 2; g <= g1 && pick && o->cur_ok; g++) {
+            if (!(v_s[g] > 0)) continue;
+            float tw = 0;   // in this gear up to v_s
+            for (float x = v; x < v_s[g]; x += 0.25f) tw += fminf(0.25f, v_s[g] - x) / fmaxf(0.02f, fminf(a_d, (vehicle_force_at(cur, x, 1.0f) - f_res) / m));
+            float j = c.w_shift * u * (tw + gs_gain_time(g, n, fmaxf(0.5f, v_s[g] - loss), v_t, a_d, f_res, o->hi_g[g], c.k_shift, ts)) + o->t[cur].rpmc;
+            if (j < jb) { jb = j; pick = cur; o->wait = g; }
+        }
+        if (pick && pick != o->best) { o->second = o->best; o->best = pick; }
     }
 }

@@ -55,9 +55,19 @@ FILE *open_out(const char *name, const char *mode) { return NULL; }  // no trace
 static int verbose, n_failed, g_x_failed;
 static float g_stuck_s = -1;   // the last 'stuck in neutral for N s' line (tail_pre's gap-state timer)
 static double g_dn1_t; static char g_dn1_why[48];   // set g_dn1_t to -1: the first downshift of ours after it, when and its reason, lands here
+// g_rec_on: every shift of ours is recorded (when, from, to, why, rpm); the SCORES pull-away and stop rows read it
+enum { REC_MAX = 128 };
+static int g_rec_on, g_rec_n; static struct { double t; int a, b; char why[32]; float rpm; } g_rec[REC_MAX];
 void logline(const char *fmt, ...)
 {
     if (strstr(fmt, "no pull after")) n_failed++;
+    if (g_rec_on && g_rec_n < REC_MAX && !strncmp(fmt, "shift %d->%d (%s) at", 20)) {
+        va_list ap; va_start(ap, fmt);
+        g_rec[g_rec_n].t = t_now; g_rec[g_rec_n].a = va_arg(ap, int); g_rec[g_rec_n].b = va_arg(ap, int);
+        snprintf(g_rec[g_rec_n].why, sizeof g_rec[g_rec_n].why, "%s", va_arg(ap, const char *));
+        va_arg(ap, double); g_rec[g_rec_n].rpm = (float)va_arg(ap, double); va_end(ap);
+        g_rec_n++;
+    }
     if (g_dn1_t < 0 && !strncmp(fmt, "shift %d->%d (%s)", 17)) {
         va_list ap; va_start(ap, fmt); int a = va_arg(ap, int), b = va_arg(ap, int); const char *w = va_arg(ap, const char *); va_end(ap);
         if (b < a) { g_dn1_t = t_now; snprintf(g_dn1_why, sizeof g_dn1_why, "%s", w); }
@@ -127,7 +137,7 @@ static void use_car()  // a pickup-like car: 6 speeds, 450 Nm
 }
 static struct {
     int gear, target, state, parked, engaged; double shift_end; float v, mass, grade_pct, pedal, cc, brake; int force, ebrake, ret;
-    float cvar, shift_time, cruise_kmh; int eb_toggle; float eb_level, mass_seen, thr_floor; int hint;   // hint: a shift-hint press the game's handler turns into target +-1 before its update
+    float cvar, shift_time, cruise_kmh; int eb_toggle; float eb_level, mass_seen, thr_floor; int hint, wish_on; float wish_thr, brake_unseen;   // brake_unseen: a brake the telemetry does not show (AEB in the ride)   // hint: a shift-hint press the game's handler turns into target +-1 before its update
     double s;                 // distance driven (m)
     float (*road)(double s);  // grade (%) along the road, or NULL (scenario sets grade)
     int route_on;
@@ -188,7 +198,7 @@ int gb_engage(void *, int g) { if (!M.parked) return 0; M.target = g; M.engaged 
 int game_engage_init() { return 1; }
 void gb_force(void *) { M.force = 1; }
 float gb_thr_in(void *) { return M.pedal; }
-float gb_thr_eff(void *) { return fmaxf(fmaxf(M.pedal, M.cc), M.thr_floor); }  // thr_floor: the game's 0.08 at pedal 0 (24-10, 1831 s)
+float gb_thr_eff(void *) { return fmaxf(M.wish_on ? M.wish_thr : fmaxf(M.pedal, M.cc), M.thr_floor); }  // thr_floor: the game's 0.08 at pedal 0 (24-10, 1831 s); wish_on: the wish pedal's throttle
 float wheel_radius() { return RADIUS; }
 int gb_engine(void *, engine_info *e)
 {
@@ -286,7 +296,7 @@ static void tick(double dt, int stats)
     float rpm = rpm_now();
     float idle = TORQUE < 1000 ? 750 : 600;
     if (rpm < idle) rpm = idle;   // clutch slips below idle
-    T.rpm = rpm; T.speed = M.v; T.in_thr = M.pedal; T.eff_thr = fmaxf(M.pedal, M.cc);
+    T.rpm = rpm; T.speed = M.v; T.in_thr = M.pedal; T.eff_thr = M.wish_on ? M.wish_thr : fmaxf(M.pedal, M.cc); g_pedal_mapped = M.wish_on;
     T.in_brake = M.brake; T.eff_brake = M.brake; T.cruise = M.cruise_kmh / 3.6f;
     T.motor_brake = M.ebrake; T.retarder = M.ret; T.eff_clutch = M.state ? 1 : 0;
     T.engine_on = 1; T.gear = M.gear; T.dgear = M.gear;
@@ -335,7 +345,7 @@ static void tick(double dt, int stats)
         if (M.target != M.gear) { M.state = 1; M.shift_end = t_now + M.shift_time; }
     }
     // physics
-    float F = 0, thr = fmaxf(M.pedal, M.cc);
+    float F = 0, thr = M.wish_on ? M.wish_thr : fmaxf(M.pedal, M.cc);
     if (!M.state && M.gear > 0) {
         float r = rpm_now();
         engine_info e; gb_engine(0, &e);
@@ -346,7 +356,7 @@ static void tick(double dt, int stats)
     }
     if (M.ret && thr < 0.05f) F -= M.ret / 5.0f * 25000 * fminf(1, M.v / 10);
     float s = sinf(atanf(M.grade_pct / 100));
-    float Fres = M.mass * 9.81f * (s + 0.006f) + 0.5f * 1.2f * CDA * M.v * M.v + M.brake * M.mass * 4;
+    float Fres = M.mass * 9.81f * (s + 0.006f) + 0.5f * 1.2f * CDA * M.v * M.v + (M.brake + M.brake_unseen) * M.mass * 4;
     M.v += (F - Fres) / M.mass * dt;
     if (M.v < 0) M.v = 0;
     M.s += M.v * dt;
@@ -640,7 +650,34 @@ static int run_scores()
             }
     printf("  Eco higher than Power in %d cases, lower in %d; Normal higher than Power in %d\n", eco_far, eco_near, pw_far);
     sc_check(eco_near == 0 && eco_far > 0 && pw_far > 0, "Eco skips farther than Power, never less; Normal farther than Power somewhere");
-    return run_scores_table();
+    int r = run_scores_table();   // (part 3 after it: its many sc_prime calls move the clock, and the rows of part 2 depend on the clock's float steps)
+    printf("\n=== SCORES part 3: the score function with choice_objective 1 ===\n");
+    // choice_objective 1 (the time to gain speed picks the gear up), 33 t, 1.0 s box, a firm pedal: a skip may win where the gear skipped to
+    // cannot give all the force asked (the score alone never takes such a gear), and Eco goes as far up as Power or farther
+    int short_skip = 0, t_far = 0, t_near = 0, n_up = 0;
+    for (float kmh = 10; kmh <= 70; kmh += 2.5f)
+        for (float pedal : { 0.4f, 0.5f, 0.6f, 0.7f, 0.8f })
+            for (int cur = 2; cur <= 11; cur++) {
+                int best[3];
+                for (int md = 0; md < 3; md++) {
+                    sc_prime(33000, 1.0f, kmh, cur);
+                    gs_cfg c = sc_cfg(md, 2);
+                    const char *k = md == 1 ? "choice_time_shift_eco" : md == 2 ? "choice_time_shift_power" : "choice_time_shift";
+                    for (int j = 0; j < m_trueshift.n_params; j++) {
+                        if (!strcmp(m_trueshift.params[j].key, k)) c.k_shift = *m_trueshift.params[j].val;
+                        if (!strcmp(m_trueshift.params[j].key, "choice_min_accel")) c.a_min = *m_trueshift.params[j].val;
+                    }
+                    c.time_obj = 1;
+                    gs_eval(&o, cur, NG, M.v, sc_need(cur, pedal), vehicle_resist(M.v), 0, c);
+                    best[md] = o.best > cur ? o.best : 0;
+                    if (md == 0 && best[0]) { n_up++; if (best[0] > cur + 1 && o.t[best[0]].share > 1) short_skip++; }
+                }
+                if (best[1] && best[2]) { if (best[1] > best[2]) t_far++; if (best[1] < best[2]) t_near++; }
+            }
+    printf("  time objective, 33 t, 1.0 s box, 10-70 km/h, pedal 0.4-0.8: Normal skips to a gear short of the force asked in %d of %d upshifts; Eco higher than Power in %d, lower in %d\n",
+           short_skip, n_up, t_far, t_near);
+    sc_check(short_skip > 0 && t_near == 0 && t_far > 0, "time objective: a skip can win under load, Eco skips farther than Power, never less");
+    return r | g_sc_failed;
 }
 
 // ---- part 2: choice 0 (the cascade) against choice 1 (the scores) in the simulator
@@ -650,8 +687,10 @@ static void sc_do(const char *name, setup su, void (*ctl)(double), int choice)
 {
     set_param("choice", (float)choice);
     // a short drive first: the module keeps a once-per-standstill flag (the launch correction) until the truck moves, and a run that ends
-    // in a crawl would give the one after it a different start than its twin
-    g_quiet = 1; run("wash", {20000, 30, 6, 2}, c_hold80); g_quiet = 0;
+    // in a crawl would give the one after it a different start than its twin. In the scenario's mode: the module reads the mode once a
+    // second, at a phase the run before sets, so the first second of an Eco or Power run was Normal or not depending on that run
+    setup wash = {20000, 30, 6, 2}; wash.cvar = su.cvar;
+    g_quiet = 1; run("wash", wash, c_hold80); g_quiet = 0;
     sim_reset(RESET_HARD, "sim: next scores scenario");   // every run starts from a module that knows nothing of the one before
     g_quiet = getenv("SC_VERBOSE") ? 0 : 1;
     run(name, su, ctl);
@@ -712,6 +751,76 @@ static void c_cruise3(double t)
     c_cc83(t);
     if (g_c12_up < 0 && M.gear == 12 && !M.state) g_c12_up = t;
     if (M.s >= 2950 && M.s < 3000) g_c12_g12 = M.gear == 12;
+}
+// c_pull: a fixed pedal (g_pl_ped) from a standstill; the shifts until 70 km/h (or the end) are counted from the recorder. g_pl_wish = 1: the
+// engine's throttle is the wish pedal's (a power wish, the throttle that delivers it in this gear, as modules/pedal.cpp does it in Normal,
+// in gear above 12 km/h), the driver's pedal stays where it is, and TrueShift reads the wish (pedal_wish_force below)
+static float g_pl_ped = 0.7f; static int g_pl_wish; static double g_pl_t0, g_pl_t50, g_pl_t70, g_pl_sh70;
+static float sim_wish_force(float v)   // the wish pedal's force at v for the pedal g_pl_ped (exponent 1, no rise limit)
+{
+    engine_info e; gb_engine(0, &e);
+    float pref = 0;
+    for (float r = 100; r <= LIMIT; r += 50) pref = fmaxf(pref, TORQUE * curve_factor(&e, r) * r * 0.10472f);
+    int sg = ts_start_gear(0.3f);
+    float fcap = sg > 0 ? vehicle_force_at(sg, vehicle_kmh_at(sg, V.plateau) / 3.6f, 1.0f) : 0;
+    return fminf(g_pl_ped * pref * V.eta / fmaxf(v, 0.5f), g_pl_ped * fcap);
+}
+float pedal_wish_force(float v) { return M.wish_on ? sim_wish_force(v) : -1; }   // TrueShift reads the wish (suite.h)
+static void c_pull(double t)
+{
+    if (t <= 0) { g_pl_t0 = t_now; g_pl_t50 = g_pl_t70 = -1; g_pl_sh70 = -1; g_rec_n = 0; }
+    M.pedal = g_pl_ped; M.wish_on = 0;
+    if (g_pl_wish && M.gear > 0 && !M.state && M.v * 3.6f > 12) {   // the driver's pedal stays g_pl_ped (T.in_thr), the engine gets the wish's throttle
+        float fg = vehicle_force_at(M.gear, M.v, 1.0f);
+        if (fg > 0) { M.wish_on = 1; M.wish_thr = fminf(1, sim_wish_force(M.v) / fg); }
+    }
+    if (g_pl_t50 < 0 && M.v * 3.6f >= 50) g_pl_t50 = t;
+    if (g_pl_t70 < 0 && M.v * 3.6f >= 70) { g_pl_t70 = t; g_pl_sh70 = g_sh_t; }
+}
+struct pl_res { int shifts, skips; double shift_s, t50, t70, gap; int gap_ok; };
+static pl_res pl_stats(float ts)   // from the recorder: until 70 km/h (or the end of the run)
+{
+    pl_res r = {}; r.gap = 99; r.gap_ok = 1;
+    double t_end = g_pl_t70 >= 0 ? g_pl_t0 + g_pl_t70 : 1e30, up_last = -1;
+    for (int i = 0; i < g_rec_n; i++) {
+        if (g_rec[i].t > t_end) break;
+        r.shifts++;
+        if (abs(g_rec[i].b - g_rec[i].a) > 1) r.skips++;
+        if (g_rec[i].b > g_rec[i].a) {
+            bool at_limit = !strncmp(g_rec[i].why, "rev limit", 9);
+            if (up_last >= 0) { r.gap = fmin(r.gap, g_rec[i].t - up_last); if (g_rec[i].t - up_last < 1.5 * ts && !at_limit) r.gap_ok = 0; }
+            up_last = g_rec[i].t;
+        }
+    }
+    r.shift_s = g_pl_sh70 >= 0 ? g_pl_sh70 : g_sh_t;
+    r.t50 = g_pl_t50; r.t70 = g_pl_t70;
+    return r;
+}
+static const char *g_pl_label[3] = { "choice 0", "choice 1, same force", "choice 1, time" };
+static pl_res pl_row(const char *name, setup su, int var)   // var: 0 = choice 0, 1 = choice 1 with the previous objective, 2 = choice 1 with the time
+{
+    set_param("choice_objective", var == 1 ? 0.0f : 1.0f);
+    g_rec_on = 1;
+    sc_do(name, su, c_pull, var > 0);
+    g_rec_on = 0;
+    set_param("choice_objective", 1);
+    pl_res r = pl_stats(su.shift_time);
+    char t50[16], t70[16];
+    snprintf(t50, sizeof t50, r.t50 < 0 ? "   -" : "%4.1f", r.t50); snprintf(t70, sizeof t70, r.t70 < 0 ? "   -" : "%4.1f", r.t70);
+    printf("  %-24s %-22s %6d %6d %8.1f  %s  %s %8.1f\n", name, g_pl_label[var], r.shifts, r.skips, r.shift_s, t50, t70, r.gap);
+    if (getenv("SC_SHIFTS")) for (int i = 0; i < g_rec_n; i++) printf("      %6.1f  %d->%d (%s) %.0f rpm\n", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why, g_rec[i].rpm);
+    return r;
+}
+// c_stop: from the start speed with the pedal off, g_st_coast seconds coasting, then the brake g_st_brake to a stop; the stall rule and the lowest
+// rpm in gear above 5 km/h (the game's own range below the handback) are counted
+static float g_st_brake = 0.2f, g_st_coast = 0, g_st_rpm_min; static int g_st_stall, g_st_unseen;   // g_st_unseen: the brake is not in the telemetry
+static void c_stop(double t)
+{
+    if (t <= 0) { g_st_rpm_min = 1e9f; g_st_stall = 0; g_rec_n = 0; g_pl_t0 = t_now; }
+    M.pedal = 0;
+    float b = t < g_st_coast ? 0 : fminf(g_st_brake, g_st_brake * (float)(t - g_st_coast) / 0.5f);
+    if (g_st_unseen) M.brake_unseen = b; else M.brake = b;
+    if (M.gear > 0 && !M.state && M.v * 3.6f >= 5) g_st_rpm_min = fminf(g_st_rpm_min, rpm_now());
 }
 static int run_scores_table()
 {
@@ -847,6 +956,50 @@ static int run_scores_table()
     printf("  choice 1: %d of %d ramps got the extra 2 gears; the most shifts in the 10 s after the lift: %d\n", n_skip1, n_var, worst);
     sc_check(n_skip1 > 0, "choice 1 skips in some of the ramps (else the test says nothing)");
     sc_check(worst <= 1, "choice 1: at most 1 shift in the 10 s after the lift to 0.00 in every ramp (no engine brake, no retarder, no brake; an eco-roll into neutral counts as the one shift)");
+    // 5. a firm pedal from a standstill to 70 km/h on a slow box (ride: 17 t, pedal 0.66-0.77, 1->3, 3->4, 4->5, 5->6, 6->7 every 1.8-2.8 s): the
+    // shifts, skips, seconds in shifts, time to 50 and 70 km/h and the shortest time between two upshifts, until 70 km/h
+    printf("\n  pull-away to 70 km/h, ATO, Normal, 1.0 s box, until 70 km/h: shifts, skips, seconds in shifts, time to 50 / 70 km/h, shortest time between two upshifts (gear changes)\n");
+    printf("  %-24s %-22s %6s %6s %8s  %4s  %4s %8s\n", "scenario", "", "shifts", "skips", "shift s", "t50", "t70", "up gap");
+    {
+        pl_res r[3], w[3], h[3], l[3];
+        for (int v = 0; v < 3; v++) r[v] = pl_row("33 t pedal 0.7", {33000, 1, 1, 120, 3, 1.0f}, v);
+        for (int v = 0; v < 3; v++) pl_row("33 t pedal 0.7 Eco", {33000, 1, 1, 120, 10, 1.0f}, v);
+        for (int v = 0; v < 3; v++) pl_row("33 t pedal 0.7 Power", {33000, 1, 1, 120, 1.6667f, 1.0f}, v);
+        g_pl_wish = 1;
+        for (int v = 0; v < 3; v++) w[v] = pl_row("33 t wish pedal 0.7", {33000, 1, 1, 120, 3, 1.0f}, v);
+        for (int v = 0; v < 3; v++) h[v] = pl_row("17 t wish pedal 0.7", {17000, 1, 1, 90, 3, 1.0f}, v);
+        g_pl_wish = 0; g_pl_ped = 0.3f;
+        for (int v = 0; v < 3; v++) l[v] = pl_row("17 t pedal 0.3", {17000, 1, 1, 90, 3, 1.0f}, v);
+        g_pl_ped = 0.7f;
+        sc_check(r[2].shifts < r[0].shifts && r[2].shift_s < r[0].shift_s && r[2].t70 > 0 && r[2].t70 <= r[0].t70 + 0.05,
+                 "choice 1 (time), 33 t pedal 0.7: fewer shifts and seconds in shifts than choice 0, 70 km/h no later");
+        sc_check(r[2].gap_ok && w[2].gap_ok && h[2].gap_ok && l[2].gap_ok, "choice 1 (time): no two upshifts closer than 1.5 x the shift time below the rev limit");
+        sc_check(l[2].skips >= l[1].skips, "choice 1 (time), 17 t pedal 0.3: at least as many skips as the previous objective");
+    }
+    // 6. braking to a stop from 70 km/h (ride: 10->8 'braking' only at 20 km/h and 638 rpm, then the stall rule 8->6 at 419 rpm and 6->1): no
+    // stall-rule shift, and the revs above 5 km/h never under the idle - 50
+    printf("\n  braking to a stop from 70 km/h (ATO, Normal, pedal off): shifts, stall-rule shifts, lowest rpm in gear above 5 km/h\n");
+    {
+        struct St { const char *name; float mass, brake, coast; int unseen; } st[5] = { { "17 t brake 0.2", 17000, 0.2f, 0, 0 }, { "17 t coast 4 s, brake 0.6", 17000, 0.6f, 4, 0 },
+            { "17 t coast 4 s, unseen 0.6", 17000, 0.6f, 4, 1 }, { "33 t brake 0.3", 33000, 0.3f, 0, 0 }, { "33 t brake 1.0", 33000, 1.0f, 0, 0 } };
+        int bad = 0;
+        for (auto &s : st)
+            for (int v = 0; v < 3; v++) {
+                g_st_brake = s.brake; g_st_coast = s.coast; g_st_unseen = s.unseen;
+                set_param("choice_objective", v == 1 ? 0.0f : 1.0f);
+                g_rec_on = 1;
+                sc_do(s.name, {s.mass, 70, sc_gear_for(70, 1100), 40, 3, 1.0f}, c_stop, v > 0);
+                g_rec_on = 0;
+                set_param("choice_objective", 1);
+                for (int i = 0; i < g_rec_n; i++) if (!strcmp(g_rec[i].why, "stall")) g_st_stall++;
+                char seq[160] = ""; int k = 0;
+                for (int i = 0; i < g_rec_n && k < (int)sizeof seq - 8; i++) k += snprintf(seq + k, sizeof seq - k, i ? ">%d" : "%d>%d", i ? g_rec[i].b : g_rec[i].a, g_rec[i].b);
+                printf("  %-26s %-22s %2d shifts, %d stall, lowest %4.0f rpm  %s\n", s.name, g_pl_label[v], g_rec_n, g_st_stall, g_st_rpm_min, seq);
+                if (getenv("SC_SHIFTS")) for (int i = 0; i < g_rec_n; i++) printf("      %6.1f  %d->%d (%s) %.0f rpm\n", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why, g_rec[i].rpm);
+                if (v == 2 && (g_st_stall > 0 || g_st_rpm_min < 600 - 50)) bad++;
+            }
+        sc_check(bad == 0, "choice 1: no stall-rule shift on a stop, the revs above 5 km/h never under idle - 50");
+    }
     return g_sc_failed;
 }
 
