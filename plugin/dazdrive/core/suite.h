@@ -200,8 +200,9 @@ struct cruise_info {      // Cruise (Auto Hold, Stop&Go)
     float feed;           // the cruise throttle fed to the automatic's pedal at walking pace (0 = none)
 };
 void cruise_info_get(cruise_info *o);
-// LowSpeed (modules/lowspeed.cpp): the owner of the stop, the standstill and the first metres, as a shadow for now: what it WOULD command,
-// nothing applied. would_clutch 0 closed .. 1 open (NAN = the game's own), would_brake a request 0..1, would_thr the throttle wish (NAN = none).
+// LowSpeed (modules/lowspeed.cpp): the owner of the stop, the standstill and the first metres. g_low is what it WOULD command (with owner=1 it
+// drives the stop and the standstill, through the accessors below; the rest stays a shadow).
+// would_clutch 0 closed .. 1 open (NAN = the game's own), would_brake a request 0..1, would_thr the throttle wish (NAN = none).
 enum LowState { LOW_GAME, LOW_HANDED, LOW_STOPPING, LOW_STOPPED_HELD, LOW_STOPPED_FREE, LOW_CRAWL, LOW_MANEUVER, LOW_LAUNCH, LOW_ROLLING_LOW,
                 LOW_REVERSE, LOW_N };
 struct low_owner {

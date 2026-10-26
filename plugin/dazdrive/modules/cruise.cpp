@@ -1185,7 +1185,7 @@ static void own_acc(char *g, float dt)
                 b = fmaxf(b, bs);
             }
         }
-        if (p_own_brake > 0 && v <= 0.05f && lv < 0.5f && lead < gmin + 3 && !(low_owner_on() && g_sg_ok)) b = fmaxf(b, 0.2f);  // standing: hold (the low-speed owner's, with Stop&Go)
+        if (p_own_brake > 0 && v <= 0.05f && lv < 0.5f && lead < gmin + 3 && !(low_owner_on() && g_sg_hold)) b = fmaxf(b, 0.2f);  // standing: hold (the low-speed owner's while Stop&Go holds)
         s_want_acc = crossing ? 0 : b;
     }
     if (want < OA.t) OA.t = fmaxf(want, OA.t - dn * dt);

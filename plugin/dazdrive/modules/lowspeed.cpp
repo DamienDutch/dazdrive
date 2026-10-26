@@ -51,6 +51,7 @@ static const float LS_HOLD_REQ = 0.6f;      // the brake request of a hold when 
 static const float LS_SG_HOLD_REQ = 0.2f;   // the brake request of the hold behind a lead with the cruise on (the ACC's own standing hold)
 static const float LS_ARM_RPM = 100;        // Stop&Go's hold is set when the driveline is this near the stop threshold (rpm), before the box can go to neutral
 static const float LS_R_BRAKE = 0.01f;      // the game puts R in on a brake above this at a standstill (its own rule)
+static const float LS_GAP_KMH = 1.0f;       // owner=1: gear 0 above the open point + this is a shift's gap (TrueShift's braking downshift), not the box's own stop
 
 // What one frame sees: telemetry, the vehicle model and the other modules' states, gathered in one place (the sim sets the same
 // fields through the real accessors).
@@ -72,7 +73,7 @@ static double g_last;        // sim_s() of the last frame
 static float g_lock_s;       // how long the clutch has been locked
 static float g_rel_s;        // how long the pedal has been released during a launch
 static int g_n_trans;
-static int g_latch;          // the clutch is commanded open (STOPPING and the standstill); only the driver's pedal ends it
+static volatile int g_latch; // the clutch is commanded open (STOPPING and the standstill); only the driver's pedal ends it
 static int g_assist;         // stop assist: 0 not asked, 1 running, 2 cancelled by the driver or not wanted this stop
 static int g_pre_gear;       // the gear preselected with the open clutch
 static float g_open_kmh;     // the speed where the start gear sits at the clutch-open rpm now
@@ -267,7 +268,10 @@ static void low_command(const low_in &in)
     switch (st) {
     case LOW_STOPPING: {
         g_open_kmh = open_point_kmh(in);
-        if (!g_latch && (in.kmh <= g_open_kmh || in.gear == 0)) {
+        // with owner=1 the box goes to neutral by itself only at the open point or below (the threshold is the owner's), so gear 0 well
+        // above it is a downshift's gap: latching there would preselect the start gear at speed and pin the threshold over idle + 150
+        int gap0 = in.gear == 0 && (p_owner <= 0 || in.kmh <= g_open_kmh + LS_GAP_KMH);
+        if (!g_latch && (in.kmh <= g_open_kmh || gap0)) {
             g_latch = 1;
             g_pre_gear = in.start_gear;
             // the box opened the clutch by itself with both pedals free: it finishes the stop (the pedal and the brake always win)
@@ -339,7 +343,7 @@ float low_stop_rpm(float idle, float thr, float brake, int gear)
     float b = fminf(brake, 1.0f);
     float r = fmaxf(stock, vehicle_rpm_at(gear, v) - b * b * idle);   // the game adds its brake term on top of the hook's value: it is in the open point already
     if (g_latch) r = fmaxf(r, idle + LS_STOP_MARGIN);
-    return r;
+    return fminf(r, 3 * idle);   // a garbage gear table never sends the box to neutral at speed (a real lower gear stays far under this)
 }
 int low_owner_wanted() { return p_owner > 0; }
 int low_owner_on() { return g_o_on; }
@@ -456,6 +460,9 @@ static void ls_start()
 
 static void ls_stop()
 {
+    // the hooks stay in place after a shutdown: nothing of ours may keep acting on stale state
+    g_o_on = g_o_pre = g_o_back = g_o_holding = 0;
+    if (p_owner > 0) act_brake(ACT_LOW, 0);
     if (g_csv) fflush(g_csv);
 }
 

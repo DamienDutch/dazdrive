@@ -4,7 +4,7 @@
 // only watches and decides, and the scenarios check what it would have commanded. Creep's and Cruise's states (crawl, smooth start, Auto
 // Hold, Stop&Go) are inputs the script sets.
 // S3-S6 (owner=1): the owner drives the stop and the standstill. The plant then runs the game's automatic as the notes describe it (at-rest
-// rule, stop rule on the owner's threshold, R on the brake, the generic gearbox with its gap state, a clutch that takes time to open), calls
+// rule, stop rule on the owner's threshold, TrueShift's braking downshift, the generic gearbox with its gap state), calls
 // the owner's own tail hook before the generic gearbox, and stands in for Auto Hold, the ACC and Stop&Go with the arming lines of cruise.cpp
 // (the stand-ins copy those lines, cruise.cpp itself is not part of this sim) next to a lead vehicle.
 // Plant: speed from pedals, brake, a little resistance and the grade; the engine at idle with an open clutch, on the driveline with
@@ -738,6 +738,33 @@ static void s5()
     printf("   higher start gear (%d -> %d) before the clutch opened: opens %d tick(s) after the grade change, never closes, preselected gear %d\n", a1, a0, opened - flat_at, M.target);
 }
 
+// S5 gap: a braking downshift passes gear 0 above the open point (the box's shift gap): no latch, the shift's target stays, the stop is clean
+static void s5_gap()
+{
+    own_world(8, 30, 0);
+    M.gear = gear_for(30, 1300); M.rpm = rpm_of(M.gear, M.v); M.target = M.gear;
+    int gap_at = -1, gap_n = 0, next = 0; float kmh_gap = 0, open_kmh = 0; bool latched = false, tgt_kept = true;
+    for (int i = 0; i < 60 * 14; i++) {
+        if (i == 60) g_brake = 0.15f;
+        float kmh = (float)(fabs(M.v) * 3.6);
+        if (gap_at < 0 && g_low.state == LOW_STOPPING && M.gear > 1 && kmh > g_open_kmh + 2) {   // STOPPING: under the top of the owner's world
+            gap_at = i; next = M.gear - 1; kmh_gap = kmh; open_kmh = g_open_kmh;
+        }
+        if (gap_at >= 0 && gap_n < 6) { M.gear = 0; M.target = next; M.down_at = t_now; gap_n++; }   // the gap: the box in gear 0 with the next gear as its target
+        else if (gap_n == 6) { M.gear = next; M.target = next; gap_n++; }
+        tick();
+        if (gap_at >= 0 && gap_n <= 6) { latched = latched || g_latch; tgt_kept = tgt_kept && M.target == next; }
+        if (gap_at > 0 && still() && g_low.since_s > 1.5) break;
+    }
+    int sg = ts_start_gear(0.3f);
+    check(gap_at > 0, "S5 gap: no STOPPING state above the open point in a gear over 1");
+    check(!latched && tgt_kept, "S5 gap: the gap at %.2f km/h (open point %.2f) latched the clutch (%d) or the target changed (kept %d)", kmh_gap, open_kmh, latched, tgt_kept);
+    check(g_low.state == LOW_STOPPED_HELD || g_low.state == LOW_STOPPED_FREE, "S5 gap: ends %s", low_state_name(g_low.state));
+    check(M.gear == 0 && M.target == sg, "S5 gap: ends in gear %d, preselect %d (start gear %d)", M.gear, M.target, sg);
+    printf("   a downshift's gap at %.2f km/h (open point %.2f): no latch, the shift's target %d kept, ends %s with gear %d preselected\n",
+           kmh_gap, open_kmh, next, low_state_name(g_low.state), M.target);
+}
+
 // S6: a stop from 30 km/h under a brake of 0.15 and 0.5, at three masses: the real plant (the game's stop rule on the owner's threshold)
 static int s6_open_gear;
 static void s6(float brake, float mass_t)
@@ -797,6 +824,7 @@ int main(int argc, char **argv)
     s4(0);
     printf("== S5 the start gear changes at the last metre: the open clutch is a latch\n");
     s5();
+    s5_gap();
     printf("== S6 stop from 30 km/h: the clutch opens at the start gear's idle point, derived from the mass\n");
     int gears[6], n = 0;
     for (float b : { 0.15f, 0.5f }) for (float m : { 18.0f, 25.0f, 36.0f }) { s6(b, m); gears[n++] = s6_open_gear; }
