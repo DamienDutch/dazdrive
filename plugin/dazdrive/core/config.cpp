@@ -51,6 +51,7 @@ static const struct { const char *sec, *key; float lo, hi; } k_bounds[] = {
     { "cruise", "aeb_evade_steer", 0, 0.1f }, { "cruise", "aeb_warn_s", 0.5f, 8 },
     { "cruise", "aeb_partial_s", 0.5f, 6 }, { "cruise", "aeb_full_s", 0.3f, 4 }, { "cruise", "aeb_partial_decel", 1, 6 },
     { "cruise", "aeb_max_decel", 2, 9 }, { "cruise", "aeb_min_kmh", 5, 60 },
+    { "cruise", "aeb_mode", 0, 1 }, { "cruise", "aeb_margin_m", 0, 5 }, { "cruise", "aeb_warn_decel", 1, 6 }, { "cruise", "aeb_full_frac", 0.5f, 1 },
     { "lane", "offset_gain", 0, 0.1f }, { "lane", "heading_gain", 0, 3 }, { "lane", "assist_feedback", 0, 200 },
     { "lane", "bend_assist", 0, 10 }, { "lane", "i_gain", 0, 0.05f }, { "lane", "i_max", 0, 0.05f },
     { "lane", "wheel_gain_ref", 0.2f, 5 }, { "lane", "bend_lead_s", 0, 2 }, { "lane", "bend_max_lat", 0, 8 }, { "lane", "bend_hold", 0, 1 },
