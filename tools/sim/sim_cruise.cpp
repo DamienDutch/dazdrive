@@ -124,6 +124,49 @@ static float stock_cruise(void *ga, float dt, float pedal)
     return fmaxf(stock_thr, pedal);
 }
 
+// ======================================================================= the actuator without the Cruise module ([cruise] enabled = 0)
+// Nothing of Cruise is attached (as cr_start leaves it with enabled = 0): the tick is the game's own cruise fn plus the actuator.
+// Creep's descent brake must reach the brake request (ramped by the writer, the hazards muted), its crawl throttle the engine, and a
+// throttle cap (launch control's; the rollover guard's goes the same way) the merged throttle. Before 26-10 all of this only went
+// through Cruise's hook. Runs first, in a fresh process; what it touches (the writer's memory, the wishes, the clock) is put back so
+// the runs below start as they always did.
+static void no_cruise_test()
+{
+    int bad = 0;
+    printf("--- the actuator without the Cruise module (as with [cruise] enabled = 0)\n");
+    memset(GA, 0, sizeof GA); o_cruise = stock_cruise; stock_thr = 0;
+    T.speed = 6 / 3.6f; T.air_psi = 120; T.air_warning = 0; T.paused = 0; T.gear = 1;   // crawling downhill at 6 km/h
+    act_stub(GA, 1 / 60.0f, 0); t_now += 1 / 60.0;                                       // one quiet tick: the writer's clock runs
+    // Creep posts its descent brake (0.4) and heavy-load throttle (0.12) from frame_end; the tick merges them
+    act_brake(ACT_CREEP, 0.4f); act_thr_floor(ACT_CREEP, 0.12f);
+    float thr = 0, req = 0, req_1s = 0;
+    for (int k = 0; k < 180; k++, t_now += 1 / 60.0) {
+        thr = act_stub(GA, 1 / 60.0f, 0);
+        req = *(float *)(GA + GA_BRAKE_REQ);
+        if (k == 59) req_1s = req;
+    }
+    int muted = s_hazard_mute;
+    printf("no Cruise: crawl brake wish 0.40 -> request %.2f after 1 s, %.2f after 3 s (ramped at 0.25/s, settles within 0.05 under the wish), hazards muted %d; crawl throttle 0.12 -> engine %.2f with the pedal up\n",
+           req_1s, req, muted, thr);
+    bad |= !(req_1s > 0.2f && req_1s < 0.3f) || !(req > 0.34f && req <= 0.4f) || !muted || fabsf(thr - 0.12f) > 0.001f;
+    // a throttle cap (launch control holding the revs): the merged throttle follows it, the pedal comes back when it is released
+    act_thr_cap(ACT_LCX, 0.5f);
+    float capped = act_stub(GA, 1 / 60.0f, 0.8f); t_now += 1 / 60.0;
+    act_thr_cap(ACT_LCX, 1.0f);
+    float pedal = act_stub(GA, 1 / 60.0f, 0.8f); t_now += 1 / 60.0;
+    printf("no Cruise: launch control cap 0.50 -> engine %.2f at pedal 0.80; cap released -> %.2f\n", capped, pedal);
+    bad |= fabsf(capped - 0.5f) > 0.001f || fabsf(pedal - 0.8f) > 0.001f;
+    // the wishes withdrawn: the request fades (0.6/s) and is gone
+    act_brake(ACT_CREEP, 0); act_thr_floor(ACT_CREEP, 0);
+    for (int k = 0; k < 120; k++, t_now += 1 / 60.0) { thr = act_stub(GA, 1 / 60.0f, 0); req = *(float *)(GA + GA_BRAKE_REQ); }
+    printf("no Cruise: wishes withdrawn -> request %.2f and throttle %.2f after 2 s (both 0), hazards muted %d (0)\n", req, thr, (int)s_hazard_mute);
+    bad |= req != 0 || thr != 0 || act_request() != 0 || s_hazard_mute;
+    printf("no-Cruise test: %s\n", bad ? "FAIL" : "ok");
+    if (bad) exit(1);
+    // a fresh start for everything below
+    act_reset(RESET_HARD, "sim"); memset(GA, 0, sizeof GA); memset(&T, 0, sizeof T); stock_thr = 0; t_now = 0;
+}
+
 // ---- truck
 static struct { float v, mass, grade; double shift_end; int gear; float lead_v, lead_x; int lead; } M;
 static float road_flat(double) { return 0; }
@@ -757,7 +800,8 @@ int main(int argc, char **argv)
 {
     verbose = argc > 1;
     for (int i = 0; i < m_cruise.n_params; i++) *m_cruise.params[i].val = m_cruise.params[i].def;
-    cr_attach();   // the module's three phases in the actuator's tick (cr_start does this in the game)
+    no_cruise_test();   // first: the actuator alone, before the module's phases are attached
+    cr_attach();        // the module's three phases in the actuator's tick (cr_start does this in the game)
     keys_test();
     g_keys_ok = 0; g_ret_ok = 0;
     memset(GA, 0, sizeof GA);

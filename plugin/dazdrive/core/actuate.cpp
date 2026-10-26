@@ -242,7 +242,7 @@ void act_reset(int level, const char *why)
     (void)why;
     s_aeb_was = 0; s_hill_was = s_hold_was = 0; s_br_at = 0;
     release_request();
-    s_log_owner = -1;
+    s_log_owner = -1; s_log_at = 0;
     if (level >= RESET_HARD) s_air_low = 0;
 }
 
