@@ -23,10 +23,10 @@
 // Fields of game_actor (1.60, cruise-re notes § 4) the layer writes.
 enum { A_REQ = 0x17c };   // the brake request: 0..1, slewed by the game, zeroes the merged throttle while > 0 (neutral-exit-re notes § 3.1)
 
-static const char *const k_owner[ACT_N] = { "cruise", "hill start", "Auto Hold", "bend", "ACC", "AEB", "rollover guard", "crawl", "launch control", "retarder (deceleration)", "retarder (mass)", "deceleration assist" };
-static_assert(ACT_N == 12, "one initializer per owner below");
+static const char *const k_owner[ACT_N] = { "cruise", "hill start", "Auto Hold", "bend", "ACC", "AEB", "rollover guard", "crawl", "launch control", "retarder (deceleration)", "retarder (mass)", "deceleration assist", "low-speed owner" };
+static_assert(ACT_N == 13, "one initializer per owner below");
 static act_wish W[ACT_N] = { { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 },
-                             { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 } };
+                             { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 } };
 float g_air_min_psi = 75;
 float g_retarder_hook;           // [core] retarder_hook
 volatile float g_ret_scale = 1.0f;   // read by the drivetrain hook: the lowest retarder factor of all owners
@@ -59,7 +59,8 @@ void act_brake_write(char *g)
 {
     float hill = W[ACT_HILL].brake, hold = W[ACT_HOLD].brake, bend = W[ACT_BEND].brake, crawl = W[ACT_CREEP].brake, acc = W[ACT_ACC].brake;
     float aeb = fmaxf(W[ACT_AEB].brake, W[ACT_RSC].brake);   // the rollover guard's brake rides on the AEB's fast request path
-    float want = fmaxf(fmaxf(fmaxf(fmaxf(fmaxf(hill, hold), bend), crawl), acc), aeb);
+    float low = W[ACT_LOW].brake;                              // the low-speed owner's hold (Stop&Go behind a lead), a plain request like the ACC's
+    float want = fmaxf(fmaxf(fmaxf(fmaxf(fmaxf(fmaxf(hill, hold), bend), crawl), acc), aeb), low);
     float dec = W[ACT_DECEL].brake;   // the deceleration assist (modules/decel.cpp): shapes its own ramps, see the branch below
     if (dec > 0) want = fmaxf(want, dec);
     float *req = (float *)(g + A_REQ);
@@ -97,7 +98,7 @@ void act_brake_write(char *g)
         }
         else if (dec_done && want <= 0) { }                             // ... and its last step to 0 is its own
         else if (dt > 0 && dt < 0.5) {
-            float up = acc > 0 ? 1.0f : 0.25f;  // following a lead: firm enough, still ramped (no valve dump)
+            float up = acc > 0 || low > 0 ? 1.0f : 0.25f;  // following a lead or holding a stop behind one: firm enough, still ramped (no valve dump)
             float lo = s_req_ours - 0.6f * (float)dt, hi = s_req_ours + up * (float)dt, asked = want;
             want = want < lo ? fmaxf(lo, 0) : (want > hi ? hi : want);
             // only a fading request is cut off: a rising one starts below 0.01 (0.25/s × 1/60 s = 0.004), and

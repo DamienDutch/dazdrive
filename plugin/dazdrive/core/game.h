@@ -125,6 +125,7 @@ int gb_target(void *self);
 int gb_state(void *self);
 void gb_force(void *self);
 void gb_set_target(void *self, int g);
+void gb_rest_state(void *self, int drive, int latch);  // drive state (4 forward gear wanted, 3 at rest in neutral) and the at-rest latch, as the game's at-rest rule sets them (1.60)
 int gb_engage(void *self, int g);  // gap state with gear 0: engage g like the box does on throttle (1.60)
 int game_engage_init();
 float gb_thr_in(void *self);

@@ -746,6 +746,14 @@ int gb_target(void *self) { return *(int32_t *)((char *)self + L->s_target); }
 int gb_state(void *self) { return *(int32_t *)((char *)self + L->s_state); }
 void gb_force(void *self) { *((volatile unsigned char *)self + L->s_force) = 1; }
 void gb_set_target(void *self, int g) { *(volatile int32_t *)((char *)self + L->s_target) = g; }
+// The automatic's at-rest bookkeeping, as Creep writes it (1.60 offsets, creep.cpp): drive state 4 = a forward gear is wanted, 3 = at rest in
+// neutral, and the latch byte "at rest, neutral". The game's at-rest rule sets 3 and 1 every update; written back at the end of the update
+// they keep a target we set until the generic gearbox reads it.
+void gb_rest_state(void *self, int drive, int latch)
+{
+    *(volatile int32_t *)((char *)self + 0x110) = drive;
+    *(volatile unsigned char *)((char *)self + 0x101) = (unsigned char)latch;
+}
 
 // The generic gearbox's own engage step from its gap state (0x140601c7c, neutral-exit-re notes
 // § 2): with gear 0 it waits there for throttle; this does

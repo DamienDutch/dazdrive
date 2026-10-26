@@ -200,8 +200,9 @@ struct cruise_info {      // Cruise (Auto Hold, Stop&Go)
     float feed;           // the cruise throttle fed to the automatic's pedal at walking pace (0 = none)
 };
 void cruise_info_get(cruise_info *o);
-// LowSpeed (modules/lowspeed.cpp): the owner of the stop, the standstill and the first metres, as a shadow for now: what it WOULD command,
-// nothing applied. would_clutch 0 closed .. 1 open (NAN = the game's own), would_brake a request 0..1, would_thr the throttle wish (NAN = none).
+// LowSpeed (modules/lowspeed.cpp): the owner of the stop, the standstill and the first metres. g_low is what it WOULD command (with owner=1 it
+// drives the stop and the standstill, through the accessors below; the rest stays a shadow).
+// would_clutch 0 closed .. 1 open (NAN = the game's own), would_brake a request 0..1, would_thr the throttle wish (NAN = none).
 enum LowState { LOW_GAME, LOW_HANDED, LOW_STOPPING, LOW_STOPPED_HELD, LOW_STOPPED_FREE, LOW_CRAWL, LOW_MANEUVER, LOW_LAUNCH, LOW_ROLLING_LOW,
                 LOW_REVERSE, LOW_N };
 struct low_owner {
@@ -213,7 +214,15 @@ struct low_owner {
 };
 extern low_owner g_low;
 const char *low_state_name(int state);
+// With [lowspeed] owner=1 (and the owner able to work: not in GAME) the owner drives the stop and the standstill; the other modules ask it
+// through these. All 0 / stock with owner=0 and in GAME.
+int low_owner_wanted();          // [lowspeed] owner=1 in the ini (TrueShift installs its stop hook for it even with smooth_stop 0)
+int low_owner_on();             // the owner has the stop and the standstill
+int low_stopped();              // standing by the owner's one definition (< 0.3 km/h, measurement noise): the standstill states
+int low_sg_zone();              // the engine is within reach of the stop threshold or the truck stands: Stop&Go's hold has to be set before the box can go to neutral
+float low_stop_rpm(float idle, float thr, float brake, int gear);   // the stop threshold for gear (rpm): the clutch opens at the open point of the owner
 int ts_start_gear(float thr);   // TrueShift: the start gear by physics (mass, grade, engine) for this pedal, whether or not TrueShift has the truck; 0 = unknown
+int ts_stop_hooked();            // TrueShift: the game's stop threshold hook is in (the owner's clutch-open point needs it)
 float ts_idle_rpm();            // TrueShift: the idle rpm (learned at a standstill, else the ini's)
 int ts_mode();                  // TrueShift: the driving mode (MODE_ECO / MODE_NORMAL / MODE_POWER) of an automatic truck it can read; -1 = manual box, M, or an unsupported truck
 // Pedal (modules/pedal.cpp): the wish pedal. The driver's pedal p becomes a wish for power; the throttle that delivers it in the gear
@@ -234,7 +243,7 @@ float wheel_radius();    // powered wheels, meters (0 if unknown)
 // game tick (the game's cruise fn call, hooked by core whatever the ini says) and writes them. The throttle is the base (the
 // game's cruise output, or what Cruise posts from its own controller), then every floor, then every cap, then every scale.
 // Brake wishes are in the game's request unit 0..1 (the top of actuate.cpp says why not m/s2).
-enum { ACT_CRUISE, ACT_HILL, ACT_HOLD, ACT_BEND, ACT_ACC, ACT_AEB, ACT_RSC, ACT_CREEP, ACT_LCX, ACT_RET_DECEL, ACT_RET_NORM, ACT_DECEL, ACT_N };
+enum { ACT_CRUISE, ACT_HILL, ACT_HOLD, ACT_BEND, ACT_ACC, ACT_AEB, ACT_RSC, ACT_CREEP, ACT_LCX, ACT_RET_DECEL, ACT_RET_NORM, ACT_DECEL, ACT_LOW, ACT_N };
 struct act_wish { float brake, floor, cap, scale, ret; };  // brake request 0..1; throttle at least floor (0 = none), at most cap (1 = none), times scale (1 = none); retarder torque factor 0..1 (1 = none)
 void act_brake(int owner, float want);
 void act_thr_floor(int owner, float v);
