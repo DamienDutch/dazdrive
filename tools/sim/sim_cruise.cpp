@@ -969,6 +969,106 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
     return r;
 }
 
+// ======================================================================= force_mode: the controller asks a force, the throttle gives it in this gear
+// A 12-speed box on the vehicle model (the Volvo ratios of sim.cpp, diff 2.85, this file's engine: 2400 Nm, flat 1000-1500 rpm, limit 2200),
+// the force = throttle x the gear's full-throttle force (vehicle_force_at), a 0.5 s torque gap per shift. The box shifts by rpm and pull (up
+// over 1500 rpm when the next gear lands at 950 or more and gives the force of now at 90 % throttle, down under 950, down also after 3 s at full
+// throttle when the lower gear stays under 1700): the same box for both units, so the difference is the controller's.
+static const float FM_RATIO[12] = { 11.73f, 9.21f, 7.09f, 5.57f, 4.35f, 3.41f, 2.7f, 2.12f, 1.63f, 1.28f, 1.0f, 0.78f };
+static int g_fm_plant;   // the force_mode runs: the wish pedal's reference on this plant (the other runs: the model cannot tell, the old unit)
+// A full wish at v as the wish pedal finds it with ref_now 1: the best gear at full throttle whose revs lie in 1000 ... 1900 rpm (its window on
+// this engine), the first gear at 1000 rpm as the cap (pedal.cpp: wish_ref)
+float pedal_wish_full(float v)
+{
+    if (!g_fm_plant) return 0;
+    float best = 0;
+    for (int g = 1; g <= 12; g++) { float r = vehicle_rpm_at(g, v); if (r >= 1000 && r <= 1900) best = fmaxf(best, vehicle_force_at(g, v, 1.0f)); }
+    float cap = vehicle_force_at(1, vehicle_kmh_at(1, 1000) / 3.6f, 1.0f);
+    return best > 0 ? fminf(best, cap) : cap;
+}
+static float fm_road(double s) { return s < 2000 ? 0 : s < 3500 ? 3.0f : 0; }   // 2 km flat, 1.5 km at 3 %, flat
+static float fm_road1(double) { return 1.0f; }                                 // 1 % all along: 12 needs ~0.75 throttle at 33 t
+struct fmres { float e_flat, loss, e_climb, thr_max_near, jump, f_err; int shifts, f_seen; };   // jump: the largest change of the pull across a shift that began under full throttle (share; -1 = none)
+static fmres fm_run(float mass, int fm, float cvar, float eco_cap, float (*road)(double) = fm_road)
+{
+    fmres r = {}; r.jump = -1;
+    memset(GA, 0, sizeof GA); memset(&T, 0, sizeof T); memset(&C, 0, sizeof C); memset(&AH, 0, sizeof AH);
+    for (int o = 0; o < ACT_N; o++) act_brake(o, 0);
+    act_reset(RESET_HARD, "sim"); cr_reset(RESET_HARD, "sim");
+    g_fm_plant = 1; p_force_mode = (float)fm; p_eco_cap = eco_cap; g_cvar_adaptive = cvar;
+    g_sim_eng = engine_info(); g_sim_eng.torque = 2400; g_sim_eng.n_curve = 0; g_sim_eng.rpm_limit = 2200; g_sim_mass = mass;
+    for (int i = 0; i < 12; i++) T.ratio[i] = FM_RATIO[i];
+    T.diff = 2.85f; T.fwd_gears = 12; T.wheels = 1; T.engine_on = 1; T.air_psi = 120;
+    vehicle_reset(RESET_HARD);
+    o_cruise = stock_cruise; stock_thr = 0; p_smooth = 1; g_sg_ok = 1; g_low_ok = 1; g_sg_hold = 0; g_feed = 0; g_stopped_at = 0;
+    *(unsigned char *)(GA + GA_ON) = 1; *(float *)(GA + GA_SET) = 83;
+    float v = 83 / 3.6f, f_before = -1, u = 0, lo = 999; float f_last = 0, u_last = 1; double s = 0, t0 = t_now, sum_f = 0, sum_c = 0, shift_end = -1, full_since = -1, near_since = -1;
+    int n_f = 0, n_c = 0, gear = 12, next = 12;
+    for (; t_now - t0 < 200; t_now += 1 / 60.0) {
+        double t = t_now - t0;
+        float grade = road(s), kmh = v * 3.6f;
+        T.speed = v; T.cruise = 83 / 3.6f; T.place.orientation.pitch = atanf(grade / 100) / 6.2831853f;
+        *(float *)(GA + GA_LEAD_M) = 0; *(float *)(GA + GA_ACC_TARGET) = 0; *(float *)(GA + GA_BRAKE_REQ) = 0;
+        // the box
+        if (shift_end >= 0 && t_now >= shift_end) { gear = next; shift_end = -1; r.shifts++; }
+        int shifting = shift_end >= 0;
+        if (!shifting) {
+            float rpm = vehicle_rpm_at(gear, v);
+            if (gear < 12 && rpm > 1500 && vehicle_rpm_at(gear + 1, v) >= 950 && u * vehicle_force_at(gear, v, 1.0f) <= 0.9f * vehicle_force_at(gear + 1, v, 1.0f)) next = gear + 1;
+            else if (gear > 1 && (rpm < 950 || (full_since >= 0 && t_now - full_since > 3 && vehicle_rpm_at(gear - 1, v) < 1700))) next = gear - 1;
+            if (next != gear) { shift_end = t_now + 0.5; full_since = -1; shifting = 1; }
+        }
+        T.gear = T.dgear = gear; T.rpm = vehicle_rpm_at(gear, v); T.eff_clutch = shifting ? 1 : 0;
+        vehicle_frame();
+        u = act_stub(GA, 1 / 60.0f, 0);
+        T.eff_thr = u;
+        if (u < 0.99f || shifting) full_since = -1; else if (full_since < 0) full_since = t_now;
+        // what TrueShift would read: the force the cruise asks; where the throttle is not at 1 it is the force the throttle gives in this gear
+        float fw = cruise_wish_force(v);
+        if (fw >= 0) r.f_seen++;
+        if (fw >= 0 && !shifting && u > 0.05f && u < 0.98f) r.f_err = fmaxf(r.f_err, fabsf(fw - u * vehicle_force_at(gear, v, 1.0f)) / fw);
+        // (the Eco cap: within 4 km/h of the target for 1 s, so the rate limit has brought a throttle from under the band down to it)
+        if (kmh <= 79) near_since = -1; else if (near_since < 0) near_since = t_now;
+        if (near_since >= 0 && t_now - near_since >= 1) r.thr_max_near = fmaxf(r.thr_max_near, u);
+        float F = shifting ? 0 : u * vehicle_force_at(gear, v, 1.0f);
+        if (!shifting && f_before > 0 && F > 0) { r.jump = fmaxf(r.jump, fabsf(F / f_before - 1)); f_before = -1; }   // the first tick after a shift
+        if (!shifting) { f_last = F; u_last = u; } else if (f_before < 0 && u_last < 0.98f) f_before = f_last;
+        float res = mass * 9.81f * (sinf(atanf(grade / 100)) + 0.006f) + 0.5f * 1.2f * 6 * v * v;
+        v = fmaxf(0, v + (F - res) / mass / 60);
+        s += v / 60;
+        if (t > 20 && s < 2000) { sum_f += fabsf(kmh - 83); n_f++; }
+        if (s >= 2000 && s < 3500) { sum_c += fabsf(kmh - 83); n_c++; lo = fminf(lo, kmh); }
+    }
+    r.e_flat = n_f ? (float)(sum_f / n_f) : 0; r.e_climb = n_c ? (float)(sum_c / n_c) : 0; r.loss = 83 - lo;
+    g_fm_plant = 0; p_force_mode = 0; p_eco_cap = 1; g_cvar_adaptive = 3;
+    return r;
+}
+static int force_mode_test()
+{
+    int bad = 0;
+    printf("--- force_mode: cruise 83 km/h, 2 km flat, then 1.5 km at 3 %% (12 speeds, the box shifts by rpm); force_mode 0 against 1\n");
+    printf("   %-14s %s  %8s %8s %8s %6s %10s %8s %8s\n", "", "fm", "|e| flat", "loss", "|e| 3 %", "shifts", "pull step", "force", "f err");
+    for (float m : { 17000.0f, 33000.0f }) {
+        fmres a[2]; char js[2][16];
+        for (int fm = 0; fm < 2; fm++) {
+            a[fm] = fm_run(m, fm, 3, 1);
+            if (a[fm].jump < 0) snprintf(js[fm], sizeof js[fm], "-"); else snprintf(js[fm], sizeof js[fm], "%.0f%%", a[fm].jump * 100);
+            printf("   %-14s %d  %8.2f %8.1f %8.2f %6d %10s %8s %7.1f%%\n", m < 20000 ? "17 t Normal" : "33 t Normal", fm, a[fm].e_flat, a[fm].loss, a[fm].e_climb,
+                   a[fm].shifts, js[fm], a[fm].f_seen ? "read" : "-1", a[fm].f_err * 100);
+        }
+        bad |= a[0].f_seen != 0 || a[1].f_seen == 0 || a[1].f_err > 0.01f || a[1].jump > 0.05f;
+        bad |= a[1].e_flat > a[0].e_flat + 0.1f || a[1].loss > a[0].loss + 0.5f || a[1].e_climb > a[0].e_climb + 0.2f;
+    }
+    for (int fm = 0; fm < 2; fm++) {
+        fmres e = fm_run(33000, fm, 10, 0.6f, fm_road1);
+        printf("   33 t Eco, 1 %% all along, eco_cruise_throttle_cap 0.6, force_mode %d: highest throttle 1 s within 4 km/h of 83: %.3f, lowest %.1f km/h at 2-3.5 km, %d shifts\n",
+               fm, e.thr_max_near, 83 - e.loss, e.shifts);
+        bad |= e.thr_max_near > 0.6f + 1e-4f;
+    }
+    printf("force_mode test: %s\n", bad ? "FAIL" : "ok");
+    return bad;
+}
+
 int main(int argc, char **argv)
 {
     verbose = argc > 1;
@@ -1238,5 +1338,6 @@ int main(int argc, char **argv)
         printf("Auto Hold lever test: %s\n", bad ? "FAIL" : "ok");
         if (bad) return 1;
     }
+    if (force_mode_test()) return 1;   // after the lever test: it starts everything it uses afresh
     return 0;
 }

@@ -109,6 +109,7 @@ float route_junction_m() { return -1; }
 float route_curve_speed(float, float, float) { return NAN; }
 void creep_info_get(creep_info *o) { *o = CI; }
 void cruise_info_get(cruise_info *o) { *o = CU; }
+float cruise_wish_force(float) { return -1; }   // [cruise] force_mode: the cruise (modules/cruise.cpp) is not in this sim
 
 #include "modules/pedal.cpp"
 extern module m_trueshift;

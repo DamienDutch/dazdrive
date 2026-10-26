@@ -31,6 +31,7 @@ static float p_herm;
 static float p_sg_rearm, p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_own_bias, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_lever, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade, p_aeb_mode, p_aeb_margin, p_aeb_warn_dec, p_aeb_full_frac;
 static float p_rb_curves;  // roundabout_curves
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
+static float p_force_mode;  // own cruise throttle: the controller asks a force at the wheels, not a throttle
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = cruise module on" },
@@ -138,6 +139,7 @@ static param g_params[] = {
     { "trace", &p_trace, 1, "1 = write cruise.csv (10 per second while cruise is on or Auto Hold holds) for analysis" },
     { "approach_s", &p_approach_s, 2.5f, "own cruise throttle: the throttle eases off when the truck would reach the set speed within about this many seconds at the speed it is gaining now (also on a descent), so it arrives without overshooting. Eco 1.2x, Power 0.6x. 0 = off" },
     { "smooth", &p_smooth, 1, "1 = own smooth cruise throttle (no bursts after shifts; Eco gentle, Power keen), 0 = the game's" },
+    { "force_mode", &p_force_mode, 0, "own cruise throttle: 1 = the controller asks a force at the wheels (a share of what the truck can give at this speed, the wish pedal's reference) and the throttle is what gives that force in the gear the truck is in, so a shift does not change the pull it asks; TrueShift's score-based gear choice reads that force as the demand. The throttle caps stay throttle caps. 0 = the controller asks a throttle, as before" },
 };
 // Junction / roundabout slowing: always with the own ACC (friend 11-10: own ACC without it entered roundabouts at
 // ~40 km/h and stopped there 4 times, probably for traffic on the roundabout; Damien: build it into the ACC)
@@ -151,6 +153,10 @@ static int junc_on() { return p_curve > 0 && (p_junc > 0 || p_own_acc > 0); }
 static double s_cb_on_since, s_jn_cancel_at;  // cruise_body: when the cruise came on, when we last cancelled it for a junction
 static int s_cb_was_on;
 static struct { float i, u; int on; } C;
+// force_mode 1: the controller's output (C.u, C.i) is a share of the force a full wish asks at this speed (pedal_wish_full). fm = the output
+// is in that unit now, k = the throttle per unit of it in the gear of now, u = the output and at = the time of the last tick it gave the
+// throttle (cruise_wish_force; -1 = none)
+static struct { int fm; float k, u; double at; } CF = { 0, 1, 0, -1 };
 
 // State that cr_reset() must reach (was function-local).
 static int s_hs_armed;                                  // hill_start: stopped with the brake pressed on a slope
@@ -636,6 +642,7 @@ static void cr_post(act_tick *a)
     // switched cruise off; the game zeroes the throttle while a brake request is set). Auto Hold lets go by itself.
     if (pedal > 0.1f) { s_want_curve = 0; s_want_acc = 0; }  // (the AEB has its own override: kick-down)
     if ((s_want_acc > 0.04f || s_want_curve > 0.04f) && r > pedal) r = pedal;  // we brake: no throttle of ours against it (ts4r 213 s, ts4w 532 s)
+    if (!(r > pedal)) CF.at = -1;   // (force_mode: TrueShift reads the cruise's force only while its throttle goes through)
     act_brake(ACT_HILL, s_want_hill); act_brake(ACT_HOLD, s_want_hold); act_brake(ACT_BEND, s_want_curve);
     act_brake(ACT_ACC, s_want_acc); act_brake(ACT_AEB, s_want_aeb);
     // Eco: flatter pedal, Power: front-loaded pedal (Damien 25-10). Only the throttle the engine gets; not under cruise, not crawling,
@@ -666,9 +673,20 @@ static void cr_attach()
     act_hook(ACT_DONE, cr_done);
 }
 
+// force_mode: the throttle per unit of the controller's output in the gear of now, the force a full wish asks at v over what this gear gives
+// at full throttle (the wish pedal's steps 4 and 5); 0 = the vehicle model cannot tell (no gear, over the rev limit, no engine data)
+static float force_k(float v)
+{
+    int g = T.gear;
+    if (g < 1 || !V.eng_ok || V.electric) return 0;
+    float full = pedal_wish_full(v), fg = vehicle_force_at(g, v, 1.0f);
+    return full > 0 && fg > 0 ? full / fg : 0;
+}
+
 static float cruise_body(void *ga, float dt, float pedal, float stock)
 {
     char *g = (char *)ga;
+    CF.at = -1;
     if (g) { if (p_ah > 0 && g_low_ok) auto_hold(g, dt); else { s_want_hold = 0; s_ah_take = 0; hill_start(g); } }
     if (p_smooth <= 0 || !g || !*(unsigned char *)(g + GA_ON) || !(dt > 0 && dt < 0.5f)) {
         C.on = 0;
@@ -871,7 +889,19 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
     float kp = 0.25f, ki = 0.08f, rate = 0.6f;               // Normal / M (per km/h, per km/h·s, per s)
     if (md == MODE_ECO) { kp = 0.18f; ki = 0.05f; rate = 0.4f; }        // Eco: gentle, lets it sag a bit
     else if (md == MODE_POWER) { kp = 0.35f; ki = 0.12f; rate = 1.0f; }  // Power: keen
-    if (!C.on) { C.on = 1; C.u = stock; C.i = stock - kp * ep; }   // bumpless start
+    // force_mode 1: the output in force units wherever the model can convert it; a moment it cannot (a shift, the rev limit) keeps the unit
+    // and the gear of a moment ago. The gains and the rate are the same per throttle in the gear of now, so between two shifts it drives as
+    // before; across a shift it keeps the force, not the throttle. A change of unit under a running controller keeps its throttle
+    int fm = 0; float k = 1;
+    if (p_force_mode > 0) {
+        float kn = T.eff_clutch > 0.05f && kmh > 2 ? 0 : force_k(kmh / 3.6f);   // (in a shift: the gear before it)
+        fm = kn > 0 || (CF.fm && C.on);
+        if (fm) k = kn > 0 ? kn : CF.k;
+    }
+    if (fm != CF.fm && C.on) { float c = fm ? 1 / k : CF.k; C.u *= c; C.i *= c; }
+    CF.fm = fm; CF.k = k;
+    if (fm) { kp /= k; ki /= k; rate /= k; }
+    if (!C.on) { C.on = 1; C.u = fm ? stock / k : stock; C.i = C.u - kp * ep; }   // bumpless start
     // at a standstill the open clutch is no shift: the throttle has to rise for Stop&Go to drive off (ts4r 189-193 and
     // 227-231 s: the lead pulled away, our throttle stayed frozen at 0.03, Damien had to give gas)
     int shifting = T.eff_clutch > 0.05f && kmh > 2;
@@ -887,6 +917,9 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
     float u_cap = lead > 0.5f && acc >= 0 && acc < set ? fminf(1.0f, 0.4f + kmh / 30) : 1.0f;
     if (md == MODE_ECO && p_eco_cap < 1 && kmh > target - 4) u_cap = fminf(u_cap, p_eco_cap);  // Eco: a calmer cruise throttle (fuel), lifted when well under the speed
     if (s_want_acc > 0.04f) { u_cap = 0; if (C.i > 0) C.i = 0; }
+    // (force_mode 1: a cap is the same throttle cap in this gear; without one the force may ask more than this gear gives at full throttle, up
+    // to a full wish: TrueShift reads that demand, the throttle stays at 1)
+    if (fm) u_cap = u_cap < 1 ? u_cap / k : fmaxf(1.0f, 1 / k);
     float u = u_raw < 0 ? 0 : (u_raw > u_cap ? u_cap : u_raw);
     float step = rate * dt;
     if (shifting) step = 0;                                  // hold during the shift
@@ -894,13 +927,15 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
     if (u < C.u - 2 * step) u = C.u - 2 * step;              // back off twice as fast
     // Integrate only while the output can follow (not shifting, not held by the
     // limits or the rate limit in the same direction): no wind-up.
-    int held_up = u < u_raw - 1e-4f && e > 0, held_down = u > u_raw + 1e-4f && e < 0;
+    int held_up = (u < u_raw - 1e-4f || (fm && u * k > 1)) && e > 0, held_down = u > u_raw + 1e-4f && e < 0;
     // integrate the same look-ahead error as P: with e the integrator kept filling during the approach and held the throttle up
     // after P had eased it (toy model 13-10: +1.5 instead of +0.6 on the flat)
     if (!shifting && !held_up && !held_down) C.i += ki * ep * dt;
-    if (C.i > 1) C.i = 1;
-    if (C.i < -0.5f) C.i = -0.5f;
+    float i_hi = fm ? fmaxf(1.0f, 1 / k) : 1, i_lo = fm ? -0.5f / k : -0.5f;   // (force_mode: the same throttle limits, or a full wish)
+    if (C.i > i_hi) C.i = i_hi;
+    if (C.i < i_lo) C.i = i_lo;
     C.u = u;
+    float thr = fm ? fminf(1.0f, u * k) : u;   // the throttle that gives it
 
     // Stop&Go bookkeeping (1.60 fields; only when its patches are in).
     if (g_sg_ok) {
@@ -915,19 +950,20 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
         int may_wait = p_sg_auto <= 0 || (g_stopped_at ? now - g_stopped_at < p_sg_auto : own);
         g_sg_hold = p_sg > 0 && slow && lead > 0.5f && may_wait && !T.parking_brake;
         s_sg_wait = p_sg > 0 && p_sg_auto > 0 && slow && g_stopped_at && !may_wait && !T.parking_brake;
-        g_feed = (p_sg > 0 && kmh < 10 && (g_sg_hold || g_stopped_at) && u > 0.02f) ? u : 0;
+        g_feed = (p_sg > 0 && kmh < 10 && (g_sg_hold || g_stopped_at) && thr > 0.02f) ? thr : 0;
     }
     // Held back by something else (ts4n 433-448 s: brake air low → the game's spring brakes stopped the truck while our
     // cruise gave full throttle for 14 s, engine racing in neutral): low air, or full throttle without moving for 2 s
     // → our throttle 0 and the integrator reset, until the truck moves again.
     {
         int air_bad = T.air_warning || (T.air_psi > 1 && T.air_psi < g_air_min_psi);
-        int stuck = u > 0.5f && kmh < 2 && T.in_thr < 0.02f;
+        int stuck = thr > 0.5f && kmh < 2 && T.in_thr < 0.02f;
         if (!stuck) s_stuck_since = 0;
         else if (!s_stuck_since) s_stuck_since = wall_s();
-        if (air_bad || (s_stuck_since && wall_s() - s_stuck_since > 4)) { C.u = 0; C.i = 0; g_feed = 0; u = 0; }
+        if (air_bad || (s_stuck_since && wall_s() - s_stuck_since > 4)) { C.u = 0; C.i = 0; g_feed = 0; u = thr = 0; }
     }
-    return u > pedal ? u : pedal;
+    if (fm && thr > pedal) { CF.u = u; CF.at = sim_s(); }
+    return thr > pedal ? thr : pedal;
 }
 
 static void *g_acc, *g_smart;
@@ -2120,6 +2156,7 @@ static void cr_reset(int level, const char *why)
     OA.on = 0;
     // PI: bumpless restart; stop&go and descent/curve hysteresis; the body's timers and filters
     C.on = 0; C.u = C.i = 0;
+    CF.fm = 0; CF.k = 1; CF.u = 0; CF.at = -1;
     g_sg_hold = 0; g_feed = 0; g_stopped_at = 0;
     s_curve_braking = 0; s_desc_braking = 0;
     s_acc_f = 0; s_acc_init = 0;
@@ -2154,6 +2191,13 @@ static const char *cr_status()
              p_curve > 0 && g_cruise_smooth ? "on" : "off", junc_on() ? (p_junc > 0 ? "on" : "on (own ACC)") : "off", g_smart ? "on" : "off",
              p_ess > 0 && g_low_ok ? "on" : "off", s_aeb_owns ? (p_aeb_manual > 0 ? "own (also without cruise)" : "own (with cruise)") : "game's", g_low_ok ? "yes" : "no", g_keys_ok ? "yes" : "no", g_radar_ok ? "yes" : "no");
     return b;
+}
+
+float cruise_wish_force(float v)
+{
+    double now = sim_s();
+    if (!(p_force_mode > 0) || CF.at < 0 || now < CF.at || now - CF.at > 0.3) return -1;
+    return CF.u * pedal_wish_full(v);
 }
 
 void cruise_info_get(cruise_info *o)

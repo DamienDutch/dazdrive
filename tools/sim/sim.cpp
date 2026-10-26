@@ -764,6 +764,7 @@ static float sim_wish_force(float v)   // the wish pedal's force at v for the pe
     return fminf(g_pl_ped * pref * V.eta / fmaxf(v, 0.5f), g_pl_ped * fcap);
 }
 float pedal_wish_force(float v) { return M.wish_on ? sim_wish_force(v) : -1; }   // TrueShift reads the wish (suite.h)
+float cruise_wish_force(float) { return -1; }   // [cruise] force_mode 1 (the cruise model below)
 static void c_pull(double t)
 {
     if (t <= 0) { g_pl_t0 = t_now; g_pl_t50 = g_pl_t70 = -1; g_pl_sh70 = -1; g_rec_n = 0; }
