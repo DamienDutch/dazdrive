@@ -372,11 +372,11 @@ static void keys_test()
         p_ah_park = sp; s_park_bad = 0; memset(&AH, 0, sizeof AH);
     }
     // own speed limiter 95: a climb at 92 keeps the throttle, a flat road at 93.5 fades, a fast approach cuts early
-    { float sl = p_own_lim; p_own_lim = 95;
+    { float sl = p_own_lim, sb = p_own_bias; p_own_lim = 95; p_own_bias = 0;
       float k1 = own_limit_k(92, 0), k2 = own_limit_k(94.2f, 0), k3 = own_limit_k(93.5f, 0.2f), k4 = own_limit_k(94.8f, -0.5f), k5 = own_limit_k(95.2f, 0);
       printf("own limiter: climb at 92 %.2f, flat 94.2 %.2f, 93.5 and accelerating %.2f, 94.8 and slowing %.2f, over the limit %.2f (expect 1.00 0.53 0.53 1.00 0.00)\n", k1, k2, k3, k4, k5);
       bad |= fabsf(k1 - 1) > 0.01f || fabsf(k2 - 0.53f) > 0.03f || fabsf(k3 - 0.53f) > 0.05f || fabsf(k4 - 1) > 0.01f || k5 != 0;
-      p_own_lim = sl; }
+      p_own_lim = sl; p_own_bias = sb; }
     // rollover guard: a sway that grows (0.6 Hz, 3.5 -> 9 m/s2 at 85 km/h) is caught, normal driving is not
     {
         auto run_rsc = [](float a0, float a1, float f, float secs, float kmh, double *lvl2_at, float *brake_max, int *lvl_max) {
@@ -505,6 +505,35 @@ static void reset_test()
     p_pc_eco = se; p_pc_pw = sp; p_pc_travel = st;
     s_pb.from = s_pb.to = -1; s_pb.travel = 0; s_pb.prev = -1; s_pb.b = 1;
     printf("reset test: %s\n", bad ? "FAIL" : "ok");
+    if (bad) exit(1);
+}
+
+// Own speed limiter on a flat road, the driver at full pedal: the speedometer settles at the configured value (with the bias), not under it.
+// The fade settles 1.5 km/h x (share of the throttle that holding the speed needs) under the limit + bias: the model of run() needs 0.2 (rolling 0.006),
+// the heavy case (soft ground, rolling 0.02, weaker engine) 0.63, where 0.5 does not bring it all the way up (informational).
+static float limiter_run(float limit, float bias, float roll = 0.006f, float fmax_n = 20000)
+{
+    memset(GA, 0, sizeof GA); memset(&T, 0, sizeof T); T.air_psi = 120; T.gear = 1; T.engine_on = 1; T.fwd_gears = 12;
+    float sl = p_own_lim, sb = p_own_bias; p_own_lim = limit; p_own_bias = bias; g_low_ok = 1; o_cruise = stock_cruise;
+    double v = 60 / 3.6, a_f = 0;
+    for (int k = 0; k < 60 * 60; k++, t_now += 1 / 60.0) {
+        T.speed = (float)v; T.accel = (float)a_f; T.in_thr = 1; vehicle_frame();
+        float u = act_stub(GA, 1 / 60.0f, 1.0f);
+        double a = (u * fmax_n - (26000 * 9.81 * roll + 0.5 * 1.2 * 6 * v * v)) / 26000;
+        v = fmax(0, v + a / 60);
+        a_f += (a - a_f) * fmin(1.0, (1 / 60.0) / 0.15);
+    }
+    p_own_lim = sl; p_own_bias = sb;
+    return (float)(v * 3.6);
+}
+static void limiter_test()
+{
+    float with = limiter_run(95, 0.5f), without = limiter_run(95, 0), off = limiter_run(0, 0.5f), off0 = limiter_run(0, 0);
+    float h_with = limiter_run(95, 0.5f, 0.02f, 12000), h_without = limiter_run(95, 0, 0.02f, 12000);
+    printf("own limiter, flat, full pedal, 60 s: bias 0.5 -> %.2f km/h, bias 0 -> %.2f km/h (the old value, under 95); limiter off -> %.2f with bias 0.5, %.2f with bias 0 (same)\n", with, without, off, off0);
+    printf("   heavy truck on soft ground (informational): bias 0.5 -> %.2f km/h, bias 0 -> %.2f km/h\n", h_with, h_without);
+    int bad = fabsf(with - 95) > 0.3f || !(without < with) || off != off0;
+    printf("own limiter bias test: %s\n", bad ? "FAIL" : "ok");
     if (bad) exit(1);
 }
 
@@ -974,5 +1003,6 @@ int main(int argc, char **argv)
     // last: these leave controller state behind (the stock PI's memory, our brake slew), which would shift the runs above
     junction_test();
     reset_test();
+    limiter_test();
     return 0;
 }
