@@ -118,6 +118,76 @@ struct lesson { float rpm, res; };
 static lesson g_learn[N_CLASS];
 static float g_learn_mass;
 
+// Why a gear was chosen (decide_gear and the stubs): one value the logic compares (it used to strcmp the text), the text only for
+// the log, the trace and the dev display. One list keeps the two together.
+#define WHY_LIST(X) \
+    X(W_NONE, "") \
+    X(W_GAME, "game") \
+    X(W_HINT, "hint") \
+    X(W_START, "start") \
+    X(W_START_LOWERED, "start, lowered") \
+    X(W_START_CORRECTED, "start, corrected") \
+    X(W_ENGAGE, "engage") \
+    X(W_ECO_ROLL, "eco-roll") \
+    X(W_ROLL_END, "roll end") \
+    X(W_NO_DATA, "no data") \
+    X(W_NEUTRAL, "neutral") \
+    X(W_LOW_SPEED, "low speed") \
+    X(W_WRONG_GEAR, "wrong gear") \
+    X(W_REV_LIMIT, "rev limit") \
+    X(W_REV_LIMIT_SKIP, "rev limit skip") \
+    X(W_STALL, "stall") \
+    X(W_KICKDOWN, "kickdown") \
+    X(W_HINT_HOLD, "hint hold") \
+    X(W_ENGINE_BRAKE, "engine brake") \
+    X(W_ENGINE_BRAKE_LEVEL, "engine brake (level)") \
+    X(W_ENGINE_BRAKE_HOLD, "engine brake hold") \
+    X(W_BRAKING, "braking") \
+    X(W_BRAKING_JUNCTION, "braking (junction ahead)") \
+    X(W_BRAKING_HOLD, "braking hold") \
+    X(W_MIN_GAP, "min gap") \
+    X(W_NO_PULL, "no pull") \
+    X(W_CLIMB_AHEAD, "climb ahead") \
+    X(W_LOW_SPEED_HOLD, "low-speed hold") \
+    X(W_ANTI_HUNT_DOWN, "anti-hunt (down)") \
+    X(W_TOP_AHEAD, "top ahead") \
+    X(W_TOP_REACHABLE, "top reachable") \
+    X(W_OVER_TOP, "over the top") \
+    X(W_CRUISE_BAND, "cruise band") \
+    X(W_LUGGING, "lugging") \
+    X(W_DOWN_SKIP, "down skip") \
+    X(W_DOWN, "down") \
+    X(W_AIR_CHARGE, "air charge") \
+    X(W_JUNCTION_AHEAD, "junction ahead") \
+    X(W_SKIP_WAIT, "skip wait") \
+    X(W_UP_EARLY_SKIP, "up early skip") \
+    X(W_UP_EARLY, "up early") \
+    X(W_POWER_HOLDS, "power holds") \
+    X(W_UP_VETO, "up veto (slowing)") \
+    X(W_ANTI_HUNT_UP, "anti-hunt (up)") \
+    X(W_UP_SKIP, "up skip") \
+    X(W_UP, "up") \
+    X(W_UP_BLOCKED, "up blocked") \
+    X(W_HOLD, "hold") \
+    X(W_M, "M") \
+    X(W_M_REV_LIMIT, "M: rev limit") \
+    X(W_M_STALL, "M: stall") \
+    X(W_M_KICKDOWN, "M: kickdown") \
+    X(W_M_STOPPING, "M: stopping") \
+    X(W_M_LUGGING, "M: lugging") \
+    /* end */
+enum why_e {
+#define X(id, text) id,
+    WHY_LIST(X)
+#undef X
+    W_COUNT
+};
+static const char *const why_text[W_COUNT] = {
+#define X(id, text) text,
+    WHY_LIST(X)
+#undef X
+};
+
 static struct {
     void *self;
     engine_info eng;
@@ -143,7 +213,7 @@ static struct {
     double shift_at;
     int shift_dir;
     int commanded;          // last gear we returned to the game
-    const char *cmd_why;
+    int cmd_why;            // why_e: why that gear (the logic compares it)
     const char *last_why;   // reason of the last shift we made
     double hold_until;
     int up_gear;            // last upshift we made, to judge whether it held
@@ -160,7 +230,7 @@ static struct {
     float top_floor;        // and the lowest speed (m/s) that was allowed for it
     double grade_at;
     float f_bias;           // learned extra resistance (N): what the model misses
-    const char *why;        // reason of the last decision, for the trace
+    const char *why;        // reason of the last decision, the text, for the trace
     int want, target;
     double blocked_log_at;
     double brake_at;        // the last time the brake was on (service brake over 0.05)
@@ -816,31 +886,31 @@ static int roll_wanted(float v, float f_res, int ebrake, float brake, double ped
 // Mercedes PowerShift and Eaton UltraShift): 0 European = no shift of our own (overspeed_tone warns instead),
 // 1 protected = rev limiter and stall only (Eaton), 2 assisted = also kickdown, stopping and lugging (like a VW DSG).
 // Below the low-speed handover the game picks the gear in every style (the start gear after a stop).
-static int decide_manual(int cur, float rpm, float v, double since, const char **why)
+static int decide_manual(int cur, float rpm, float v, double since, int *why)
 {
     int n = n_gears(), ebrake = T.motor_brake || T.retarder > 0 || S.eb_level > 0.01f;
     double now = sim_s();
     float brake = fmaxf(T.in_brake, T.eff_brake);
-    *why = "M";
+    *why = W_M;
     if (p_m_style < 1) return cur;
-    if (rpm > S.eng.rpm_limit * (ebrake ? 0.99f : 0.96f) && cur < n) { *why = "M: rev limit"; return cur + 1; }
-    if (rpm < idle_rpm() + 120 && cur > 1) { *why = "M: stall"; return pick_down(cur, v, eco_dn(1) + 300); }
+    if (rpm > S.eng.rpm_limit * (ebrake ? 0.99f : 0.96f) && cur < n) { *why = W_M_REV_LIMIT; return cur + 1; }
+    if (rpm < idle_rpm() + 120 && cur > 1) { *why = W_M_STALL; return pick_down(cur, v, eco_dn(1) + 300); }
     if (p_m_style < 2) return cur;
     if (S.kick_until > now && rpm < S.eng.range[R_POWER][0] + 100 && cur > 1 && since > 0.3) {
         int l = pick_down(cur, v, pw_mid() + 100);
-        if (l < cur) { *why = "M: kickdown"; return l; }
+        if (l < cur) { *why = W_M_KICKDOWN; return l; }
     }
     if (brake > 0.05f && rpm < idle_rpm() + 250 && cur > 1 && since > 0.5) {
         int l = pick_down(cur, v, eco_up(1) - 200);
-        if (l < cur) { *why = "M: stopping"; return l; }
+        if (l < cur) { *why = W_M_STOPPING; return l; }
     }
     float fmax = force_at(cur, v, 1.0f);
     if (S.thr > 0.8f && rpm < p_m_lug && cur > 1 && since > 2 &&
         (T.accel < 0.05f || fmax - resist(v) < S.mass * 0.03f)) {
-        *why = "M: lugging";
+        *why = W_M_LUGGING;
         return cur - 1;
     }
-    *why = "M";
+    *why = W_M;
     return cur;
 }
 
@@ -911,13 +981,13 @@ static float climb_need_kmh()
     return 8;
 }
 
-static int decide_gear(void *self, const char **why)
+static int decide_gear(void *self, int *why)
 {
-    *why = "";
+    *why = W_NONE;
     int cur = gb_gear(self), n = n_gears();
     float v = fabsf(T.speed);
     double now = sim_s();
-    if (!S.eng_ok || n < 2 || cur < 0 || cur > n || wheel_radius() <= 0.1f) { *why = "no data"; return 0; }
+    if (!S.eng_ok || n < 2 || cur < 0 || cur > n || wheel_radius() <= 0.1f) { *why = W_NO_DATA; return 0; }
 
     float f_res = resist(v);
     float brake = fmaxf(T.in_brake, T.eff_brake);
@@ -925,18 +995,18 @@ static int decide_gear(void *self, const char **why)
     int ebrake = T.motor_brake || T.retarder > 0 || S.eb_level > 0.01f;
     int roll = roll_wanted(v, f_res, ebrake, brake, now - S.pedal_on_at);
     if (S.rolling) {
-        if (roll) { *why = "eco-roll"; return ROLL; }
+        if (roll) { *why = W_ECO_ROLL; return ROLL; }
         S.rolling = 0;
         S.roll_at = now;
         if (cur == 0) {
-            *why = "roll end";
+            *why = W_ROLL_END;
             S.roll_exit = roll_exit_gear(v, ebrake, brake);
             S.roll_exit_at = now;
             return S.roll_exit;
         }
     }
-    if (cur < 1) { *why = "neutral"; return 0; }
-    if (!S.ours) { *why = "low speed"; return 0; }
+    if (cur < 1) { *why = W_NEUTRAL; return 0; }
+    if (!S.ours) { *why = W_LOW_SPEED; return 0; }
 
     float rpm = rpm_at(cur, v);
     float lim = S.eng.rpm_limit;
@@ -953,27 +1023,27 @@ static int decide_gear(void *self, const char **why)
 
     // Protections, also while a hint is held. Far above the limiter (a wrong
     // gear after neutral): straight to a gear that fits the speed.
-    if (rpm > lim * 1.05f) { *why = "wrong gear"; return pick_for_speed(v, pw_mid()); }
+    if (rpm > lim * 1.05f) { *why = W_WRONG_GEAR; return pick_for_speed(v, pw_mid()); }
     if (rpm > lim * (ebrake ? 0.99f : 0.96f) && cur < n) {
         int h = ebrake || S.thr < 0.75f ? cur + 1 : skip_target(cur, v, f_res, sinf(S.grade_deg * 0.0174533f));
-        *why = h > cur + 1 ? "rev limit skip" : "rev limit";
+        *why = h > cur + 1 ? W_REV_LIMIT_SKIP : W_REV_LIMIT;
         S.hold_until = 0;  // a held hint gear ends here, the next gear is TrueShift's again (friend 11-10: 2-3-4-5-6 all at the limiter)
         return h;
     }
-    if (rpm < idle_rpm() + 120 && cur > 1) { *why = "stall"; return pick_down(cur, v, eco_dn(1) + 300); }
+    if (rpm < idle_rpm() + 120 && cur > 1) { *why = W_STALL; return pick_down(cur, v, eco_dn(1) + 300); }
 
     // not right after a launch shift (ts4o: 1->3 by the game at 10 km/h with the pedal floored, then 3->2->3)
     if (kick && rpm < S.eng.range[R_POWER][0] + 100 && cur > 1 && since > 2.0 && clutch_seen() < 0.1f && v * 3.6f > 15) {
         int l = pick_down(cur, v, pw_mid() + 100);
         // never into a gear that is at its upshift point a moment later (ts3a: 3->2->3 at 13 km/h)
         while (l < cur && rpm_at(l, v) > S.eng.range[R_POWER][1] - 100) l++;
-        if (l < cur) { *why = "kickdown"; return l; }
+        if (l < cur) { *why = W_KICKDOWN; return l; }
     }
 
     // A hint gear is held, but not up to the limiter: pulling past the top of the power range hands it back
     // (friend 11-10: hint down to 2 at 8 km/h, then 2->3->4->5->6 each at ~1900 rpm with 30% throttle).
     if (S.hold_until > now) {
-        if (!(rpm > S.eng.range[R_POWER][1] && S.thr > 0.05f)) { *why = "hint hold"; return cur; }
+        if (!(rpm > S.eng.range[R_POWER][1] && S.thr > 0.05f)) { *why = W_HINT_HOLD; return cur; }
         S.hold_until = 0;
         logv(1, "hint hold ended at %.0f rpm (top of the power range)", rpm);
     }
@@ -983,7 +1053,7 @@ static int decide_gear(void *self, const char **why)
         g_rolling = 1;  // right away: Cruise keeps the game from canceling cruise when the box goes to neutral
         S.roll_at = now;
         S.roll_kmh = v * 3.6f;
-        *why = "eco-roll";
+        *why = W_ECO_ROLL;
         return ROLL;
     }
 
@@ -1021,9 +1091,9 @@ static int decide_gear(void *self, const char **why)
                 float r2 = rpm_at(cur - 2, v);
                 if (r2 < hi - 100 && r2 < S.eng.rpm_limit * 0.93f) l = cur - 2;
             }
-            if (l < cur && rpm_at(l, v) < hi) { *why = full ? "engine brake" : "engine brake (level)"; return l; }
+            if (l < cur && rpm_at(l, v) < hi) { *why = full ? W_ENGINE_BRAKE : W_ENGINE_BRAKE_LEVEL; return l; }
         }
-        *why = "engine brake hold";
+        *why = W_ENGINE_BRAKE_HOLD;
         return cur;
     }
 
@@ -1035,16 +1105,16 @@ static int decide_gear(void *self, const char **why)
         if (rpm < floor && cur > 1 && since > 0.5) {
             // land high, so that fewer downshifts are needed on the way down
             int l = pick_down(cur, v, eco_up(1) + by_mode(-300, -200, -100), true);
-            if (l < cur) { *why = slow_ahead ? "braking (junction ahead)" : "braking"; return l; }
+            if (l < cur) { *why = slow_ahead ? W_BRAKING_JUNCTION : W_BRAKING; return l; }
         }
-        *why = "braking hold";
+        *why = W_BRAKING_HOLD;
         return cur;
     }
 
-    if (since < p_min_gap) { *why = "min gap"; return cur; }
+    if (since < p_min_gap) { *why = W_MIN_GAP; return cur; }
 
     // The last upshift has no pull (strain built up): back down, and learn.
-    if (S.up_gear == cur && S.strain > 1.0f && cur > 1) { *why = "no pull"; return cur - 1; }
+    if (S.up_gear == cur && S.strain > 1.0f && cur > 1) { *why = W_NO_PULL; return cur - 1; }
 
     // A climb starts within ~3 s that this gear won't hold: one down now, at
     // the foot, instead of lugging into it.
@@ -1058,7 +1128,7 @@ static int decide_gear(void *self, const char **why)
             while (l > 1 && force_at(l, v * 0.95f, 0.95f) < resist_grade(v * 0.95f, g_climb) &&
                    rpm_at(l - 1, v) < lim * 0.9f)
                 l--;
-            *why = "climb ahead";
+            *why = W_CLIMB_AHEAD;
             return l;
         }
     }
@@ -1081,11 +1151,11 @@ static int decide_gear(void *self, const char **why)
     if (cur > 1 && (rpm < dn_eff || lug)) {
         // maneuvering (Damien 24-10, 3856-3877 s: 6>4>5>3>4>5>6>7>8>9 in 21 s between 6 and 25 km/h): at a gentle pedal and a low speed only
         // a near-stall or lugging takes a gear off, not the demand-based downshift point
-        if (p_calm > 0 && S.mass > 6000 && v * 3.6f < p_calm && !lug && !kick && thr < 0.6f && rpm > idle_rpm() + 230) { *why = "low-speed hold"; return cur; }
+        if (p_calm > 0 && S.mass > 6000 && v * 3.6f < p_calm && !lug && !kick && thr < 0.6f && rpm > idle_rpm() + 230) { *why = W_LOW_SPEED_HOLD; return cur; }
         int deep = rpm < dn_base - 100 || rpm < idle_rpm() + 250;   // the load-raised point does not skip the anti-hunt dwell
-        if (S.shift_dir > 0 && since < p_dwell_ud && !deep && !lug) { *why = "anti-hunt (down)"; return cur; }
+        if (S.shift_dir > 0 && since < p_dwell_ud && !deep && !lug) { *why = W_ANTI_HUNT_DOWN; return cur; }
         // Almost over the top: hold on, it gets easier in a moment.
-        if (top_near && rpm > idle_rpm() + 300) { *why = "top ahead"; return cur; }
+        if (top_near && rpm > idle_rpm() + 300) { *why = W_TOP_AHEAD; return cur; }
         // A top this gear still gets over within the band: let the speed sag instead (PCC).
         if (top_ok || top_over) {
             if (top_ok && !S.crest_said) {
@@ -1093,20 +1163,20 @@ static int decide_gear(void *self, const char **why)
                 DEV_NOTE(pcc_top());
                 logv(1, "top in %.0f m: holding %d at %.0f km/h (gets over above %.0f km/h)", top_m, cur, v * 3.6f, top_floor);
             }
-            *why = top_ok ? "top reachable" : "over the top";
+            *why = top_ok ? W_TOP_REACHABLE : W_OVER_TOP;
             return cur;
         }
         // In the cruise band (PCC): a few km/h under the set speed and this gear still pulls on this grade (not
         // just lugging along): let the speed come back slowly instead of a downshift for pull. Not with the driver's
         // own pedal (overtaking with cruise on wants the pull).
         if (T.cruise > 0.5f && !kick && T.in_thr < 0.1f && v >= T.cruise - crest_band() && rpm > band_rpm() && (fmax - f_res) / S.mass > 0.06f) {
-            *why = "cruise band";
+            *why = W_CRUISE_BAND;
             return cur;
         }
         float target = lug ? pw_mid() : lerpf(0.5f * (eco_dn(cur - 1) + eco_up(cur - 1)) + 100, pw_mid(), pw_k());
         int l = pick_down(cur, v, target);
         if (l == cur) l = cur - 1;
-        *why = lug ? "lugging" : (cur - l > 1 ? "down skip" : "down");
+        *why = lug ? W_LUGGING : (cur - l > 1 ? W_DOWN_SKIP : W_DOWN);
         return l;
     }
 
@@ -1117,12 +1187,12 @@ static int decide_gear(void *self, const char **why)
         if (sim_s() - said > 10) { said = sim_s(); logline("air %.0f psi: keeping the rpm up to charge it", T.air_psi); }
         if (rpm < p_air_rpm - 250 && cur > 1) {
             int l = pick_down(cur, v, p_air_rpm + 100);
-            if (l < cur && rpm_at(l, v) < S.eng.rpm_limit * 0.9f) { *why = "air charge"; return l; }
+            if (l < cur && rpm_at(l, v) < S.eng.rpm_limit * 0.9f) { *why = W_AIR_CHARGE; return l; }
         }
-        if (cur < n && rpm_at(cur + 1, v) < p_air_rpm) { *why = "air charge"; return cur; }
+        if (cur < n && rpm_at(cur + 1, v) < p_air_rpm) { *why = W_AIR_CHARGE; return cur; }
     }
 
-    if (junction_near) { *why = "junction ahead"; return cur; }
+    if (junction_near) { *why = W_JUNCTION_AHEAD; return cur; }
 
     int coast = coast_p;
     int skips = skip_allowed();
@@ -1194,8 +1264,8 @@ static int decide_gear(void *self, const char **why)
                 wait = true;
             }
         }
-        if (wait && rpm < skip_rpm) { *why = "skip wait"; return cur; }
-        if (best > cur && !wait) { S.skip_wait_at = 0; *why = best - cur > 1 ? "up early skip" : "up early"; return best; }
+        if (wait && rpm < skip_rpm) { *why = W_SKIP_WAIT; return cur; }
+        if (best > cur && !wait) { S.skip_wait_at = 0; *why = best - cur > 1 ? W_UP_EARLY_SKIP : W_UP_EARLY; return best; }
     }
 
     // Upshift on rpm: above the upshift point, the new gear must stay above its
@@ -1211,13 +1281,13 @@ static int decide_gear(void *self, const char **why)
     float v2u = fmaxf(0.5f, v - f_up / S.mass * S.eng.shift_time);
     if (cur < n && rpm > S.up_pt + (coast ? by_mode(50.0f, 200.0f, 200.0f) : 0)) {
         // Power: just off the pedal the gear stays (3 s), unless the revs are nearly at the limit
-        if (coast && S.mode == MODE_POWER && p_mode_char > 0 && now - S.pedal_on_at < 3 && rpm < lim * 0.9f) { *why = "power holds"; return cur; }
+        if (coast && S.mode == MODE_POWER && p_mode_char > 0 && now - S.pedal_on_at < 3 && rpm < lim * 0.9f) { *why = W_POWER_HOLDS; return cur; }
         // Rolling out or lifting towards a junction: no upshift, it only ends in a shift back (Damien 24-10, 1831 s and 3421 s). Not with
         // the pedal at 0.5 or going up: whoever wants power at a junction gets it.
         bool wants_power = clampf(T.in_thr, 0, 1) >= 0.5f || thr >= 0.5f || thr > S.demand + 0.05f;
         bool jn_soon = jn >= 0 && jn < fmaxf(50.0f, v * 3);
-        if (!wants_power && (T.accel < -0.2f || jn_soon) && rpm < lim * 0.9f) { *why = "up veto (slowing)"; return cur; }
-        if (S.shift_dir < 0 && since < (now - S.kd_at < by_mode(3, p_kick_dwell, 8) + 1 ? by_mode(3, p_kick_dwell, 8) : by_mode(p_dwell_du, p_dwell_du, 4.0f)) && rpm < S.up_pt + 100) { *why = "anti-hunt (up)"; return cur; }
+        if (!wants_power && (T.accel < -0.2f || jn_soon) && rpm < lim * 0.9f) { *why = W_UP_VETO; return cur; }
+        if (S.shift_dir < 0 && since < (now - S.kd_at < by_mode(3, p_kick_dwell, 8) + 1 ? by_mode(3, p_kick_dwell, 8) : by_mode(p_dwell_du, p_dwell_du, 4.0f)) && rpm < S.up_pt + 100) { *why = W_ANTI_HUNT_UP; return cur; }
         float a_req = lerpf(0.02f, 0.05f, S.demand);
         if (g_up > 2 && !coast) a_req = fmaxf(a_req, lerpf(0.05f, 0.12f, clampf((g_up - 2) / 3, 0, 1)));
         int best = cur, maxg = cur + 1 + (coast_p ? 0 : skips);   // no skipping with the pedal off: it only ends in the next brake (sim Y1: 6>8 at the lift-off, 8>6 a second later)
@@ -1255,17 +1325,17 @@ static int decide_gear(void *self, const char **why)
                 logv(2, "single up %d->%d, no skip: %s (%.0f km/h, %.0f rpm, pedal %.2f, demand %.2f, grade %.1f%%, %.1f t)", cur, best,
                      block[0] ? block : "the next gear above was not tried", v * 3.6f, rpm, T.in_thr, S.demand, grade_pct(), S.mass / 1000);
             }
-            S.skip_wait_at = 0; *why = best - cur > 1 ? "up skip" : "up"; return best;
+            S.skip_wait_at = 0; *why = best - cur > 1 ? W_UP_SKIP : W_UP; return best;
         }
         if (now - S.blocked_log_at > 10) {
             S.blocked_log_at = now;
             logline("up blocked in %d: %s (%.0f km/h, %.0f rpm, demand %.2f, grade %.1f%%, %.1f t)", cur, block,
                     v * 3.6f, rpm, S.demand, grade_pct(), S.mass / 1000);
         }
-        *why = "up blocked";
+        *why = W_UP_BLOCKED;
         return cur;
     }
-    *why = "hold";
+    *why = W_HOLD;
     return cur;
 }
 
@@ -1300,11 +1370,11 @@ static void note_gear_change(void *self)
     S.shift_dir = g > prev ? 1 : -1;
     S.shift_at = now;
     S.last_gear = g;
-    if (S.cmd_why && !strcmp(S.cmd_why, "kickdown")) S.kick_until = 0;
-    if (g < prev && g > 0 && S.cmd_why && (!strcmp(S.cmd_why, "kickdown") || !strcmp(S.cmd_why, "lugging"))) S.kd_at = now;
+    if (S.cmd_why == W_KICKDOWN) S.kick_until = 0;
+    if (g < prev && g > 0 && (S.cmd_why == W_KICKDOWN || S.cmd_why == W_LUGGING)) S.kd_at = now;
     int hint = prev > 0 && g > 0 && g != S.commanded && S.ours;
-    const char *why = hint ? "hint" : g == S.commanded ? S.cmd_why : "game";
-    DEV_NOTE(shift(prev, g, why, hint, now));
+    int why = hint ? W_HINT : g == S.commanded ? S.cmd_why : W_GAME;
+    DEV_NOTE(shift(prev, g, why_text[why], hint, now));
     track_shifts(prev, g, hint, now);
 
     // Did the last upshift hold? A downshift out of it for lack of force (or a
@@ -1316,12 +1386,12 @@ static void note_gear_change(void *self)
         // (within 5 s it counts anyway: a climb that went on steepening right after it is what the upshift should have seen)
         int asked = S.thr >= 0.5f, same_road = grade_pct() - S.up_grade < 1.0f || now - S.up_at < 5;
         if (now - S.up_at < 25 && why && same_road && !S.up_tainted &&
-            (hint || !strcmp(why, "no pull") || !strcmp(why, "lugging") ||
-             (asked && (!strcmp(why, "down") || !strcmp(why, "down skip")))))
-            up_failed(why);
+            (hint || why == W_NO_PULL || why == W_LUGGING || (asked && (why == W_DOWN || why == W_DOWN_SKIP))))
+            up_failed(why_text[why]);
         else S.up_gear = 0;
     }
-    if (!hint && why && g > prev && (!strncmp(why, "up", 2))) {
+    // an upshift of ours (the hold reasons 'up veto' and 'up blocked' keep the gear, so they never become the command's reason)
+    if (!hint && (why == W_UP || why == W_UP_SKIP || why == W_UP_EARLY || why == W_UP_EARLY_SKIP) && g > prev) {
         S.up_gear = g;
         S.up_tainted = 0;
         S.up_at = now;
@@ -1338,7 +1408,7 @@ static void note_gear_change(void *self)
         logv(1, "shift %d->%d by hint at %.0f km/h: hold %.0f s", prev, g, v * 3.6f, hh);
     } else {
         logv(1, "shift %d->%d (%s) at %.0f km/h, %.0f rpm, pedal %.2f, demand %.2f, grade %.1f%%, %.1f t, %s", prev,
-                g, why ? why : "?", v * 3.6f, T.rpm, T.in_thr, S.demand, grade_pct(), S.mass / 1000,
+                g, why ? why_text[why] : "?", v * 3.6f, T.rpm, T.in_thr, S.demand, grade_pct(), S.mass / 1000,
                 mode_name[S.mode]);
     }
 }
@@ -1367,7 +1437,7 @@ static void launch_correct(void *self)
         logline("launch: the game started in %d, the physics say %d (%.1f t, grade %.1f%%): shifting at %.1f km/h", cur, pick, S.mass / 1000, grade_pct(), kmh);
         S.launch_want = pick; S.launch_at = now;
         gb_set_target(self, pick); gb_force(self);
-        S.commanded = pick; S.cmd_why = "start, corrected";
+        S.commanded = pick; S.cmd_why = W_START_CORRECTED;
     }
 }
 
@@ -1377,9 +1447,9 @@ static float *stub_decide(void *self, float *out, unsigned gear)
     if (!g_active) return r;
     refresh(self);
     note_gear_change(self);
-    const char *why;
+    int why;
     int want = decide_gear(self, &why);
-    S.why = why;
+    S.why = why_text[why];
     S.want = want;
     S.target = gb_target(self);
     // Neutral goes in through the tail hook (the chooser path clamps to +-1).
@@ -1393,7 +1463,7 @@ static int stub_choose(void *self)
     int stock = o_choose(self);
     if (!g_active) return stock;
     int ret = stock;
-    const char *why = "game";
+    int why = W_GAME;
     // A shift hint of the driver in M (the game's handler moves the target one gear, before this chooser runs). Out of its rpm window
     // (the rev limiter, 24-10 ride 124-130 s and 133-138 s) the chooser runs every tick and the call site writes its result into the
     // target: our "stay in this gear" erased the press until the pedal came off. So a target nobody here asked for is honored.
@@ -1405,17 +1475,17 @@ static int stub_choose(void *self)
         if (cur > 0 && tgt > 0 && tgt != cur && tgt != S.commanded && abs(tgt - cur) <= 3 && tgt <= n_gears()) hint_tgt = tgt;
     }
     if (takeover()) {
-        const char *w;
+        int w;
         refresh(self);
         int want = decide_gear(self, &w);
         if (want == ROLL) { ret = gb_gear(self); why = w; }
         else if (want > 0) { ret = want; why = w; }
     }
-    if (S.launch_want > 0 && gb_gear(self) < S.launch_want) { ret = S.launch_want; why = "start, corrected"; }
+    if (S.launch_want > 0 && gb_gear(self) < S.launch_want) { ret = S.launch_want; why = W_START_CORRECTED; }
     if (hint_tgt && (ret == gb_gear(self) || (ret > gb_gear(self)) == (hint_tgt > gb_gear(self)))) {
         static double said;
         if (sim_s() - said > 0.5) { said = sim_s(); logv(2, "hint target %d seen in %d (rpm %.0f): honored", hint_tgt, gb_gear(self), T.rpm); }
-        ret = hint_tgt; why = "hint";
+        ret = hint_tgt; why = W_HINT;
     }
     // Every gear we hand back counts as ours, so that only the hint buttons
     // show up as shifts nobody here asked for.
@@ -1480,7 +1550,7 @@ static void tail_pre(void *self)
         } else S.gap_since = 0;
     }
     if (st != 0) return;
-    if (S.rolling && g > 0) { gb_set_target(self, 0); S.commanded = 0; S.cmd_why = "eco-roll"; return; }
+    if (S.rolling && g > 0) { gb_set_target(self, 0); S.commanded = 0; S.cmd_why = W_ECO_ROLL; return; }
     if (!S.rolling || g != 0) return;
     refresh(self);
     float v = fabsf(T.speed), brake = fmaxf(T.in_brake, T.eff_brake);
@@ -1493,7 +1563,7 @@ static void tail_pre(void *self)
     S.roll_exit = pick;
     S.roll_exit_at = sim_s();
     S.commanded = pick;
-    S.cmd_why = "roll end";
+    S.cmd_why = W_ROLL_END;
 }
 
 // The start gear by physics (see stub_start): lock speed and slip time at this mass and grade, never by a gear count. `stock` = the game's
@@ -1539,7 +1609,7 @@ static int stub_start(void *self)
               : pick_for_speed(v, lerpf(cruise_floor(n_gears()) + 100, pw_mid(), smooth(p_power_from, p_power_full, fmaxf(S.demand, clampf(T.in_thr, 0, 1)))));
         logv(1, "engage at %.0f km/h: gear %d (game %d)", v * 3.6f, g, stock);
         S.commanded = g;
-        S.cmd_why = "engage";
+        S.cmd_why = W_ENGAGE;
         return g;
     }
     float thr = clampf(T.in_thr, 0, 1);
@@ -1551,7 +1621,7 @@ static int stub_start(void *self)
                 thr);
     }
     S.commanded = pick;
-    S.cmd_why = pick == stock ? "start" : "start, lowered";
+    S.cmd_why = pick == stock ? W_START : W_START_LOWERED;
     return pick;
 }
 
