@@ -196,6 +196,7 @@ void creep_info_get(creep_info *o);
 struct cruise_info {      // Cruise (Auto Hold, Stop&Go)
     int hold;             // Auto Hold: 0 off, 1 holds the standstill, 2 releasing for a launch
     float hold_req;       // the brake request Auto Hold holds now (0..1)
+    float lever_take;     // Auto Hold: the request it would hold after a stop by the retarder lever now (0 = it would not take one)
     int sg_hold;          // Stop&Go holds the stop behind a lead
     float feed;           // the cruise throttle fed to the automatic's pedal at walking pace (0 = none)
 };

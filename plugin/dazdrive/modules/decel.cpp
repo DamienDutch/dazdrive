@@ -17,7 +17,8 @@
 // happens, not predicted (the gap's length varies by +-0.1 s, the retarder's recovery is 8 m/s3 at the top step). Once the gap
 // has settled, one correction step for what the feedforward missed; it also measures the brake's gain (see decel_tick).
 // Stop assist: the reference tapers with speed along a = sqrt(2 j v), the deceleration that a ramp of jerk j brings to 0 exactly
-// at v = 0 (j from jerk_limit, so no km/h figure is needed), led by the brake's lag; at a standstill the assist stops posting.
+// at v = 0 (j from jerk_limit, so no km/h figure is needed), led by the brake's lag; at a standstill the assist stops posting,
+// unless Auto Hold takes the stop over ([cruise] auto_hold_lever): then its request stays until the hold's has risen to it.
 // Other brake owners (AEB, Auto Hold, hill start) keep their priority: the actuator merges by the biggest wish.
 #include "../core/suite.h"
 #include <math.h>
@@ -55,6 +56,7 @@ static const float DC_PEDAL = 0.02f;     // a pedal above this ends the assist
 static const float DC_OPEN = 0.05f;      // clutch above this is open (a shift), under DC_CLOSED closed again
 static const float DC_CLOSED = 0.02f;
 static const float DC_BAD_S = 0.5f;      // s without a usable speed derivative: the assist lets go
+static const float DC_HAND_S = 0.6f;     // s at most the request waits at a standstill for Auto Hold's to rise (its ramp to 0.6 takes 0.2 s)
 
 // What one tick sees (the sim sets the same fields).
 struct decel_in {
@@ -62,6 +64,7 @@ struct decel_in {
     int gear, retarder, steps, motor_brake, engine_on, paused, cruise;
     float other;       // the brake wish of the cruise side (ACC, bends): it owns the brake then
     float held;        // the request the actuator holds now (brake air low: none of ours)
+    float hold, take;  // Auto Hold: the request it holds now, and what it will hold after a stop by the lever (0 = it will not take one)
 };
 
 static struct {
@@ -86,6 +89,7 @@ static struct {
     int k_known;
     int k_fix;            // k comes from a gap's correction step (measured, not inferred from the level at the close)
     int step, n;          // what the target was made for (log)
+    float hand_s;         // seconds standing while Auto Hold takes over
 } D;
 
 // The target deceleration of a lever step, 1..n of n steps.
@@ -148,9 +152,16 @@ static void decel_tick(const decel_in &in)
     int lever = in.retarder > 0 || in.motor_brake;
     // Ends at once: the driver's pedals, cruise (it owns the brake), reverse, engine off, a pause, no usable measurement, standing.
     // Without the lever the request winds down at the jerk limit instead.
-    int hard = in.paused || !in.engine_on || in.gear < 0 || in.thr > DC_PEDAL || in.brake > DC_PEDAL || in.cruise || in.other > 0 ||
-               D.bad_s > DC_BAD_S || !(v > DC_STOP_V);
+    int ends = in.paused || !in.engine_on || in.gear < 0 || in.thr > DC_PEDAL || in.brake > DC_PEDAL || in.cruise || in.other > 0 ||
+               D.bad_s > DC_BAD_S, standing = !(v > DC_STOP_V), hard = ends || standing;
     float rlim = p_jerk * D.k;          // request per second at the jerk limit (the learned request per m/s2, the nominal one at first)
+    // Standing with nothing else ending it and Auto Hold taking the stop: the request stays as it is until the hold's has risen to it
+    // (or to what the hold will hold, if less), then it goes at once: the actuator merges by the biggest wish, so the brake never lets go.
+    if (!standing) D.hand_s = 0;
+    else if (!ends && D.on && in.take > 0) {
+        D.hand_s += dt;
+        if (D.hand_s < DC_HAND_S && in.hold < fminf(D.u, in.take) - 1e-3f) { act_brake(ACT_DECEL, D.u); return; }
+    }
     if (hard) { if (D.on) decel_off(); return; }
     if (!lever) {
         if (D.on) {
@@ -162,7 +173,7 @@ static void decel_tick(const decel_in &in)
         return;
     }
     if (!D.on) {   // starting: the reference starts at what the truck does now and climbs at the jerk limit, as the retarder builds up
-        D.on = 1; D.lvl = D.u = D.pre = 0; D.gap = 0; D.gap_s = 0; D.blind = 0;
+        D.on = 1; D.lvl = D.u = D.pre = 0; D.gap = 0; D.gap_s = 0; D.blind = 0; D.hand_s = 0;
         D.ref = D.refm = fmaxf(D.a, 0);
     }
     int step = in.retarder > 0 ? (int)in.retarder : 1;   // an engine brake alone counts as the first step (of however many)
@@ -258,6 +269,9 @@ static void de_frame()
     in.engine_on = T.engine_on; in.paused = T.paused; in.cruise = T.cruise > 0.1f;
     in.other = fmaxf(fmaxf(w[ACT_CRUISE].brake, w[ACT_ACC].brake), w[ACT_BEND].brake);
     in.held = act_request();
+    cruise_info cu;
+    cruise_info_get(&cu);
+    in.hold = w[ACT_HOLD].brake; in.take = cu.lever_take;
     bool was = D.on;
     decel_tick(in);
     if (D.on != was) logv(1, "Decel: %s (step %d of %d, target %.2f m/s2, %.0f km/h)", D.on ? "on" : "off", D.step, D.n, D.tgt, fabsf(T.speed) * 3.6f);

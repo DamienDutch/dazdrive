@@ -62,6 +62,7 @@ int game_patch_clutch_floor(uintptr_t, clutch_floor *) { return 0; }
 int game_patch_cf0_if(uintptr_t, int, const unsigned char *) { return 0; }
 int game_patch_call(uintptr_t, void *) { return 0; }
 char *game_actor_safe() { return NULL; }
+void cruise_info_get(cruise_info *o) { memset(o, 0, sizeof *o); }   // no Auto Hold here: the assist lets go at a standstill
 float wheel_radius() { return 0.5f; }
 
 #include "modules/decel.cpp"
