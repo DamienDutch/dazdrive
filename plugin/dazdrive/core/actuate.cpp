@@ -239,8 +239,8 @@ int act_clutch_vehicle(char *inner, float v)
 // ---------------------------------------------------------------- the retarder
 // The drivetrain reads the retarder demand (inner+0x1444) once for the torque it applies (0x1408c87a8, ETS2 1.60.1.7; the patch is
 // game_patch_retarder, only with [core] retarder_hook = 1). Our factor scales that one read: the dashboard, the animation and the
-// lever keep the game's own step. The factor reaches the player's vehicle only (s_rs, act_retarder_merge). No module posts a
-// factor yet, so the hook changes nothing.
+// lever keep the game's own step. The factor reaches the player's vehicle only (s_rs, act_retarder_merge). The one owner that
+// posts it is the deceleration assist's soften ([decel] soften, modules/decel.cpp).
 static bool s_ret_in;
 bool act_retarder_hooked() { return s_ret_in; }
 // The pattern ends at the torque read after the curve call; the demand read is the 8 bytes at +7 (unique in the exe too).
