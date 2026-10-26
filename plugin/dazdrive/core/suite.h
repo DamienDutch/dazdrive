@@ -200,6 +200,19 @@ struct cruise_info {      // Cruise (Auto Hold, Stop&Go)
     float feed;           // the cruise throttle fed to the automatic's pedal at walking pace (0 = none)
 };
 void cruise_info_get(cruise_info *o);
+// LowSpeed (modules/lowspeed.cpp): the owner of the stop, the standstill and the first metres, as a shadow for now: what it WOULD command,
+// nothing applied. would_clutch 0 closed .. 1 open (NAN = the game's own), would_brake a request 0..1, would_thr the throttle wish (NAN = none).
+enum LowState { LOW_GAME, LOW_HANDED, LOW_STOPPING, LOW_STOPPED_HELD, LOW_STOPPED_FREE, LOW_CRAWL, LOW_MANEUVER, LOW_LAUNCH, LOW_ROLLING_LOW,
+                LOW_REVERSE, LOW_N };
+struct low_owner {
+    int state;               // LowState
+    int would_gear;          // the gear it would have in (0 = none to ask for)
+    float would_clutch, would_brake, would_thr;
+    double since_s;          // seconds in this state
+    const char *reason;      // why the state last changed
+};
+extern low_owner g_low;
+const char *low_state_name(int state);
 int ts_start_gear(float thr);   // TrueShift: the start gear by physics (mass, grade, engine) for this pedal, whether or not TrueShift has the truck; 0 = unknown
 float ts_idle_rpm();            // TrueShift: the idle rpm (learned at a standstill, else the ini's)
 extern volatile int g_pedal_mapped;     // Cruise: the throttle the engine gets is the pedal through the Eco / Power curve this frame

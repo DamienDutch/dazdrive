@@ -11,6 +11,7 @@ tools/sim/sim
 tools/sim/sim_creep
 tools/sim/sim_cruise
 tools/sim/sim_lane
+tools/sim/sim_lowspeed
 tools/sim-0.2/
 __pycache__/
 

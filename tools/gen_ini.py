@@ -86,7 +86,14 @@ STANDARD = {
         "start_on": 0,
         "trace": 1,
     },
+    "lowspeed": {
+        "owner": 0,              # OFF: the low-speed owner does not drive anything yet
+        "trace": 0,              # OFF: the shadow owner and its csv are for test builds
+    },
 }
+
+# Sections that are not on the setup page (no tile, no knob, no Custom list): developer switches of something not wired in yet.
+NO_PAGE = ("lowspeed",)
 
 STANDARD_HEADER = ("standard preset (stable on, except the look-ahead ones; beta and experimental (ACC, Stop & Go, Auto Hold, ISA, JunctionSense, lane centering, crawl mode, smooth start) off).")
 
@@ -96,6 +103,7 @@ SECTION_INTRO = {
     "cruise": "Cruise control and ACC extras. The standard preset has the stable ones on, except the ones that look ahead (bends, climbs); beta and experimental ones (ACC, Stop & Go, Auto Hold, ISA, JunctionSense) are off.",
     "lane": "Lane centering. The standard preset leaves the game's own assist alone.",
     "creep": "Crawl / maneuver mode (slipping clutch in 1, 2 and R). Off in the standard preset.",
+    "lowspeed": "Low-speed owner for stopping, standing and pulling away. Not wired in yet: both settings stay off.",
 }
 
 
@@ -447,6 +455,8 @@ def setup_scopes(order, tables):
     """Which module owns which ini key on the setup page: [[sec, key, kind b|n]] per group id. Every key exactly once."""
     scopes = {g["id"]: [] for g in SETUP_GROUPS}
     for sec in order:
+        if sec in NO_PAGE:
+            continue
         for k, d, h in tables[sec]:
             gid = None
             if k == "trace":
