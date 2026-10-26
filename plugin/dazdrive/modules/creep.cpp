@@ -369,6 +369,8 @@ static int pick_gear(int heavy, float idle)
     return cap;
 }
 
+// The game's own idle (the engine's figure + the drive's idle add), the one its clutch and gearbox code compare the rpm with: right
+// for Creep, which works the clutch against the game's governor. TrueShift's ts_idle_rpm() is the measured one (see there).
 static float idle_rpm(char *inner)
 {
     if (!inner || !mem_readable(inner + I_DRIVE, 8)) return 0;

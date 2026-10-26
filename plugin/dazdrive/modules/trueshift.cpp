@@ -312,6 +312,9 @@ static float smooth(float e0, float e1, float x)
     return t * t * (3 - 2 * t);
 }
 static float grade_pct() { return V.grade_pct; }
+// The idle as the tach shows it standing still (learned below, the ini's until then): right for our own rpm rules (stall,
+// floors, lug). What the game's code compares with is its engine figure (+ its idle add): Creep reads that, and the stop
+// threshold hook gets it as its argument. The two agree once learned on a warm engine, not before, so they stay apart.
 static float idle_rpm() { return S.idle > 300 ? S.idle : p_idle; }
 
 static int n_gears()
