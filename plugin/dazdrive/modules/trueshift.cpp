@@ -397,6 +397,16 @@ static float force_at(int g, float v, float share) { return vehicle_force_at(g, 
 static float resist(float v) { return vehicle_resist(v); }
 static float resist_grade(float v, float pct) { return vehicle_resist_grade(v, pct); }
 
+// A throttle cap or scale of ours (the own speed limiter, the rollover guard, launch control: core/actuate.cpp) holds the engine's
+// throttle below what the pedal asks. Then the pedal is not a request for pull: what counts is the throttle the engine actually gets.
+static int thr_capped()
+{
+    const act_wish *w = act_wishes();
+    for (int o = 0; o < ACT_N; o++)
+        if (w[o].cap < 1.0f || w[o].scale < 1.0f) return 1;
+    return 0;
+}
+
 // ---------------------------------------------------------------- shift points
 
 // A value that differs per mode (Normal and M take the middle one); mode_character = 0 gives every mode the middle value
@@ -770,6 +780,8 @@ static void refresh(void *self)
     if (!cc) S.cc_thr = eff;
     // with the Eco / Power pedal curve the engine's own throttle (eff) is what counts, not the raw pedal
     S.thr = cc ? fmaxf(pedal, S.cc_thr) : g_pedal_mapped ? eff : fmaxf(pedal, eff);
+    // a cap holds the throttle below the pedal (the own speed limiter, the rollover guard, launch control): the capped throttle counts
+    if (!cc && S.thr > eff && thr_capped()) S.thr = eff;
 
     // Demand rises fast (0.3 s) and falls slowly (2 s). Load itself does not
     // move the shift points: the force checks handle it.
@@ -1119,7 +1131,7 @@ static float choice_floor_rpm()
     return fs > 0 ? gs_floor_rpm(fs, idle_rpm(), p_ch_fl_idle) : V.plateau + p_ch_floor;
 }
 
-static gs_cfg score_cfg(int skips, int skips_up, int skips_later, int low_edge, int coast, float pedal, float v_cap)
+static gs_cfg score_cfg(int skips, int skips_up, int skips_later, int low_edge, int coast, float pedal, float v_cap, int capped)
 {
     gs_cfg c = {};
     c.comfort = by_mode(p_ch_eco, p_ch_norm, p_ch_power);
@@ -1135,7 +1147,7 @@ static gs_cfg score_cfg(int skips, int skips_up, int skips_later, int low_edge, 
     c.hyst = p_hyst;
     c.horizon = 8;                 // s: the speed the demanded acceleration reaches in that time decides how soon a gear needs the next shift
     c.learn_res = learned().res;   // what the no-pull lessons of this grade ask of an upshift
-    c.pull = pedal >= 0.8f ? pedal : 0;   // the driver's pedal near the floor asks for the truck's pull, not for what this gear gives
+    c.pull = pedal >= 0.8f && !capped ? pedal : 0;   // the driver's pedal near the floor asks for the truck's pull, not for what this gear gives (a cap holds the throttle below it: no pull then)
     c.time_obj = p_ch_obj > 0;
     c.a_min = p_ch_amin;
     c.k_shift = by_mode(p_ch_ts_eco, p_ch_ts_norm, p_ch_ts_pw);
@@ -1472,11 +1484,14 @@ static int decide_gear(void *self, int *why)
         // asks in this gear: the filter lags 0.3 s behind a pedal going down, and the floor would take a steady load for it (after a takeover
         // or a reset it starts from 0). A pedal near the floor asks more than this gear gives: gs_cfg.pull
         float need = fmaxf(fminf(fmaxf(S.f_need, force_at(cur, v, S.thr)), force_at(cur, v, fmaxf(S.thr, S.demand))), f_hold);
+        // a cap (the own speed limiter, the rollover guard, launch control) holds the throttle below the pedal: the pedal's wish is not a
+        // demand then, what counts is the force the capped throttle gives (what it takes to hold the speed)
+        int capped = thr_capped() && clampf(T.in_thr, 0, 1) > 0.1f;
         // (choice_objective 1 with the wish pedal on: what the driver wishes, not the throttle the wish gives in this gear, which is the wish
         // only where the gear can deliver it; the same for the cruise with [cruise] force_mode 1: the force it asks, not its throttle)
         float f_wish = p_ch_obj > 0 && !coast_p ? pedal_wish_force(v) : -1;
         if (f_wish < 0 && p_ch_obj > 0 && !coast_p) f_wish = cruise_wish_force(v);
-        if (f_wish >= 0) need = fmaxf(f_wish, f_hold);
+        if (f_wish >= 0 && !capped) need = fmaxf(f_wish, f_hold);
         // The cruise holds its set speed (own throttle, within 1.5 km/h of it and hardly accelerating, the driver's pedal off): what is asked is
         // the force to hold the speed, not the filtered need that is still running down after the approach. That keeps the score steady, like a
         // real steady drive: no pull in hand to pay for, so the shift to a gear that sits lower is cheap (ride 7: 22 s in 11 at 83 km/h before the 12th)
@@ -1499,7 +1514,7 @@ static int decide_gear(void *self, int *why)
             float fl = choice_floor_rpm(), lm = fl + p_skip_land_frac * (S.up_pt - fl);
             if (rpm_at(cur + 2, v2) < lm) sup = 0;
         }
-        gs_eval(&so, cur, n, v, need, f_hold, coast_p, score_cfg(coast_p ? 0 : skips, sup, grade > 0.015f ? 0 : skips_free, ebrake || (coast_p && S.demand < 0.05f), coast_p, clampf(T.in_thr, 0, 1), v_cap));
+        gs_eval(&so, cur, n, v, need, f_hold, coast_p, score_cfg(coast_p ? 0 : skips, sup, grade > 0.015f ? 0 : skips_free, ebrake || (coast_p && S.demand < 0.05f), coast_p, clampf(T.in_thr, 0, 1), v_cap, capped));
         // kickdown_by_wish: the kickdown is due (wish_kick_update). Of the lower gears the window and the floor let in that can give more than
         // this one, the best score, whatever the dwell times say (the stall rule and the limiter came before, and the window keeps the revs under
         // the limit). Nothing to take: no new trigger for a second

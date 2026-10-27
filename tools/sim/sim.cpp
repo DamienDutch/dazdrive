@@ -197,6 +197,17 @@ float route_junction_m() { return route_ok() && M.junction_s > M.s ? (float)(M.j
 float route_bend_speed(float, float) { return NAN; }   // the scenarios have no road bends, only the junction above
 static float g_act_req;   // the brake request the suite itself holds (the deceleration assist in the ride; the telemetry does not show it)
 float act_request() { return g_act_req; }
+// The actuator's throttle wishes (core/actuate.cpp is not linked here): a scenario sets a cap or scale (the own speed limiter posts
+// ACT_CRUISE's scale), and the throttle model below applies it, so TrueShift's thr_capped() sees it as in the game.
+static act_wish g_act[ACT_N] = { {0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1} };
+const act_wish *act_wishes() { return g_act; }
+static float sim_thr_cap()   // the merged throttle cap and scale, as the actuator applies them (base, then caps, then scales)
+{
+    float r = 1.0f;
+    for (int o = 0; o < ACT_N; o++) if (g_act[o].cap < r) r = g_act[o].cap;
+    for (int o = 0; o < ACT_N; o++) r *= g_act[o].scale;
+    return r;
+}
 static void *SELF = (void *)&M;
 static char letter = 'A';
 
@@ -208,7 +219,7 @@ int gb_engage(void *, int g) { if (!M.parked) return 0; M.target = g; M.engaged 
 int game_engage_init() { return 1; }
 void gb_force(void *) { M.force = 1; }
 float gb_thr_in(void *) { return M.pedal; }
-float gb_thr_eff(void *) { return fmaxf(M.wish_on ? M.wish_thr : fmaxf(M.pedal, M.cc), M.thr_floor); }  // thr_floor: the game's 0.08 at pedal 0 (24-10, 1831 s); wish_on: the wish pedal's throttle
+float gb_thr_eff(void *) { return fmaxf((M.wish_on ? M.wish_thr : fmaxf(M.pedal, M.cc)) * sim_thr_cap(), M.thr_floor); }  // thr_floor: the game's 0.08 at pedal 0 (24-10, 1831 s); wish_on: the wish pedal's throttle
 float wheel_radius() { return RADIUS; }
 int gb_engine(void *, engine_info *e)
 {
@@ -311,7 +322,7 @@ static void tick(double dt, int stats)
     float rpm = rpm_now();
     float idle = TORQUE < 1000 ? 750 : g_idle_sim;
     if (rpm < idle) rpm = idle;   // clutch slips below idle
-    T.rpm = rpm; T.speed = M.v; T.in_thr = M.pedal; T.eff_thr = M.wish_on ? M.wish_thr : fmaxf(M.pedal, M.cc); g_pedal_mapped = M.wish_on;
+    T.rpm = rpm; T.speed = M.v; T.in_thr = M.pedal; T.eff_thr = (M.wish_on ? M.wish_thr : fmaxf(M.pedal, M.cc)) * sim_thr_cap(); g_pedal_mapped = M.wish_on;
     T.in_brake = M.brake; T.eff_brake = M.brake; T.cruise = M.cruise_kmh / 3.6f;
     T.motor_brake = M.ebrake; T.retarder = M.ret; T.eff_clutch = M.state ? 1 : 0;
     T.engine_on = 1; T.gear = M.gear; T.dgear = M.gear;
@@ -360,7 +371,7 @@ static void tick(double dt, int stats)
         if (M.target != M.gear) { M.state = 1; M.shift_end = t_now + M.shift_time; }
     }
     // physics
-    float F = 0, thr = M.wish_on ? M.wish_thr : fmaxf(M.pedal, M.cc);
+    float F = 0, thr = (M.wish_on ? M.wish_thr : fmaxf(M.pedal, M.cc)) * sim_thr_cap();
     if (!M.state && M.gear > 0) {
         float r = rpm_now();
         engine_info e; gb_engine(0, &e);
@@ -395,6 +406,7 @@ static void run(const char *name, setup su, void (*ctl)(double))
 {
     if (!g_quiet) printf("\n=== %s ===\n", name);
     memset(&M, 0, sizeof M);
+    for (int o = 0; o < ACT_N; o++) g_act[o] = act_wish{0, 0, 1, 1, 1};
     M.mass = su.mass; M.gear = M.target = su.g0; M.cvar = su.cvar; M.shift_time = su.shift_time;
     M.eb_level = su.eb_level; M.eb_toggle = su.eb_toggle; M.mass_seen = su.mass_seen;
     M.road = su.road; M.route_on = su.route; M.junction_s = su.junction; M.pedal = su.pedal0;
@@ -616,6 +628,7 @@ static int run_scores_engine();
 static int run_scores_cross();
 static int run_scores_kickwish();
 static int run_scores_skipfrac();
+static int run_scores_limiter();
 static int run_scores()
 {
     printf("\n=== SCORES part 1: the score function on the vehicle model (Renault ATO 12 speeds, diff 3.08) ===\n");
@@ -718,6 +731,7 @@ static int run_scores()
     r |= run_scores_cross();
     r |= run_scores_kickwish();
     r |= run_scores_skipfrac();
+    r |= run_scores_limiter();
     return r | g_sc_failed;
 }
 
@@ -1759,6 +1773,30 @@ static int run_scores_skipfrac()
     }
     sc_check(fsk[1] >= fsk[0] && fsk[1] > 0, "a full-pedal launch still skips as before (the default never skips less)");
     set_param("skip_land_frac", sf_def);
+    return g_sc_failed;
+}
+
+// ---- part 11: the own speed limiter. At a 95 km/h cap with the pedal at 1.0 the throttle is capped below the pedal, so the
+// demand is what the capped throttle gives (holding the speed): the truck ends in the top gear, not stuck one below.
+static void c_limiter(double t)
+{
+    M.pedal = 1.0f;
+    float kmh = M.v * 3.6f, lim = 95.5f;   // speed_limiter_kmh 95 + the bias
+    g_act[ACT_CRUISE].scale = kmh >= lim ? 0.0f : fmaxf(0.0f, fminf(1.0f, (lim - (kmh + T.accel * 3.6f)) / 1.5f));
+}
+static int run_scores_limiter()
+{
+    printf("\n=== SCORES part 11: the own speed limiter at 95 km/h, pedal 1.0, ATO 33 t flat: the top gear ===\n");
+    use_ato();
+    set_param("choice", 1.0f); set_param("choice_objective", 1.0f);
+    g_rec_on = 1;
+    sc_do("limiter 95", {33000, 88, 11, 45, 3, 0.5f, 0, -1, -1, r_flat0, 0}, c_limiter, 1);
+    g_rec_on = 0;
+    int top = 0;
+    for (int i = 0; i < g_rec_n; i++) if (g_rec[i].b == 12 && g_rec[i].b > g_rec[i].a) top = 1;
+    printf("  end in gear %d at %.0f km/h, reached 12: %s\n", M.gear, M.v * 3.6f, top ? "yes" : "no");
+    if (getenv("SC_SHIFTS")) for (int i = 0; i < g_rec_n; i++) printf("      %6.1f  %d->%d (%s) %.0f rpm\n", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why, g_rec[i].rpm);
+    sc_check(top, "at a 95 km/h cap with the pedal at 1.0 the truck ends in the top gear (12)");
     return g_sc_failed;
 }
 
