@@ -235,6 +235,7 @@ int ts_mode();                  // TrueShift: the driving mode (MODE_ECO / MODE_
 int pedal_wish(float p, float dt, int other, float *out);
 float pedal_wish_force(float v);   // the driver's wish as a force (N) at speed v while the wish pedal gives the throttle (its last 0.3 s), else -1
 float pedal_wish_full(float v);    // the force (N) a full wish asks at speed v (the reference above, on or off); 0 = the vehicle model cannot tell
+float pedal_approach_share(int md);   // the mode's firmness (0..1): its wish rise rate over Power's (Eco 0.19, Normal 0.38, Power 1); Cruise's approach to the set speed uses this share of the pull to spare
 extern volatile int g_pedal_mapped;     // Cruise: the throttle the engine gets is the pedal through the Eco / Power curve this frame
 extern volatile int g_pcc_on;         // Cruise: predictive cruise (PCC) is switched on
 extern volatile int g_cruise_smooth;  // the Cruise module drives the cruise throttle itself

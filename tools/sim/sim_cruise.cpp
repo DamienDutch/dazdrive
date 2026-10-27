@@ -76,6 +76,7 @@ void *game_gearbox() { return (void *)&g_sim_eng; }
 int gb_engine(void *, engine_info *e) { *e = g_sim_eng; return 1; }
 float curve_factor(const engine_info *e, float rpm) { return rpm < 1000 ? 0.8f + 0.2f * rpm / 1000 : rpm < 1500 ? 1.0f : 1.0f - (rpm - 1500) / 3000; }
 float wheel_radius() { return 0.5f; }
+float pedal_approach_share(int md) { return md == MODE_ECO ? 1.5f / 8 : md == MODE_POWER ? 1.0f : 3.0f / 8; }   // modules/pedal.cpp at its defaults
 int pedal_wish(float p, float, int, float *out) { *out = p; return 0; }   // the wish pedal (modules/pedal.cpp) is off here: the old pedal curves
 static char GA[0x20000];
 char *game_actor_safe() { return GA; }
@@ -997,20 +998,23 @@ static const float FM_RATIO[12] = { 11.73f, 9.21f, 7.09f, 5.57f, 4.35f, 3.41f, 2
 static int g_fm_plant;   // the force_mode runs: the wish pedal's reference on this plant (the other runs: the model cannot tell, the old unit)
 // A full wish at v as the wish pedal finds it with ref_now 1: the best gear at full throttle whose revs lie in 1000 ... 1900 rpm (its window on
 // this engine), the first gear at 1000 rpm as the cap (pedal.cpp: wish_ref)
+static int g_full_power;
 float pedal_wish_full(float v)
 {
     if (!g_fm_plant) return 0;
     float best = 0;
-    for (int g = 1; g <= 12; g++) { float r = vehicle_rpm_at(g, v); if (r >= 1000 && r <= 1900) best = fmaxf(best, vehicle_force_at(g, v, 1.0f)); }
+    // (g_full_power: as pedal.cpp has it, the power of the best gear in the window, as the force at this speed; else the strongest force)
+    for (int g = 1; g <= 12; g++) { float r = vehicle_rpm_at(g, v); if (r >= 1000 && r <= (g_full_power ? 1600 : 1900)) best = fmaxf(best, vehicle_force_at(g, v, 1.0f)); }
+    if (g_full_power) { float pw = 0; for (int g = 1; g <= 12; g++) { float r = vehicle_rpm_at(g, v); if (r >= 1000 && r <= 1600) pw = fmaxf(pw, vehicle_force_at(g, v, 1.0f) * v); } return pw / fmaxf(v, 0.5f); }
     float cap = vehicle_force_at(1, vehicle_kmh_at(1, 1000) / 3.6f, 1.0f);
     return best > 0 ? fminf(best, cap) : cap;
 }
 static float fm_road(double s) { return s < 2000 ? 0 : s < 3500 ? 3.0f : 0; }   // 2 km flat, 1.5 km at 3 %, flat
 static float fm_road1(double) { return 1.0f; }                                 // 1 % all along: 12 needs ~0.75 throttle at 33 t
-struct fmres { float e_flat, loss, e_climb, thr_max_near, jump, f_err; int shifts, f_seen; };   // jump: the largest change of the pull across a shift that began under full throttle (share; -1 = none)
-static fmres fm_run(float mass, int fm, float cvar, float eco_cap, float (*road)(double) = fm_road)
+struct fmres { float e_flat, loss, e_climb, thr_max_near, jump, f_err, t82, thr_hi; int shifts, f_seen; };   // jump: the largest change of the pull across a shift that began under full throttle (share; -1 = none)
+static fmres fm_run(float mass, int fm, float cvar, float eco_cap, float (*road)(double) = fm_road, float v0 = 83)
 {
-    fmres r = {}; r.jump = -1;
+    fmres r = {}; r.jump = -1; r.t82 = -1;
     memset(GA, 0, sizeof GA); memset(&T, 0, sizeof T); memset(&C, 0, sizeof C); memset(&AH, 0, sizeof AH);
     for (int o = 0; o < ACT_N; o++) act_brake(o, 0);
     act_reset(RESET_HARD, "sim"); cr_reset(RESET_HARD, "sim");
@@ -1021,8 +1025,8 @@ static fmres fm_run(float mass, int fm, float cvar, float eco_cap, float (*road)
     vehicle_reset(RESET_HARD);
     o_cruise = stock_cruise; stock_thr = 0; p_smooth = 1; g_sg_ok = 1; g_low_ok = 1; g_sg_hold = 0; g_feed = 0; g_stopped_at = 0;
     *(unsigned char *)(GA + GA_ON) = 1; *(float *)(GA + GA_SET) = 83;
-    float v = 83 / 3.6f, f_before = -1, u = 0, lo = 999; float f_last = 0, u_last = 1; double s = 0, t0 = t_now, sum_f = 0, sum_c = 0, shift_end = -1, full_since = -1, near_since = -1;
-    int n_f = 0, n_c = 0, gear = 12, next = 12;
+    float v = v0 / 3.6f, f_before = -1, u = 0, lo = 999; float f_last = 0, u_last = 1; double s = 0, t0 = t_now, sum_f = 0, sum_c = 0, shift_end = -1, full_since = -1, near_since = -1;
+    int n_f = 0, n_c = 0, gear = v0 < 83 ? 11 : 12, next = gear;
     for (; t_now - t0 < 200; t_now += 1 / 60.0) {
         double t = t_now - t0;
         float grade = road(s), kmh = v * 3.6f;
@@ -1041,6 +1045,7 @@ static fmres fm_run(float mass, int fm, float cvar, float eco_cap, float (*road)
         vehicle_frame();
         u = act_stub(GA, 1 / 60.0f, 0);
         T.eff_thr = u;
+        if (v0 < 83) { if (r.t82 < 0 && kmh >= 82) r.t82 = (float)t; if (r.t82 < 0 && t > 1) r.thr_hi = fmaxf(r.thr_hi, u); }   // (not the first second: the bumpless start takes over the game's throttle)
         if (u < 0.99f || shifting) full_since = -1; else if (full_since < 0) full_since = t_now;
         // what TrueShift would read: the force the cruise asks; where the throttle is not at 1 it is the force the throttle gives in this gear
         float fw = cruise_wish_force(v);
@@ -1053,6 +1058,7 @@ static fmres fm_run(float mass, int fm, float cvar, float eco_cap, float (*road)
         if (!shifting && f_before > 0 && F > 0) { r.jump = fmaxf(r.jump, fabsf(F / f_before - 1)); f_before = -1; }   // the first tick after a shift
         if (!shifting) { f_last = F; u_last = u; } else if (f_before < 0 && u_last < 0.98f) f_before = f_last;
         float res = mass * 9.81f * (sinf(atanf(grade / 100)) + 0.006f) + 0.5f * 1.2f * 6 * v * v;
+        if (g_full_power) T.accel = (F - res) / mass;   // (the approach test: the acceleration the cruise reads)
         v = fmaxf(0, v + (F - res) / mass / 60);
         s += v / 60;
         if (t > 20 && s < 2000) { sum_f += fabsf(kmh - 83); n_f++; }
@@ -1084,6 +1090,23 @@ static int force_mode_test()
                fm, e.thr_max_near, 83 - e.loss, e.shifts);
         bad |= e.thr_max_near > 0.6f + 1e-4f;
     }
+    // approach_by_mode: the approach 70 -> 83 km/h on the flat, 33 t; 0 = the throttle follows the deficit up to full, 1 = Eco and Normal use a share of the pull to spare
+    printf("--- approach_by_mode: 70 -> 83 km/h, 33 t, flat; highest throttle before 82 km/h and the seconds to 82 km/h\n");
+    float hi[2][3], ts[2][3];
+    for (int ab = 0; ab < 2; ab++) {
+        p_app_mode = (float)ab; g_full_power = 1;
+        printf("   approach_by_mode %d:", ab);
+        int ci = 0;
+        for (float cv : { 10.0f, 3.0f, 1.6667f }) {
+            fmres a = fm_run(33000, 0, cv, 1, fm_road, 70);
+            hi[ab][ci] = a.thr_hi; ts[ab][ci] = a.t82; ci++;
+            printf("  %s %.2f / %.1f s", cv > 5 ? "Eco" : cv > 2 ? "Normal" : "Power", a.thr_hi, a.t82);
+        }
+        printf("\n");
+    }
+    p_app_mode = 1; g_full_power = 0;
+    bad |= hi[0][0] < 0.99f || hi[0][1] < 0.99f;   // (today: full throttle)
+    bad |= hi[1][0] > 0.9f || hi[1][1] > 0.9f || hi[1][2] < 0.99f || !(ts[1][0] > ts[1][1] && ts[1][1] > ts[1][2]);
     printf("force_mode test: %s\n", bad ? "FAIL" : "ok");
     return bad;
 }

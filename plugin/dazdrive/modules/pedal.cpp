@@ -210,6 +210,13 @@ float pedal_wish_full(float v)
     return fminf(pref * V.eta / fmaxf(v, 0.5f), fcap);
 }
 
+// The firmness of a mode as the wish pedal has it: how fast its wish may rise, over Power's rate (Power 1; M counts as Normal like the pedal).
+float pedal_approach_share(int md)
+{
+    float r = md == MODE_ECO ? p_rise_eco : md == MODE_POWER ? p_rise_pw : p_rise_norm;
+    return p_rise_pw > 0 && r > 0 ? fminf(1.0f, r / p_rise_pw) : 1.0f;
+}
+
 // Another truck, a trailer or a load: the exponents as they are until the next standstill sets the factor for it.
 static void pd_reset(int level, const char *) { S.prev = NAN; follow(0); if (level >= RESET_LOAD) S.truck_k = 1; }
 
