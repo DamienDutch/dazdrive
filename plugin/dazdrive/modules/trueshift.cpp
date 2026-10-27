@@ -674,10 +674,12 @@ static void refresh(void *self)
     float v = fabsf(T.speed), kmh = v * 3.6f;
     int was = S.ours;
     if (T.parking_brake || kmh < p_off_kmh) S.ours = 0;
+    // [lowspeed] owner=1: the owner hands the truck over at clutch lock + 0.5 s (whatever the rpm or the speed), not at takeover_rpm / takeover_kmh
+    else if (low_handed()) S.ours = 1;
     // By rpm: the engine has reached takeover_rpm with the clutch closed in a gear. Also above 20 km/h whatever the rpm: after a
     // pause, a load or a teleport the truck may already be cruising at 900 rpm in a high gear and never reach the rpm.
     else if (p_on_rpm > 0 ? ((T.rpm >= p_on_rpm && T.gear > 0 && clutch_seen() < 0.1f) || kmh >= fmaxf(p_on_kmh, 20.0f)) : kmh >= p_on_kmh) S.ours = 1;
-    if (S.ours && !was) { S.ours_at = now; S.ours_launch = kmh < 25; }
+    if (S.ours && !was) { S.ours_at = now; S.ours_launch = kmh < 25; if (low_handed()) S.shift_at = now; }   // (the owner's hand-off: the dwell timers start at the lock)
 
     // Learn the vehicle model's rpm correction while the clutch is closed and the speed steady.
     int g = gb_gear(self);
@@ -1148,6 +1150,14 @@ static int decide_gear(void *self, int *why)
         }
     }
     if (cur < 1) { *why = W_NEUTRAL; return 0; }
+    // [lowspeed] owner=1: a pull-away keeps the start gear until the clutch is locked (+ 0.5 s), then TrueShift has the truck. Only the
+    // protections shift: a locked engine under idle + 100 (it would stall), or at the limiter (the gear is too low for the speed). While the
+    // clutch slips the engine speed is not the driveline's, so a low rpm is no stall there (the slip law opens the clutch for that).
+    if (low_launch_hold()) {
+        float er = T.rpm, lm = V.eng.rpm_limit;
+        int slipping = clutch_seen() >= 0.02f;
+        if ((slipping || er > idle_rpm() + ioff(100)) && !(lm > 0 && er > 0.97f * lm)) { *why = W_LOW_SPEED_HOLD; return cur; }
+    }
     if (!S.ours) { *why = W_LOW_SPEED; return 0; }
 
     float rpm = rpm_at(cur, v);
@@ -1729,6 +1739,7 @@ static int launch_pick(int stock, float thr, bool force = false);
 static bool takeover_launch_ok(float) { return p_takeover > 0; }
 static void launch_correct(void *self)
 {
+    if (low_owner_on()) return;   // [lowspeed] owner=1: the start gear at a standstill is the owner's (it changes a gear the game picked itself)
     static int done, prev_lcx;
     double now = sim_s();
     float kmh = fabsf(T.speed) * 3.6f;
@@ -1909,6 +1920,16 @@ static int stub_start(void *self)
     if (!g_active || stock <= 0) return stock;
     vehicle_mass_stale();  // fresh mass for the start
     refresh(self);
+    // [lowspeed] owner=1: the gear the truck starts in is the owner's (the physics pick, preselected at the stop); this function only carries it out
+    if (low_owner_on()) {
+        int og = low_start_gear();
+        if (og > 0 && og <= n_gears()) {
+            logv(1, "start gear %d (game %d, the low-speed owner's), %.1f t, grade %.1f%%, pedal %.2f", og, stock, V.mass / 1000, grade_pct(), clampf(T.in_thr, 0, 1));
+            S.commanded = og;
+            S.cmd_why = og == stock ? W_START : W_START_LOWERED;
+            return og;
+        }
+    }
     // Engaging while moving (after an eco-roll or neutral): never the start
     // gear, a gear that fits the speed.
     float v = fabsf(T.speed);
@@ -1981,6 +2002,7 @@ int ts_mode()
     return m == MODE_M ? -1 : m;
 }
 int ts_stop_hooked() { return g_stop_in; }
+void ts_commanded(int gear) { S.commanded = gear; S.cmd_why = W_START_CORRECTED; }
 
 // ---------------------------------------------------------------- module
 

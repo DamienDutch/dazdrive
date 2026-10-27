@@ -189,6 +189,7 @@ struct creep_info {       // Creep (crawl and smooth start)
     int launch;           // the smooth start (or launch control) holds the clutch
     float floor;          // the crawl's clutch floor, 0 closed .. 1 open
     float launch_clutch;  // the smooth start's clutch value (valid while launch)
+    float launch_aim;     // the engine speed the smooth start aims for (rpm, valid while launch)
     float add_thr;        // the throttle the crawl adds for a heavy load (0 = none)
     float brake;          // the crawl's descent brake request
     float brake_off;      // ini [creep] brake: the brake pedal that takes the crawl away
@@ -224,9 +225,17 @@ int low_owner_on();             // the owner has the stop and the standstill
 int low_stopped();              // standing by the owner's one definition (< 0.3 km/h, measurement noise): the standstill states
 int low_sg_zone();              // the engine is within reach of the stop threshold or the truck stands: Stop&Go's hold has to be set before the box can go to neutral
 float low_stop_rpm(float idle, float thr, float brake, int gear);   // the stop threshold for gear (rpm): the clutch opens at the open point of the owner
+// owner=1, the pull-away (step 3): the start gear at rest is the owner's one path, the gear is held until the clutch is locked, the hand-off to
+// TrueShift is at clutch lock + 0.5 s. All 0 with owner=0 and in GAME.
+int low_start_gear();            // the gear the truck starts in now (the physics pick, preselected at the stop); 0 = the owner has none to say
+int low_launch_hold();           // a pull-away (LAUNCH) or the first half second of a locked clutch (ROLLING_LOW): TrueShift keeps the gear it has
+int low_handed();                // HANDED: the owner has handed the truck to TrueShift
+float low_top_kmh();             // the top of the owner's world (km/h), 0 = unknown: where the start gear reaches the end of its low-gear shift window
+float low_drive_force();         // N at the wheels the clutch the owner commands carries now (a launch under the smooth start's law), NAN = no such launch
 int ts_start_gear(float thr);   // TrueShift: the start gear by physics (mass, grade, engine) for this pedal, whether or not TrueShift has the truck; 0 = unknown
 int ts_stop_hooked();            // TrueShift: the game's stop threshold hook is in (the owner's clutch-open point needs it)
 float ts_idle_rpm();            // TrueShift: the idle rpm (learned at a standstill, else the ini's; not the game's engine figure Creep reads)
+void ts_commanded(int gear);       // TrueShift: the owner changed the gear at a standstill (the shift is ours, not a hint of the driver)
 float ts_brake_down_eta(float decel);   // TrueShift: seconds until its next downshift in braking at this deceleration (m/s2, > 0), from the speed falling to the point the braking rules have set; NAN = none expected
 int ts_mode();                  // TrueShift: the driving mode (MODE_ECO / MODE_NORMAL / MODE_POWER) of an automatic truck it can read; -1 = manual box, M, or an unsupported truck
 // Pedal (modules/pedal.cpp): the wish pedal. The driver's pedal p becomes a wish for power; the throttle that delivers it in the gear

@@ -239,6 +239,10 @@ struct launch_in {
     float dt, speed, thr, brake, rpm, idle, rpm_per_ms;  // s, m/s forward, 0..1, 0..1, engine rpm, idle rpm, rpm of a locked clutch per m/s
     int gear, heavy, blocked, shifting;
     float handover;  // >= 0: the crawl just ended with this clutch value: carry on from it (rolling start), else only from a standstill
+    // [lowspeed] owner=1: this is the owner's launch (every pull-away, also Stop&Go's drive-off on the cruise throttle). thr is then the pedal or the
+    // fed cruise throttle; eff_thr the engine's own throttle (the game cuts it at a full pedal, 25-10 16:50); end_kmh is where the owner's world ends.
+    int owner;
+    float eff_thr, end_kmh;
 };
 
 static int g_ln;            // the launch owns the clutch
@@ -315,7 +319,19 @@ static void launch_tick(const launch_in &in)
     if (in.shifting || in.gear <= 0) { launch_end("shift", 0); return; }
     if (g_ln_rel > 0.4f) { launch_end("pedal released", 0); return; }
     if (in.brake > 0.2f) { launch_end("brake", 0); return; }
-    if (vk > p_l_end + 4) { launch_end("speed", 0); return; }
+    float end_kmh = in.owner && in.end_kmh > 0 ? in.end_kmh : p_l_end;   // (the owner has no fixed speed edge: where the start gear's low-gear window ends)
+    if (vk > end_kmh + 4) { launch_end("speed", 0); return; }
+    // The game cuts the engine's throttle at a full pedal for 0.6-1.1 s at walking pace (25-10 16:50, 35.8 t: thr_eff 0 at pedal 1.0; why is not
+    // known). The law would read the sagging engine as dragged and open the clutch, and close it again at sync: the jerk. With the owner, while
+    // the pedal is down and the engine's throttle is not, the clutch is frozen, the aim is the engine speed of now and the slip time does not run;
+    // the engine under 0.92 idle still opens it (no stall).
+    if (in.owner && in.thr > 0.8f && in.eff_thr < 0.2f && g_lc >= 0.02f) {   // (a closed clutch has nothing to freeze: the launch ends as it always does)
+        g_ln_t -= in.dt;
+        g_ln_ra = in.rpm;
+        g_ln_rpm0 = in.rpm; g_ln_rate = 0;
+        if (in.rpm > 100 && in.rpm < 0.92f * in.idle) g_lc = clampv(g_lc + 2.0f * in.dt, 0, 1);
+        return;
+    }
     float aim = g_lcx == 2 ? lcx_aim() : launch_aim(in.thr, in.idle, in.heavy);
     g_ln_ra += (aim - g_ln_ra) * fminf(1, in.dt / 0.25f);  // the aim follows the pedal, not jumps with it
     // the engine speed 0.2 s from now (a flat pedal lifts it 1500+ rpm/s against a clutch that carries almost nothing at first):
@@ -335,7 +351,7 @@ static void launch_tick(const launch_in &in)
     d = -(p_l_creep * (1 + fmaxf(0, g_ln_t - 1.0f) * 3) + p_l_gain * lmode(0.8f, 1.0f, 1.3f) * (err < 0 ? 2.0f : 1.0f) * err / 100);
     if (err < -150 && d < 0.3f) d = 0.3f;
     d = fmaxf(d, -p_l_rate);
-    if (slip < p_l_sync || vk > p_l_end || g_ln_t > p_l_max_s) d = -p_l_final;
+    if (slip < p_l_sync || vk > end_kmh || g_ln_t > p_l_max_s) d = -p_l_final;
     if (in.rpm > 100 && in.rpm < 0.92f * in.idle) d = 2.0f;  // never drag the engine down
     d = clampv(d, -fmaxf(p_l_rate, p_l_final), 2.0f);
     g_lc = clampv(g_lc + d * in.dt, 0, 1);
@@ -548,7 +564,13 @@ static void ck_frame()
     creep_tick(in);
     {   // launch: pulling away is ours too, crawl or not (the hook below carries the value; the game's own is set along)
         launch_in li = {};
-        li.dt = dt; li.speed = gear < 0 ? -T.speed : T.speed; li.thr = T.in_thr; li.brake = T.in_brake; li.rpm = T.rpm; li.idle = in.idle;
+        // [lowspeed] owner=1: every pull-away is the owner's launch. Stop&Go's drive-off has no pedal: the cruise throttle fed to the automatic is the
+        // pedal then, and the cruise being on does not stop it. No fixed speed edge: the launch ends where the start gear's low-gear window ends.
+        int own = low_owner_on();
+        float feed = 0;
+        if (own) { cruise_info cu; cruise_info_get(&cu); feed = cu.feed; }
+        li.owner = own; li.eff_thr = T.eff_thr; li.end_kmh = own ? low_top_kmh() : 0;
+        li.dt = dt; li.speed = gear < 0 ? -T.speed : T.speed; li.thr = fmaxf(T.in_thr, feed); li.brake = T.in_brake; li.rpm = T.rpm; li.idle = in.idle;
         float r = wheel_radius();
         li.rpm_per_ms = gear > 0 && gear <= T.fwd_gears && r > 0.1f && T.diff > 0 && T.ratio[gear - 1] > 0 ? T.ratio[gear - 1] * T.diff / r * 9.5493f : 0;
         li.gear = gear; li.heavy = heavy;
@@ -556,7 +578,7 @@ static void ck_frame()
         // the game's gearbox must be quiet: gear in, no shift under way (states 0 = idle, 3 = closing; 2 = opening the clutch)
         int gst = gb_state(self);
         li.shifting = (gst != 0 && gst != 3) || gb_target(self) != gear;
-        li.blocked = g_on || p_launch <= 0 || g_truck_unsupported || T.paused || !T.engine_on || T.parking_brake || T.cruise > 0.1f || g_rolling || !amode || hill > 0 ||
+        li.blocked = g_on || p_launch <= 0 || g_truck_unsupported || T.paused || !T.engine_on || T.parking_brake || (T.cruise > 0.1f && !own) || g_rolling || !amode || hill > 0 ||
                      !(in.idle > 0) || !g_hooked;
         launch_tick(li);
         // a launch that ended normally hands the game a closed clutch, once (while it runs, act_clutch below mirrors ours into the game's)
@@ -639,6 +661,7 @@ void creep_info_get(creep_info *o)
     o->launch = g_ln;
     o->floor = g_f;
     o->launch_clutch = g_lc;
+    o->launch_aim = g_ln_ra;
     o->add_thr = g_cthr;
     o->brake = g_cbrake;
     o->brake_off = p_brake;
