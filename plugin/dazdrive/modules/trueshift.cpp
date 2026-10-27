@@ -19,10 +19,13 @@
 #include "../core/route.h"
 #include "../core/vehicle.h"
 #include "../core/gearscore.h"
+#include "../core/rpmspan.h"
 #include <math.h>
 #include <string.h>
 
 // ---------------------------------------------------------------- settings
+
+float g_rpm_by_engine;   // [trueshift] rpm_by_engine (core/rpmspan.h; LowSpeed reads it too)
 
 static float p_eco_ceil, p_mode_char, p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, p_min_gap, p_dwell_ud, p_dwell_du,
     p_max_skip, p_skip_acc, p_skip_wait, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
@@ -30,7 +33,7 @@ static float p_eco_ceil, p_mode_char, p_enabled, p_takeover, p_on_kmh, p_off_kmh
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
     p_idle, p_trace, p_lookahead, p_roll, p_roll_cruise, p_roll_cruise_min, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_stop, p_tones, p_crest_band, p_relax,
     p_choice, p_ch_eco, p_ch_norm, p_ch_power, p_ch_rpm, p_ch_shift, p_ch_stay, p_ch_stay_pw, p_ch_floor,
-    p_ch_obj, p_ch_amin, p_ch_ts_eco, p_ch_ts_norm, p_ch_ts_pw, p_ch_upwait, p_ch_flip, p_ch_pw_eco, p_ch_pw_norm, p_ch_pw_pw, p_ch_pw_var,
+    p_ch_obj, p_ch_amin, p_ch_ts_eco, p_ch_ts_norm, p_ch_ts_pw, p_ch_upwait, p_ch_flip, p_ch_pw_eco, p_ch_pw_norm, p_ch_pw_pw, p_ch_pw_var, p_ch_fl_idle, p_pw_cross,
     p_ch_own_brake, p_ch_route_cap, p_lift_up, p_lift_delay;
 
 static param g_params[] = {
@@ -66,6 +69,9 @@ static param g_params[] = {
     { "choice_floor_power_eco", &p_ch_pw_eco, 0.64f, "choice 1, Eco: under load the revs stay at or above the lowest rpm where the engine still gives this share of its peak power (torque times rpm, read from its torque curve), also right after an upshift: the power in hand for the next push. Replaces choice_floor_rpm. 0 = choice_floor_rpm" },
     { "choice_floor_power", &p_ch_pw_norm, 0.69f, "choice 1, Normal: the same" },
     { "choice_floor_power_power", &p_ch_pw_pw, 0.74f, "choice 1, Power: the same" },
+    { "power_shift_crossover", &p_pw_cross, 1, "choice 1: 1 = at a firm pedal in Power (0.8 or more) and at a full pedal in Normal (0.95 or more) the upshift point is the power crossover of the engine and the gearbox: the rpm where the power in this gear equals the power in the next gear at the rpm it lands at, from the engine's torque curve and the ratios, never below the top of the power range and never above 95 % of the rev limit. Eco never. 0 = the top of the power range, as before" },
+    { "rpm_by_engine", &g_rpm_by_engine, 0, "1 = the fixed rpm margins of the shift rules (the stall margin, the lowest landing rpm, the comfort floors, the stop and hand-off margins, the engine-brake light stage, the air-charge and M-lug revs) follow the engine's own span from idle to the torque plateau and its brake range, instead of numbers fitted on engines with idle 550-600 and a plateau at 900-1000 rpm. On those engines nothing changes. 0 = the fixed numbers" },
+    { "choice_floor_idle_frac", &p_ch_fl_idle, 0.5f, "choice 1: the floor of choice_floor_power* is at least this share of the way from idle up to the start of the torque plateau, so an engine with a high plateau keeps a floor of its own span and not one near idle. 0 = the power share alone" },
     { "choice_floor_power_varied", &p_ch_pw_var, 0.025f, "choice 1: added to the share above while the driver's pedal has been varying over the last 10 s (standard deviation of the pressed pedal over 0.05; lifts do not count): more power in hand for the next push. 0 = off" },
     { "choice_own_brake", &p_ch_own_brake, 1, "choice 1: 1 = the pause of upshifts after a brake (6 s below 60 km/h) also follows the brake requests of the suite itself (deceleration assist, ACC), not only the brake the game reports. 0 = only the game's brake" },
     { "choice_route_cap", &p_ch_route_cap, 1, "choice 1 with the route look-ahead: 1 = the speeds the scores look ahead to stop at what the route allows ahead (bends, junctions), so no upshift is chosen for a speed the truck will not reach before it slows. 0 = off" },
@@ -359,6 +365,7 @@ static float grade_pct() { return V.grade_pct; }
 // floors, lug). What the game's code compares with is its engine figure (+ its idle add): Creep reads that, and the stop
 // threshold hook gets it as its argument. The two agree once learned on a warm engine, not before, so they stay apart.
 static float idle_rpm() { return S.idle > 300 ? S.idle : p_idle; }
+static float ioff(float n) { return rs_off(idle_rpm(), n); }   // a fixed offset from idle / the plateau, by the engine's span when rpm_by_engine is on (core/rpmspan.h)
 
 static int n_gears()
 {
@@ -416,7 +423,7 @@ static float up_pt(int g)
 // the plateau has room before it has to come back down.
 static float base_dn(int g)
 {
-    return fmaxf(idle_rpm() + 220, fminf(eco_dn(g), V.plateau - 100) + 0.5f * mode_rpm());
+    return fmaxf(idle_rpm() + ioff(220), fminf(eco_dn(g), V.plateau - ioff(100)) + 0.5f * mode_rpm());
 }
 // The downshift point only rises with demand near full pedal: pressing on at
 // cruise in a low gear is not a request for power (kickdown and lugging are).
@@ -454,7 +461,7 @@ static float skip_relax(float v, float a_now)
 }
 static float land_floor(int h, float a_h, float relax)
 {
-    return fmaxf((a_h < a_power() ? dn_pt(h) : base_dn(h)) + p_hyst, idle_rpm() + 350 - relax);
+    return fmaxf((a_h < a_power() ? dn_pt(h) : base_dn(h)) + p_hyst, idle_rpm() + ioff(350) - relax);
 }
 
 static int skip_allowed() { return (int)p_max_skip; }
@@ -473,7 +480,7 @@ static int skip_target(int cur, float v, float f_res, float grade)
     float a_skip = skip_accel() * 2.0f;
     for (int h = cur + 2; h <= n && h <= cur + 1 + skip_allowed(); h++) {
         float a_h = (force_at(h, v, 0.95f) - f_res) / V.mass;  // still accelerating hard: the plateau is enough
-        if (rpm_at(h, v) < fmaxf((a_h < a_power() ? dn_pt(h) : base_dn(h)) + p_hyst, idle_rpm() + 350)) break;
+        if (rpm_at(h, v) < fmaxf((a_h < a_power() ? dn_pt(h) : base_dn(h)) + p_hyst, idle_rpm() + ioff(350))) break;
         if ((force_at(h, v, 0.85f) - f_res) / V.mass < a_skip) break;
         if (force_at(h, v, 1.0f) - f_res < 0.7f * (force_at(cur + 1, v, 1.0f) - f_res)) break;
         best = h;
@@ -758,7 +765,7 @@ static void refresh(void *self)
         if (varied != S.varied && p_choice > 0 && p_ch_pw_var > 0) {
             float base = by_mode(p_ch_pw_eco, p_ch_pw_norm, p_ch_pw_pw), share = fminf(1.0f, base + (varied ? p_ch_pw_var : 0.0f));
             if (base > 0 && V.eng_ok)
-                logv(2, "choice floor: the pedal %s (sd %.3f over 10 s): %.0f rpm, %.3f of the peak power", varied ? "varies" : "is steady", sd, gs_power_rpm(share, idle_rpm()), share);
+                logv(2, "choice floor: the pedal %s (sd %.3f over 10 s): %.0f rpm, %.3f of the peak power", varied ? "varies" : "is steady", sd, gs_floor_rpm(share, idle_rpm(), p_ch_fl_idle), share);
         }
         S.varied = varied;
     }
@@ -960,18 +967,18 @@ static int decide_manual(int cur, float rpm, float v, double since, int *why)
     *why = W_M;
     if (p_m_style < 1) return cur;
     if (rpm > V.eng.rpm_limit * (ebrake ? 0.99f : 0.96f) && cur < n) { *why = W_M_REV_LIMIT; return cur + 1; }
-    if (rpm < idle_rpm() + 120 && cur > 1) { *why = W_M_STALL; return pick_down(cur, v, eco_dn(1) + 300); }
+    if (rpm < idle_rpm() + ioff(120) && cur > 1) { *why = W_M_STALL; return pick_down(cur, v, eco_dn(1) + 300); }
     if (p_m_style < 2) return cur;
     if (S.kick_until > now && rpm < V.eng.range[R_POWER][0] + 100 && cur > 1 && since > 0.3) {
         int l = pick_down(cur, v, pw_mid() + 100);
         if (l < cur) { *why = W_M_KICKDOWN; return l; }
     }
-    if (brake > 0.05f && rpm < idle_rpm() + 250 && cur > 1 && since > 0.5) {
+    if (brake > 0.05f && rpm < idle_rpm() + ioff(250) && cur > 1 && since > 0.5) {
         int l = pick_down(cur, v, eco_up(1) - 200);
         if (l < cur) { *why = W_M_STOPPING; return l; }
     }
     float fmax = force_at(cur, v, 1.0f);
-    if (S.thr > 0.8f && rpm < p_m_lug && cur > 1 && since > 2 &&
+    if (S.thr > 0.8f && rpm < rs_abs(idle_rpm(), p_m_lug) && cur > 1 && since > 2 &&
         (T.accel < 0.05f || fmax - resist(v) < V.mass * 0.03f)) {
         *why = W_M_LUGGING;
         return cur - 1;
@@ -1075,6 +1082,8 @@ static gs_cfg score_cfg(int skips, int skips_up, int skips_later, int low_edge, 
     c.a_min = p_ch_amin;
     c.k_shift = by_mode(p_ch_ts_eco, p_ch_ts_norm, p_ch_ts_pw);
     c.floor_pw = low_edge ? 0 : floor_share();
+    c.floor_idle_frac = p_ch_fl_idle;
+    c.cross = p_pw_cross > 0 && pedal >= by_mode(2.0f, 0.95f, 0.8f);   // (Eco: no pedal is that far)
     c.v_cap = v_cap;
     return c;
 }
@@ -1163,7 +1172,7 @@ static int decide_gear(void *self, int *why)
         S.hold_until = 0;  // a held hint gear ends here, the next gear is TrueShift's again (friend 11-10: 2-3-4-5-6 all at the limiter)
         return h;
     }
-    if (rpm < idle_rpm() + 120 && cur > 1) { *why = W_STALL; return pick_down(cur, v, eco_dn(1) + 300); }
+    if (rpm < idle_rpm() + ioff(120) && cur > 1) { *why = W_STALL; return pick_down(cur, v, eco_dn(1) + 300); }
 
     // not right after a launch shift (ts4o: 1->3 by the game at 10 km/h with the pedal floored, then 3->2->3)
     if (kick && rpm < V.eng.range[R_POWER][0] + 100 && cur > 1 && since > 2.0 && clutch_seen() < 0.1f && v * 3.6f > 15) {
@@ -1228,7 +1237,7 @@ static int decide_gear(void *self, int *why)
     if ((T.motor_brake || S.eb_level > 0.01f) && thr < 0.05f) {
         float lo = V.eng.range[R_BRAKE][0], hi = V.eng.range[R_BRAKE][1];
         int full = p_eb_down > 0 || (p_eb_down < 0 && S.eb_full);
-        float keep = full ? lo : lerpf(fminf(by_mode(p_eb_light - 100, p_eb_light, p_eb_light + 150), lo), lo, S.eb_level);
+        float keep = full ? lo : lerpf(fminf(rs_brake(by_mode(p_eb_light - 100, p_eb_light, p_eb_light + 150)), lo), lo, S.eb_level);
         S.bd_at = now; S.bd_gear = cur; S.bd_floor = keep - 50; S.bd_lead = 0; S.bd_after = S.shift_at + p_min_gap;
         if (rpm < keep - 50 && cur > 1 && since > p_min_gap) {
             int l = pick_down(cur, v, full ? 0.5f * (lo + hi) : fminf(keep + 150, hi - 100), true);
@@ -1250,7 +1259,7 @@ static int decide_gear(void *self, int *why)
     if (brake > 0.05f || (stop_c && coast_p && T.accel < -0.8f)) {
         // stay above the game's neutral threshold, which rises with brake^2
         float b = fminf(brake, 1.0f), opens = 0.8f * idle_rpm() + b * b * idle_rpm();
-        float floor = fmaxf(fmaxf(idle_rpm() + 250, eco_dn(cur) - 100), opens + 250);
+        float floor = fmaxf(fmaxf(idle_rpm() + ioff(250), eco_dn(cur) - 100), opens + ioff(250));
         if (slow_ahead) floor = fmaxf(floor, V.plateau + 200);
         // (choice 1: the speed at the end of a shift started now, at the deceleration of now: under the brake the revs fall through a slow
         // box's shift, and a gear chosen for the speed of now lands under the floor or at the stall rule)
@@ -1308,11 +1317,11 @@ static int decide_gear(void *self, int *why)
     if (cur > 1 && ((p_choice < 1 && rpm < dn_eff) || lug)) {   // choice 1: only lugging; the scores decide the rest below
         // maneuvering (Damien 24-10, 3856-3877 s: 6>4>5>3>4>5>6>7>8>9 in 21 s between 6 and 25 km/h): at a gentle pedal and a low speed only
         // a near-stall or lugging takes a gear off, not the demand-based downshift point
-        if (p_calm > 0 && V.mass > 6000 && v * 3.6f < p_calm && !lug && !kick && thr < 0.6f && rpm > idle_rpm() + 230) { *why = W_LOW_SPEED_HOLD; return cur; }
-        int deep = rpm < dn_base - 100 || rpm < idle_rpm() + 250;   // the load-raised point does not skip the anti-hunt dwell
+        if (p_calm > 0 && V.mass > 6000 && v * 3.6f < p_calm && !lug && !kick && thr < 0.6f && rpm > idle_rpm() + ioff(230)) { *why = W_LOW_SPEED_HOLD; return cur; }
+        int deep = rpm < dn_base - 100 || rpm < idle_rpm() + ioff(250);   // the load-raised point does not skip the anti-hunt dwell
         if (S.shift_dir > 0 && since < p_dwell_ud && !deep && !lug) { *why = W_ANTI_HUNT_DOWN; return cur; }
         // Almost over the top: hold on, it gets easier in a moment.
-        if (top_near && rpm > idle_rpm() + 300) { *why = W_TOP_AHEAD; return cur; }
+        if (top_near && rpm > idle_rpm() + ioff(300)) { *why = W_TOP_AHEAD; return cur; }
         // A top this gear still gets over within the band: let the speed sag instead (PCC).
         if (top_ok || top_over) {
             if (top_ok && !S.crest_said) {
@@ -1342,11 +1351,11 @@ static int decide_gear(void *self, int *why)
     if (p_air_psi > 0 && T.air_psi > 1 && T.air_psi < p_air_psi && thr > 0.02f) {
         static double said;
         if (sim_s() - said > 10) { said = sim_s(); logline("air %.0f psi: keeping the rpm up to charge it", T.air_psi); }
-        if (rpm < p_air_rpm - 250 && cur > 1) {
-            int l = pick_down(cur, v, p_air_rpm + 100);
+        if (rpm < rs_abs(idle_rpm(), p_air_rpm) - 250 && cur > 1) {
+            int l = pick_down(cur, v, rs_abs(idle_rpm(), p_air_rpm) + 100);
             if (l < cur && rpm_at(l, v) < V.eng.rpm_limit * 0.9f) { *why = W_AIR_CHARGE; return l; }
         }
-        if (cur < n && rpm_at(cur + 1, v) < p_air_rpm) { *why = W_AIR_CHARGE; return cur; }
+        if (cur < n && rpm_at(cur + 1, v) < rs_abs(idle_rpm(), p_air_rpm)) { *why = W_AIR_CHARGE; return cur; }
     }
 
     if (junction_near) { *why = W_JUNCTION_AHEAD; return cur; }
@@ -1426,7 +1435,7 @@ static int decide_gear(void *self, int *why)
         if (p_lift_up > 0 && coast_p && T.cruise < 0.5f && S.lift_at > 0 && S.lift_used != S.lift_at && now - S.lift_at >= p_lift_delay && cur < n &&
             lift_median() > V.eng.shift_time + 0.5f && grade_pct() > -1.0f && act_request() <= 0 && !ebrake && T.accel > -0.5f && !(jn >= 0 && jn < v * 6)) {
             float vb6 = rk ? route_curve_speed(2.5f, fmaxf(0.3f, v / 12)) : NAN;
-            float fs = floor_share(), fl = fs > 0 ? gs_power_rpm(fs, idle_rpm()) : V.plateau + p_ch_floor;
+            float fs = floor_share(), fl = fs > 0 ? gs_floor_rpm(fs, idle_rpm(), p_ch_fl_idle) : V.plateau + p_ch_floor;
             if (!(vb6 == vb6 && vb6 < v - 0.7f)) {
                 for (int g = cur + 1; g <= n && g <= GS_MAX; g++) {
                     const gs_term &t = so.t[g];
@@ -1454,14 +1463,14 @@ static int decide_gear(void *self, int *why)
             int ret = -1, why_v = W_NONE;
             const char *not_steady = NULL;
             if (w < cur) {
-                bool deep = forced && (rpm < idle_rpm() + 250 || so.t[cur].share > 1.0f || kick);
-                if (!forced && !kick && p_calm > 0 && V.mass > 6000 && v * 3.6f < p_calm && thr < 0.6f && rpm > idle_rpm() + 230) ret = cur, why_v = W_LOW_SPEED_HOLD;
+                bool deep = forced && (rpm < idle_rpm() + ioff(250) || so.t[cur].share > 1.0f || kick);
+                if (!forced && !kick && p_calm > 0 && V.mass > 6000 && v * 3.6f < p_calm && thr < 0.6f && rpm > idle_rpm() + ioff(230)) ret = cur, why_v = W_LOW_SPEED_HOLD;
                 else if (S.shift_dir > 0 && since < p_dwell_ud && !deep && !kick) ret = cur, why_v = W_ANTI_HUNT_DOWN;
                 // (choice_objective 1: no flip back down soon after an upshift, also not for a gear the floor or the demand has put out; kickdown,
                 // the stall rule and braking come before this, revs near idle or under the window and a gear without a_min at full throttle go through)
-                else if (p_ch_obj > 0 && S.shift_dir > 0 && since < p_ch_flip && !kick && rpm >= fmaxf(idle_rpm() + 250, so.lo) && (fmax - f_res) / V.mass >= p_ch_amin)
+                else if (p_ch_obj > 0 && S.shift_dir > 0 && since < p_ch_flip && !kick && rpm >= fmaxf(idle_rpm() + ioff(250), so.lo) && (fmax - f_res) / V.mass >= p_ch_amin)
                     ret = cur, why_v = W_ANTI_HUNT_DOWN;
-                else if (top_near && rpm > idle_rpm() + 300) ret = cur, why_v = W_TOP_AHEAD;
+                else if (top_near && rpm > idle_rpm() + ioff(300)) ret = cur, why_v = W_TOP_AHEAD;
                 else if (top_ok || top_over) ret = cur, why_v = top_ok ? W_TOP_REACHABLE : W_OVER_TOP;
                 else if (T.cruise > 0.5f && !kick && T.in_thr < 0.1f && v >= T.cruise - crest_band() && rpm > band_rpm() && (fmax - f_res) / V.mass > 0.06f)
                     ret = cur, why_v = W_CRUISE_BAND;
@@ -1551,7 +1560,7 @@ static int decide_gear(void *self, int *why)
             int h = cur + 2;
             float rc = rpm_at(cur, v2), rh = rpm_at(h, v2);
             if (S.skip_wait_at != 0 && now - S.skip_wait_last > 1.0) S.skip_wait_at = 0;   // an old wait, not this one
-            float low = fmaxf(fmaxf(dn_pt(h), base_dn(h)) + p_hyst, idle_rpm() + 350);
+            float low = fmaxf(fmaxf(dn_pt(h), base_dn(h)) + p_hyst, idle_rpm() + ioff(350));
             // the rpm in this gear from which the skip lands on `low` AFTER the speed lost during the shift (v2 < v: 25-10, the wait aimed at
             // the landing at today's speed, so the skip then failed on 'rpm too low after shift' and became a single step)
             skip_rpm = rh > 1 ? fmaxf(low * (rc / rh) * (v / fmaxf(v2, 0.5f)), S.up_pt + 10) : 0;
@@ -1601,7 +1610,7 @@ static int decide_gear(void *self, int *why)
             if (!coast && (force_at(h, v2u, 0.95f) - f_up) / V.mass < a_req) { block = "not enough pull"; break; }
             // on a climb the new gear must carry the load under load_down_from, or the load rule shifts straight back (10 > 9 > 10 > 8, 25-10)
             if (!coast && p_load_from < 1 && g_up > 1.0f && f_up > p_load_from * force_at(h, v2u, 1.0f)) { block = "too much load after shift"; break; }
-            if (!coast && learned().res > 0 && rh < fmaxf(dn_pt(h) + p_hyst, idle_rpm() + 350) + learned().rpm &&
+            if (!coast && learned().res > 0 && rh < fmaxf(dn_pt(h) + p_hyst, idle_rpm() + ioff(350)) + learned().rpm &&
                 rpm < S.up_pt + 150) { block = "no pull here before"; break; }
             if (h > cur + 1) {
                 // At high demand only when the skipped-to gear still pulls hard (light truck).
@@ -1809,7 +1818,7 @@ static float stop_threshold(float idle, float thr, float brake)
     // not with cruise on: in a jam the ACC rolls at walking pace, and neutral would cancel cruise (ts4p 534 s)
     if (brake < 0.05f && !(p_no_creep > 0 && !g_crawl_on && T.cruise < 0.5f && fabsf(T.speed) * 3.6f < 8)) return stock;
     if (fabsf(T.speed) * 3.6f > 15) return stock;
-    return fmaxf(stock, idle + 150);
+    return fmaxf(stock, idle + rs_off(idle, 150));
 }
 
 // Runs at the very end of every automatic update (also in neutral), right

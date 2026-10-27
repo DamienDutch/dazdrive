@@ -270,8 +270,11 @@ static void cap_checks()
 // ---------------------------------------------------------------- B: 0 -> 0, 1 -> 1, monotone, continuous at blend_from
 static void shape_checks()
 {
-    printf("== B pedal 0 -> gas 0, pedal 1 -> gas 1, monotone in the pedal, continuous at blend_from\n");
+    printf("== B pedal 0 -> gas 0, pedal 1 -> gas 1, monotone in the pedal, continuous at blend_from (blend_from 0.85, then 1 = no blend: the wish all the way)\n");
     float worst_dip = 0; int dips = 0;
+    const float blend0 = p_blend;
+    for (float bf : { 0.85f, 1.0f }) {
+    p_blend = bf;
     for (int md : { MODE_ECO, MODE_NORMAL, MODE_POWER })
         for (int g : { 7, 8, 9, 10 }) {
             world(g, 45, md);
@@ -287,28 +290,30 @@ static void shape_checks()
                 if (p > p_blend && p < 1 && S.w > p) { float lit = S.w + (p - S.w) * (p - p_blend) / (1 - p_blend); if (S.w - lit > worst_dip) worst_dip = S.w - lit; dips++; }
                 prev = gas;
             }
-            float a = steady(p_blend - 1e-4f), b = steady(p_blend), c = steady(p_blend + 1e-4f);
+            float a = steady(p_blend - 1e-4f), b = steady(p_blend), c = steady(fminf(1.0f, p_blend + 1e-4f));
             check(fabsf(b - a) < 1e-3f && fabsf(c - b) < 1e-3f, "B %s gear %d: blend_from steps %g, %g", mode_text(md), g, b - a, c - b);
             // the blend: wish gas to the plain pedal, linearly, reaching the pedal at a flat pedal
             for (float p : { 0.9f, 0.95f, 0.99f }) {
                 float gas = steady(p), w = S.w;
                 if (verbose) printf("   %s g%d p%.2f wish gas %.4f gas %.4f K %.3f\n", mode_text(md), g, p, w, gas, k_ref(g, T.speed));
-                float want = w + fmaxf(0.0f, p - w) * (p - p_blend) / (1 - p_blend);
+                float want = p_blend < 1 ? w + fmaxf(0.0f, p - w) * (p - p_blend) / (1 - p_blend) : w;   // (blend_from 1: the wish itself)
                 check(fabsf(gas - want) < 1e-5f, "B %s gear %d: pedal %.2f gives %.4f, the blend of wish %.4f and pedal says %.4f", mode_text(md), g, p, gas, w, want);
-                check(w >= p || (gas > w && gas < p + 1e-6f), "B %s gear %d: pedal %.2f: gas %.4f is not between the wish %.4f and the pedal", mode_text(md), g, p, gas, w);
+                check(w >= p || ((p_blend < 1 ? gas > w : gas == w) && gas < p + 1e-6f), "B %s gear %d: pedal %.2f: gas %.4f is not between the wish %.4f and the pedal", mode_text(md), g, p, gas, w);
             }
             float e = steady(0.9999f);
             check(e > 0.999f && e <= 1, "B %s gear %d: gas %g just under a flat pedal", mode_text(md), g, e);
         }
+    }
+    p_blend = blend0;
     // the blend toward the pedal acts where the wish gas is under the pedal. In this truck the wish gas is never under the pedal in the
     // blend range with the default exponents (a gear gives at most the peak power the wish is sized on), so a flat Eco curve makes the case
-    float e0 = p_exp_eco; p_exp_eco = 1.6f;
+    float e0 = p_exp_eco; p_exp_eco = 1.6f; p_blend = 0.85f;
     for (float p : { 0.88f, 0.9f, 0.95f }) {
         world(8, 45, MODE_ECO);
         float gas = steady(p), w = S.w, want = w + (p - w) * (p - p_blend) / (1 - p_blend);
         check(w < p && fabsf(gas - want) < 1e-5f && gas > w && gas < p, "B blend (Eco exponent 1.6, gear 8): pedal %.2f gives %.4f, wish %.4f, the blend says %.4f", p, gas, w, want);
     }
-    p_exp_eco = e0;
+    p_exp_eco = e0; p_blend = blend0;
     printf("   where a gear needs more gas than the pedal in the blend range the wish is kept (read literally the blend would dip by up to %.3f below it, %d pedal points)\n", worst_dip, dips);
 }
 
@@ -343,11 +348,12 @@ static void rise_checks()
             hold(0.4f);
             float zero = step(0).out;
             check(zero == 0, "C %s gear %d: release to 0 gives %g", mode_text(md), g, zero);
-            // kickdown: never held back from blend_from up, and a flat pedal is 1 at once
+            // kickdown: never held back from blend_from up (blend_from 1: only a flat pedal), and a flat pedal is 1 at once
             m_pedal.reset(RESET_SOFT, "sim");
             hold(0.1f, 0.5f);
             float k90 = step(0.9f).out, s90 = steady(0.9f);
-            check(fabsf(k90 - s90) < 1e-5f, "C %s gear %d: 0.1 -> 0.9 in one tick gives %.4f, steady %.4f", mode_text(md), g, k90, s90);
+            if (p_blend < 1) check(fabsf(k90 - s90) < 1e-5f, "C %s gear %d: 0.1 -> 0.9 in one tick gives %.4f, steady %.4f", mode_text(md), g, k90, s90);
+            else check(k90 < s90 - 0.05f, "C %s gear %d: blend_from 1: 0.1 -> 0.9 in one tick is held by the rise limit, gives %.4f, steady %.4f", mode_text(md), g, k90, s90);
             m_pedal.reset(RESET_SOFT, "sim");
             hold(0.1f, 0.5f);
             check(step(1.0f).out == 1.0f, "C %s gear %d: 0.1 -> 1.0 not at gas 1 at once", mode_text(md), g);
