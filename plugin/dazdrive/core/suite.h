@@ -151,6 +151,8 @@ enum LaneState { LANE_OFF, LANE_WAIT_SLOW, LANE_WAIT_NO_CRUISE, LANE_WAIT_INDICA
 extern volatile float g_clutch_ours;  // the clutch value Creep puts on the drivetrain (launch or crawl), NAN when the game's own applies
 static inline float clutch_seen() { float c = g_clutch_ours; return c == c ? c : T.eff_clutch; }  // what the drivetrain sees: use instead of T.eff_clutch for 'is the clutch closed'
 extern volatile float g_pcc_need_kmh;  // TrueShift: extra speed over the set speed the next climb on the route needs (NAN = unknown)
+// Decel view for the dev feed: the deceleration target and the measured one (m/s2, + = slowing; NAN while neither the lever assist nor the stop assist works) and the stop assist's state name.
+void decel_view(float *target, float *measured, const char **stop_assist);
 extern volatile float g_decel_need;    // Decel: the service brake request (0..1) the assist needs besides the lever's retarder and engine brake, 0 = none (or downshift_assist 0); TrueShift shifts down earlier for it
 // The stop assist ([decel] stop_assist, modules/decel.cpp): inline variables, so every build that includes this header has them (no definition elsewhere).
 inline volatile int g_sa_nohold;       // Decel: the stop assist is braking a stop that is released at the standstill (stop_assist 1): Auto Hold must not take that brake over
@@ -247,6 +249,7 @@ int ts_mode();                  // TrueShift: the driving mode (MODE_ECO / MODE_
 // other = the caller knows something else drives the throttle (cruise, ACC, AEB). dt = the tick's seconds.
 int pedal_wish(float p, float dt, int other, float *out);
 float pedal_wish_force(float v);   // the driver's wish as a force (N) at speed v while the wish pedal gives the throttle (its last 0.3 s), else -1
+float pedal_wish_share();          // the wish pedal's power wish now, 0..1 (its last 0.3 s), NAN while the pedal goes through (dev feed)
 float pedal_wish_full(float v);    // the force (N) a full wish asks at speed v (the reference above, on or off); 0 = the vehicle model cannot tell
 extern volatile int g_pedal_mapped;     // Cruise: the throttle the engine gets is the pedal through the Eco / Power curve this frame
 extern volatile int g_pcc_on;         // Cruise: predictive cruise (PCC) is switched on
@@ -269,6 +272,7 @@ void act_retarder_scale(int owner, float factor);   // the game's retarder torqu
 void act_thr_base(float v);      // this tick's base throttle in place of the game's cruise output (Cruise, from its ACT_POST hook only)
 const act_wish *act_wishes();    // [ACT_N]: what every owner holds now (traces, sims)
 float act_request();             // the brake request we hold in game_actor+0x17c now (0 = none)
+const char *act_owner_name(int owner);   // the owner's name (logs, the dev feed), "?" out of range
 void act_brake_write(char *ga);  // merge the brake wishes and write the request, merge the retarder factors (the tick does it; sims)
 // Per-tick hooks for a module that works inside the cruise fn call: ACT_PRE runs before the game's own cruise controller (its
 // inputs), ACT_POST after it (stock = what it returned: post the wishes), ACT_DONE after the merge (thr = what the engine gets).

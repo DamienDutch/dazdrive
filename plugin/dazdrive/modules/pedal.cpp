@@ -204,6 +204,12 @@ float pedal_wish_force(float v)
     return fminf(S.q * S.pref * V.eta / fmaxf(v, 0.5f), S.q * S.fcap);
 }
 
+float pedal_wish_share()
+{
+    double now = sim_s();
+    return p_wish > 0 && S.on_at >= 0 && now >= S.on_at && now - S.on_at <= 0.3 ? S.q : NAN;
+}
+
 float pedal_wish_full(float v)
 {
     if (!V.eng_ok || V.electric || !(V.eta > 0)) return 0;

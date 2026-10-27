@@ -601,6 +601,15 @@ static void sa_frame(float dt)
     act_brake(ACT_DECEL, SA.u); SA.posted = 1;
 }
 
+void decel_view(float *target, float *measured, const char **stop_assist)
+{
+    static const char *const names[] = { "off", "armed", "pending", "running", "handing over" };
+    *target = *measured = NAN;
+    if (D.on) { *target = D.tgt; *measured = D.a; }
+    else if (SA.st == SA_RUN || SA.st == SA_HAND) { *target = SA.ref; *measured = SA.a; }
+    *stop_assist = SA.st >= 0 && SA.st <= SA_HAND ? names[SA.st] : "off";
+}
+
 static void de_frame()
 {
     static double last;

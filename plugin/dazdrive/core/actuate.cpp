@@ -38,6 +38,7 @@ void act_thr_cap(int owner, float v) { if (owner_ok(owner)) W[owner].cap = v; }
 void act_thr_scale(int owner, float k) { if (owner_ok(owner)) W[owner].scale = k; }
 void act_retarder_scale(int owner, float f) { if (owner_ok(owner)) W[owner].ret = f != f ? 1.0f : f < 0 ? 0.0f : f > 1 ? 1.0f : f; }
 const act_wish *act_wishes() { return W; }
+const char *act_owner_name(int o) { return owner_ok(o) ? k_owner[o] : "?"; }
 
 // The retarder torque factor the drivetrain hook applies (see "the retarder" below): the lowest of what the owners hold, 1 with
 // nobody posting, and only to the player's vehicle (game_actor -> gearbox -> inner, the path of game_gearbox). The drivetrain runs
