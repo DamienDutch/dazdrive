@@ -940,7 +940,8 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
         // from the entry, so the throttle came on and the brakes right after (Damien 12-10: "gas, then brake")
         // from 400 m (30 s) out, not 150 m: entering a town at 42 km/h the throttle came on towards a roundabout 400 m ahead (35 km/h plan) up to 51 km/h,
         // the brakes and the cancel only 75 m before it (24-10, 1688-1713 s: "veel te hard")
-        if (vj == vj && ji.limit_ms > 0 && kmh > ji.limit_ms * 3.6f + 1 && ji.dist_m < fmaxf(400.0f, 30 * kmh / 3.6f)) {
+        float jn_gate = fmaxf(400.0f, 30 * kmh / 3.6f);
+        if (vj == vj && ji.limit_ms > 0 && kmh > ji.limit_ms * 3.6f + 1 && ji.dist_m < jn_gate) {
             // Gas only while the truck can still coast down to the junction speed (not a blanket no-gas from 400 m: 25-10, two roundabouts
             // close together on a 70 road: 30 km/h all the way) and never faster than the junction speed + junction_approach_over_kmh
             float jn_coast = coast_over(p_jn_coast, ji.dist_m, 0.05f, 0.8f);
@@ -949,7 +950,9 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
             // (the last 2 km/h under v_ok are not chased: the target is v_ok - 2 there and the truck's own speed from it up. It was
             // `kmh >= v_ok - 2 ? kmh : v_ok`: a jump of 2 km/h in the error (0.5 throttle) at the edge, which tipped a climb run from 3 to 4 s at
             // full throttle on a 0.001 change of ahead_accel)
-            target = fminf(target, fmaxf(kmh, v_ok - 2));
+            // (faded in over the first 40 m inside the gate: at the gate itself the target stepped by ~3 km/h, 27-10)
+            float jn_cap = fmaxf(kmh, v_ok - 2), jn_w = fminf(1.0f, (jn_gate - ji.dist_m) / 40.0f);
+            if (jn_cap < target) target += jn_w * (jn_cap - target);
         }
     }
     // The ACC's own target (vehicle ahead) always wins, also 0 = stop behind it. But someone cutting in or a
