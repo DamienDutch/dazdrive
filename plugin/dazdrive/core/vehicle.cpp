@@ -158,7 +158,7 @@ float vehicle_accel(int g, float v, float share, float pct)
 // cargo); the trailer's brakes are another set, so a truck alone and with a trailer each get a slot. The engine's drag in gear is
 // not modelled: measured in the game it is ~0.03 m/s2 (a coast in gear on the flat is 0.17 m/s2 in all, nearly all of it rolling and
 // air, brake-measure notes), far under the 1 m/s2 or more of a stretch, so a closed clutch and an open one count alike.
-// One window = 1.0 s after 0.4 s of settling in the same state; a window that breaks (request, clutch, gear, grade, mass, yaw, speed
+// One window = 1.0 s after 0.4 s of settling in the same state; a window that breaks (request, clutch, gear, grade, mass, yaw, low brake air, speed
 // floor, a pedal, the retarder) is thrown away. Windows of one stretch count 0.3 event each after the first: n is in events.
 // A sample outside 1.2-16 m/s2 per request (at the truck's mass) or over 7.5 m/s2 of deceleration is not taken (a slip, ABS, a hill the
 // model does not know: the telemetry has no wheel slip to ask).
@@ -335,7 +335,7 @@ static void brake_learn_step()
     if (tr != B.cur) { bg_break(); B.cur = tr; }
     float v = T.speed;
     float r = fmaxf(fmaxf(T.in_brake, T.eff_brake), act_request());
-    int ok = dt > 0 && dt < 0.25 && B.loaded && V.mass_ok && V.self && !T.paused && !T.parking_brake && T.gear >= 0 && T.dgear >= 0 &&
+    int ok = dt > 0 && dt < 0.25 && B.loaded && V.mass_ok && V.self && !T.paused && !T.parking_brake && !T.air_warning && !(T.air_psi > 1 && T.air_psi < 60) && T.gear >= 0 && T.dgear >= 0 &&
              v == v && v >= BG_MIN_V && T.retarder == 0 && !T.motor_brake && fmaxf(T.in_thr, T.eff_thr) < 0.02f && fabsf(T.yaw) < 0.04f &&
              fabsf(V.grade_deg) < 12.0f && r >= BG_MIN_R && r <= 1.0f;
     if (!ok) { bg_break(); return; }
