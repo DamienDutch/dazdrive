@@ -11,8 +11,9 @@
 
 // Every letter the dashboard may show; game.cpp's auto_name() accepts a buffer that holds one of them. A: the game's automatic,
 // TrueShift in reverse, ACC on; D, E, S, M: TrueShift's modes; X: something off; L: lane keeping on; C: crawl on, plain cruise;
-// B: hill start, Auto Hold, Stop & Go holding; 1, 2, 3: the ACC distance; I: ISA. P, N, F, O, H, K: from earlier versions.
-static const char k_letters[] = "ADEPMNSFOHXLCBK123I";
+// B: hill start, Auto Hold, Stop & Go holding; 1, 2, 3: the ACC distance; I: ISA; T: the lane steering calibration is armed or running.
+// P, N, F, O, H, K: from earlier versions.
+static const char k_letters[] = "ADEPMNSFOHXLCBK123IT";
 const char *disp_letters() { return k_letters; }
 
 struct disp_wish { char c; double until; unsigned seq; };   // c 0 = none; until 0 = held until changed, else wall_s(); seq = order of the posts

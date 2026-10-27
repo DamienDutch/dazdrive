@@ -133,7 +133,7 @@ void telemetry_frame();  // derived values, called first in frame_end
 // sound.cpp: feedback sounds, async, one at a time; g_volume 0..1 (0 = silent)
 enum Cue { CUE_MODE_ECO, CUE_MODE_NORMAL, CUE_MODE_POWER, CUE_MODE_M, CUE_ACC_1, CUE_ACC_2, CUE_ACC_3, CUE_ACC_OFF,
            CUE_ON, CUE_OFF, CUE_AEB_WARN, CUE_AEB_PARTIAL, CUE_AEB_FULL, CUE_CRUISE_DROP,
-           CUE_LANE_PAUSE, CUE_LANE_RESUME, CUE_OVERSPEED, CUE_COUNT };
+           CUE_LANE_PAUSE, CUE_LANE_RESUME, CUE_OVERSPEED, CUE_LANE_CAL_ARM, CUE_LANE_CAL_DONE, CUE_LANE_CAL_ABORT, CUE_COUNT };
 void play_cue(int cue);
 // input.cpp: finds the wheel (the present joystick with the most buttons) for lane's per-wheel profile
 void input_poll();

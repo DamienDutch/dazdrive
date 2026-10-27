@@ -42,6 +42,10 @@ static const CueDef CUES[CUE_COUNT] = {
     /* LANE_RESUME */ { 0.18f, 1, { { W_BELL, 0, 220, 523, 0 } } },
     // M: the engine over its limit (wheels push it), every 1.5 s while it lasts. Placeholder until Damien picks one (17-10)
     /* OVERSPEED   */ { 0.30f, 1, { { W_TRI, 0, 260, 587, 0 } } },
+    // Steering calibration (lane control key held): armed = two equal bells, finished = three rising ones, stopped = two low falling ones
+    /* LANE_CAL_ARM   */ { 0.22f, 2, { { W_BELL, 0, 200, 523, 0 }, { W_BELL, 0.16f, 200, 523, 0 } } },
+    /* LANE_CAL_DONE  */ { 0.28f, 3, { { W_BELL, 0, 220, 523, 0 }, { W_BELL, 0.12f, 220, 659, 0 }, { W_BELL, 0.24f, 380, 784, 0 } } },
+    /* LANE_CAL_ABORT */ { 0.22f, 2, { { W_BELL, 0, 220, 392, 0 }, { W_BELL, 0.16f, 320, 294, 0 } } },
 };
 
 static const int RATE = 22050;
