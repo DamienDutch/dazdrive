@@ -21,7 +21,7 @@
 #include <math.h>
 #include <string.h>
 
-static float p_wish, p_blend, p_kick_rate, p_kick, p_kick_s, p_exp_eco, p_exp_norm, p_exp_pw, p_rise_eco, p_rise_norm, p_rise_pw, p_ref_kwt, p_ref_now;
+static float p_wish, p_blend, p_kick_rate, p_kick, p_kick_s, p_exp_eco, p_exp_norm, p_exp_pw, p_rise_eco, p_rise_norm, p_rise_pw, p_ref_kwt, p_ref_now, p_tq_share;
 
 static param g_params[] = {
     { "wish", &p_wish, 0, "1 = the pedal is a wish for power: the throttle is what delivers it in the gear the truck is in, so the same pedal gives the same push at the same speed in any gear. 0 = the pedal asks a share of the engine's torque, as before. Not with the cruise on, not while the clutch slips, not at pulling-away speed, not in reverse" },
@@ -36,6 +36,7 @@ static param g_params[] = {
     { "rise_rate_normal", &p_rise_norm, 3.0f, "Normal: the same" },
     { "rise_rate_power", &p_rise_pw, 8.0f, "Power: the same" },
     { "curve_ref_kw_t", &p_ref_kwt, 12, "the exponents above are for a truck with this much engine power per tonne (kW/t) or more; a heavier, slower truck gets a more direct curve (a lower exponent, at most x0.8). 0 = the exponents as they are" },
+    { "torque_share", &p_tq_share, 0, "0..1: how much the throttle in a gear keeps the pull (torque) of the moment the gear engaged, with the pedal held still. 0 = it keeps the power, as the wish says: the throttle falls as the revs rise and the pull falls with it (right after a shift it pulls harder than higher in the revs). 1 = it keeps the pull: the power rises with the revs, as in a truck with a fixed pedal. In between: the mix (0.75 = three quarters pull). A move of the pedal beyond a small band (the further, the more) lets the throttle follow the wish again, a shift starts a new hold; the gear choice and kickdown still read the wish, and the usual limits and the rev limit stay in force" },
     { "ref_now", &p_ref_now, 1, "1 = a full wish is the power the truck can give at this speed in the best gear the gearbox may use (the forward gears whose revs lie in the usable window), the same in every gear, so a full pedal asks what the truck can give at this speed and not more. 0 = a full wish is the engine's peak power" },
 };
 
@@ -49,13 +50,16 @@ static struct {
     float q_f;        // the shaped wish after the rise limit (before the kick)
     float q;          // the wish this tick after the kick (what the force comes from; sims read it)
     float w;          // the throttle of the wish before the blend (sims read it)
+    float wt;         // the throttle of the hold (torque_share) before the mix, else = w (sims read it)
     int fast;         // the pedal is rising faster than kick_rate
     float from;       // where that fast rise started
     float kick_age;   // seconds since the kick started, < 0 = none
     double on_at;     // sim_s() of the last tick that gave a wish, < 0 = the pedal goes through (TrueShift reads the wish: pedal_wish_force)
     float pref, fcap; // that tick's reference power (W) and force cap (N)
     float truck_k;    // the curve factor for this truck and load (truck_curve), 1 = the exponents as they are
-} S = { NAN, 0, 0, 0, 0, 0, -1, -1, 0, 0, 1 };
+} S = { NAN, 0, 0, 0, 0, 0, 0, -1, -1, 0, 0, 1 };
+
+static struct { int valid, g, md; float f, q, qa; } H = { 0, 0, 0, 0, 0, 0 };   // the hold of torque_share (hold_force below)
 
 // Hand over to the pass-through: the state follows the pedal, so the wish starts from where the pedal is, not from zero.
 static void follow(float p)
@@ -64,6 +68,7 @@ static void follow(float p)
     S.fast = 0;
     S.kick_age = -1;
     S.on_at = -1;
+    H.valid = 0;
 }
 
 // The engine's peak power (W) over its torque curve, up to the rpm limit.
@@ -120,6 +125,39 @@ static float kick_now()
     if (S.kick_age < 0 || !(p_kick > 0) || !(p_kick_s > 0)) return 0;
     float e3 = expf(-3.0f), k = (expf(-3.0f * S.kick_age / p_kick_s) - e3) / (1.0f - e3);
     return p_kick * fmaxf(k, 0.0f);
+}
+
+// torque_share: the hold. In a gear, with the pedal held still, the wish (a power) lets the throttle fall as the revs rise, so the pull falls
+// (the throttle that gives a force F at speed v is F / (the force of full throttle), and a constant force is a constant torque in a gear).
+// The hold remembers the wheel FORCE (N) the wish gave when the gear engaged; the throttle for it is F_hold / (force at full throttle now),
+// and the output mixes it with the wish's throttle by torque_share. The pedal moves it in proportion (F_hold * q / q of the tick before: no
+// step). A pedal that stays within PH_BAND of its anchor changes nothing else (a foot is never still); beyond the band the hold is forgotten
+// towards the wish by 1 - exp(-excess / PH_FORGET) and the anchor follows: a big move is a fresh start, a wavering foot follows the wish.
+// A new gear, a new mode, a pedal under PH_MIN_Q and every pass-through start it again from the wish. Guard: never more than the wish asks at
+// the speed where this gear reaches the start of the torque plateau (V.plateau), so a gear landed under the plateau cannot keep more than the
+// pedal's power share gives there (the throttle is 0..1 and the rev limit stands anyway).
+static const float PH_BAND = 0.03f, PH_FORGET = 0.12f, PH_MIN_Q = 0.03f;
+
+static float hold_force(int g, int md, float q, float fw, int sg)
+{
+    if (!H.valid || H.g != g || H.md != md || H.q < PH_MIN_Q || q < PH_MIN_Q) { H.f = fw; H.qa = q; }
+    else {
+        H.f *= q / H.q;
+        float d = q - H.qa, ex = fabsf(d) - PH_BAND;
+        if (ex > 0) {
+            H.f += (1.0f - expf(-ex / PH_FORGET)) * (fw - H.f);
+            H.qa = q - (d > 0 ? PH_BAND : -PH_BAND);
+        }
+    }
+    float vp = vehicle_kmh_at(g, V.plateau) / 3.6f;
+    if (vp > 0.5f) {
+        float pp, fc;
+        wish_ref(vp, sg, &pp, &fc);
+        if (pp > 0 && fc > 0) H.f = fminf(H.f, fminf(q * pp * V.eta / vp, q * fc));
+    }
+    if (!(H.f > 0)) H.f = 0;
+    H.valid = 1; H.g = g; H.md = md; H.q = q;
+    return H.f;
 }
 
 // 1 = the pedal goes through untouched. Reads only what the other modules and the vehicle model say.
@@ -182,7 +220,13 @@ int pedal_wish(float p, float dt, int other, float *out)
     if (!(fg > 0) || !(pref > 0) || !(fcap > 0) || !(V.eta > 0)) { follow(p); return 0; }   // e.g. over the rev limit: the old path, as a pass-through
     float f = fminf(S.q * pref * V.eta / v, S.q * fcap);
     float gas = fminf(1.0f, fmaxf(0.0f, f / fg));
-    S.w = gas;
+    S.w = S.wt = gas;
+    if (p_tq_share > 0) {   // the hold: the throttle that keeps the pull of the moment the gear engaged, mixed in by torque_share
+        float ts = fminf(1.0f, p_tq_share);
+        float hf = hold_force(g, md, S.q, f, sg);
+        S.wt = fminf(1.0f, fmaxf(0.0f, hf / fg));
+        gas += ts * (S.wt - gas);
+    }
 
     // 6: from blend_from up the wish fades into the plain pedal (never down from the wish: a gear that needs more than the pedal
     // keeps asking for it), and a flat pedal is full throttle. blend_from 1: none of that; the wish is the whole pedal range, the throttle

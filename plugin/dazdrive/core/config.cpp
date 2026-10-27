@@ -76,7 +76,7 @@ static const struct { const char *sec, *key; float lo, hi; } k_bounds[] = {
     { "pedal", "wish", 0, 1 }, { "pedal", "blend_from", 0.5f, 1 }, { "pedal", "kick_rate", 0.3f, 20 }, { "pedal", "kick", 0, 0.5f },
     { "pedal", "kick_s", 0, 2 }, { "pedal", "exponent_eco", 0.5f, 2 }, { "pedal", "exponent_normal", 0.5f, 2 },
     { "pedal", "exponent_power", 0.5f, 2 }, { "pedal", "rise_rate_eco", 0.3f, 50 }, { "pedal", "rise_rate_normal", 0.3f, 50 },
-    { "pedal", "rise_rate_power", 0.3f, 50 }, { "pedal", "curve_ref_kw_t", 0, 50 }, { "pedal", "ref_now", 0, 1 }, { "decel", "soften", 0, 1 },
+    { "pedal", "rise_rate_power", 0.3f, 50 }, { "pedal", "curve_ref_kw_t", 0, 50 }, { "pedal", "ref_now", 0, 1 }, { "pedal", "torque_share", 0, 1 }, { "decel", "soften", 0, 1 },
     { "decel", "ramp_s", 0, 2 }, { "decel", "pre_blend", 0, 1 }, { "decel", "downshift_assist", 0, 1 }, { "decel", "stop_assist", 0, 2 }, { "decel", "stop_assist_decel", 0.1f, 0.69f },
 };
 
