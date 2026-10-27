@@ -9,8 +9,8 @@
 
 #include "common/scssdk_telemetry_common_configs.h"
 
-extern module m_core, m_trueshift, m_cruise, m_lane, m_creep, m_pedal, m_decel, m_lowspeed;
-module *g_modules[] = { &m_core, &m_trueshift, &m_cruise, &m_lane, &m_creep, &m_pedal, &m_decel, &m_lowspeed };  // LowSpeed last: it reads what the others decided this frame
+extern module m_core, m_trueshift, m_cruise, m_lane, m_creep, m_pedal, m_decel, m_lowspeed, m_traffic;
+module *g_modules[] = { &m_core, &m_trueshift, &m_cruise, &m_lane, &m_creep, &m_pedal, &m_decel, &m_lowspeed, &m_traffic };  // LowSpeed reads what the others decided this frame, so it comes after them; Traffic only logs and reads nothing of theirs
 const char *g_truck_unsupported;
 int g_n_modules = sizeof g_modules / sizeof g_modules[0];
 

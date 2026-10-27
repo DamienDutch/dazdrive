@@ -24,6 +24,8 @@ static SCSAPI_VOID ch_bool(const scs_string_t, const scs_u32_t, const scs_value_
 { if (v) *(int *)ctx = v->value_bool.value != 0; }
 static SCSAPI_VOID ch_place(const scs_string_t, const scs_u32_t, const scs_value_t *const v, const scs_context_t)
 { if (v) T.place = v->value_dplacement; }
+static SCSAPI_VOID ch_tplace(const scs_string_t, const scs_u32_t, const scs_value_t *const v, const scs_context_t)
+{ if (v) { T.trailer_place = v->value_dplacement; T.trailer_place_t = wall_s(); } }
 static SCSAPI_VOID ch_acc(const scs_string_t, const scs_u32_t, const scs_value_t *const v, const scs_context_t)
 { if (v) T.acc = v->value_fvector; }
 static SCSAPI_VOID ch_angvel(const scs_string_t, const scs_u32_t, const scs_value_t *const v, const scs_context_t)
@@ -207,6 +209,9 @@ void telemetry_register(const scs_telemetry_init_params_v101_t *p)
     REG(SCS_TELEMETRY_TRUCK_CHANNEL_local_linear_acceleration, SCS_VALUE_TYPE_fvector, ch_acc, NULL);
     REG(SCS_TELEMETRY_TRUCK_CHANNEL_local_angular_velocity, SCS_VALUE_TYPE_fvector, ch_angvel, NULL);
     REG(SCS_TELEMETRY_TRUCK_CHANNEL_input_steering, SCS_VALUE_TYPE_float, ch_float, &T.in_steer);
+    REG(SCS_TELEMETRY_TRUCK_CHANNEL_lblinker, SCS_VALUE_TYPE_bool, ch_bool, &T.blink_l);
+    REG(SCS_TELEMETRY_TRUCK_CHANNEL_rblinker, SCS_VALUE_TYPE_bool, ch_bool, &T.blink_r);
+    REG("trailer.0.world.placement", SCS_VALUE_TYPE_dplacement, ch_tplace, NULL);
 #undef REG
     p->register_for_channel("trailer.0.connected", SCS_U32_NIL, SCS_VALUE_TYPE_bool, SCS_TELEMETRY_CHANNEL_FLAG_none,
                             ch_bool, &T.trailer);

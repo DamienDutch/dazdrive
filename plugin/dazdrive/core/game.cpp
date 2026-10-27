@@ -1040,6 +1040,12 @@ uintptr_t game_scan(const char *pattern)
     return pat_scan(pattern, g_text_va, g_text_va + g_text_size, hits, 2) == 1 ? hits[0] : 0;
 }
 
+// All hits of a pattern in .text (up to max); -1 if there are more, 0 if none. For a pattern whose hit count is itself worth logging.
+int game_scan_hits(const char *pattern, uintptr_t *hits, int max)
+{
+    return pat_scan(pattern, g_text_va, g_text_va + g_text_size, hits, max);
+}
+
 // Point a rip-relative float operand (disp32 at instr + disp_off, instruction
 // length len) at a float of our own near the code: changes one constant for
 // one instruction without touching the pooled original.

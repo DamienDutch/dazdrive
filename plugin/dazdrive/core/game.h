@@ -152,6 +152,7 @@ char *game_actor_safe();                   // game_actor outside the hooks (driv
 char *game_ctrl();                          // base_ctrl when it is a game_ctrl (driving), else NULL
 float *game_patch_rip_float(uintptr_t instr, int disp_off, int len, float value);  // own constant for one instruction
 uintptr_t game_scan(const char *pattern);  // the one hit of a pattern in .text, else 0
+int game_scan_hits(const char *pattern, uintptr_t *hits, int max);  // every hit in .text (count; -1 = more than max)
 void *game_cvar(const char *name);          // a settings cvar object by name (e.g. "g_acc"); NULL if not found
 float game_cvar_get(void *cvar);            // its value as float (NAN if unknown)
 void game_cvar_set(void *cvar, float value);// set it like the game's options menu does

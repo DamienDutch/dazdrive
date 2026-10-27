@@ -100,7 +100,7 @@ STANDARD = {
 
 # Sections that are not on the setup page (no tile, no knob, no Custom list): developer switches of something not wired in yet
 # or not ridden yet.
-NO_PAGE = ("pedal", "lowspeed", "decel")
+NO_PAGE = ("pedal", "lowspeed", "decel", "traffic")
 # Single keys of a shown section that stay off the page too (still in the ini, with their help text).
 NO_PAGE_KEYS = (("core", "retarder_hook"), ("core", "brake_learn"), ("core", "dash_messages"), ("cruise", "force_mode"))
 
@@ -114,6 +114,7 @@ SECTION_INTRO = {
     "creep": "Crawl / maneuver mode (slipping clutch in 1, 2 and R). Off in the standard preset.",
     "pedal": "The accelerator pedal as a wish for power. Off: the pedal asks a share of the engine's torque, as always.",
     "lowspeed": "Low-speed owner for stopping, standing and pulling away. Not wired in yet: both settings stay off.",
+    "traffic": "Reads the game's AI traffic list and only writes it to the log, to check that the reading is right. Nothing is braked, steered or announced from it. Off.",
     "decel": "Deceleration assist for the retarder and engine-brake lever: the service brake adds what the lever's target deceleration needs (off in the standard preset). Also the stop assist: a gentle stop when you lift off at low speed and the gearbox opens the clutch (stop_assist, on by default).",
 }
 

@@ -114,6 +114,9 @@ struct telemetry {
     int light_brake;   // the brake lights are on (the game's own decision, whatever asked for the brake)
     unsigned retarder, retarder_steps;
     scs_value_dplacement_t place;
+    int blink_l, blink_r;                 // the indicator levers (logical state, not the flashing light)
+    scs_value_dplacement_t trailer_place; // the first trailer's world placement (valid while T.trailer and trailer_place_t > 0)
+    double trailer_place_t;               // wall_s() of its last update, 0 = never
     scs_value_fvector_t acc;
     scs_timestamp_t sim_time;
     // truck configuration
