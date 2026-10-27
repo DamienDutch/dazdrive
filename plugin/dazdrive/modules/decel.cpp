@@ -79,6 +79,7 @@ static const float DC_FF_S = 0.2f;       // s, the retarder's fall at the start 
 static const float DC_REL_S = 0.3f;      // s, the retarder's recovery after the clutch closes (the measurement shows it this long)
 static const float DC_LAG_S = 0.15f;     // s, the service brake's lag behind the request
 static const float DC_FF_FIRST = 0.75f;  // share of the nominal feedforward at the first shift, before the brake's gain is known
+static const float DC_FF_PRIOR = 0.9f;   // the same when the gain is the vehicle model's learned one (a good estimate, not a measurement of this event: a quarter off would overshoot at the full level)
 static const float DC_REFM_S = 0.3f;     // s, the delay of the measurement path (window + brake lag): the reference is compared with the measurement through the same delay
 static const float DC_TAPER_J = 0.5f;    // the taper to a standstill uses this share of the jerk limit: the brake's lag and the measurement's delay eat the rest
 static const float DC_BLIND_S = 0.35f;   // s, the measurement (window delay, brake lag) needs this long to show what a change of the level did
@@ -145,6 +146,7 @@ static struct {
     float blind;          // seconds left in which the measurement still shows the shift's transient, not an error to correct
     float k = 1.0f / DC_G_NOM;   // learned request per m/s2 (the inverse of the brake's gain), the nominal one until a gap has taught it
     int k_known;
+    int k_prior;          // k comes from the vehicle model's learned gain ([core] brake_learn), not yet from a gap of this event
     int k_fix;            // k comes from a gap's correction step (measured, not inferred from the level at the close)
     int step, n;          // what the target was made for (log)
     float hand_s;         // seconds standing while Auto Hold takes over
@@ -192,7 +194,7 @@ static void decel_release(float need, int g1, int soften)
 {
     if (!D.k_fix && D.gap_s > 0.6f && need > 0.3f && D.lvl < p_max - 1e-3f) {
         float kn = (D.lvl + (D.refm - D.a) * D.k) / need;
-        if (kn > 0.2f / DC_G_NOM && kn < 5.0f / DC_G_NOM) { D.k = D.k_known ? 0.5f * (D.k + kn) : kn; D.k_known = 1; }
+        if (kn > 0.2f / DC_G_NOM && kn < 5.0f / DC_G_NOM) { D.k = D.k_known ? 0.5f * (D.k + kn) : kn; D.k_known = 1; D.k_prior = 0; }
     }
     // A lower gear: the retarder (and the engine brake) work through the ratio, so the same step brakes harder at the wheels. The level
     // the brake goes back to is the one that holds the target with the retarder's share of before times the change of the ratio.
@@ -225,6 +227,13 @@ static void decel_tick(const decel_in &in)
 {
     float dt = in.dt;
     if (!(dt > 0 && dt < 0.5f)) { if (dt != 0) D.hn = 0; return; }   // paused or a hitch: no time step, and the speed history is broken
+    // [core] brake_learn: the brake's gain as the vehicle model has measured it (core/vehicle.cpp) in place of the nominal one, until a gap has taught
+    // this event its own: the first shift then asks the full level (no DC_FF_FIRST share) and a shortfall in the first gap is corrected with the real
+    // gain (not DC_G_FIX). Inside the range the loop itself accepts (2-12 m/s2 per request); a load change resets k_known and brings this back at the new mass.
+    if (g_brake_learn > 0 && !D.k_known) {
+        float g = vehicle_brake_gain();
+        if (g == g && g >= 2.0f && g <= 12.0f) { D.k = 1.0f / g; D.k_known = D.k_prior = 1; logv(1, "Decel: brake gain %.1f m/s2 per request from the vehicle model (nominal %.1f)", g, DC_G_NOM); }
+    }
     // the measured deceleration: the speed's derivative, smoothed; a sample that is not a number or looks like noise is dropped
     float v = fabsf(in.speed);
     int ok = 0;
@@ -305,7 +314,7 @@ static void decel_tick(const decel_in &in)
         D.ph = D.pbs = D.pb_s = 0; D.pb_lock = 0;
         // the level that held the target in the last gap, at once; before a gap has taught it, only part of what the nominal brake
         // would need (too little the loop makes up in a moment, too much is a lurch)
-        lvl = fminf(fmaxf(D.k * need * (D.k_known ? 1.0f : DC_FF_FIRST), lvl), p_max);
+        lvl = fminf(fmaxf(D.k * need * (D.k_known ? (D.k_prior ? DC_FF_PRIOR : 1.0f) : DC_FF_FIRST), lvl), p_max);
         D.blind = DC_FF_S + DC_WIN;
         step_now = 1;
     } else if (D.gap && closed) {
@@ -403,7 +412,7 @@ static void decel_tick(const decel_in &in)
         // (only a step big enough to stand out of the noise; a later one refines the first by half)
         float dy = D.ya - D.fix_y, da = am - D.fix_a, kn = da != 0 ? dy / da : 0;
         if (fabsf(dy) > 0.04f && fabsf(da) > 0.2f && kn > 1.0f / 12.0f && kn < 1.0f / 2.0f) {
-            D.k = D.k_fix ? 0.5f * (D.k + kn) : kn; D.k_known = D.k_fix = 1;
+            D.k = D.k_fix ? 0.5f * (D.k + kn) : kn; D.k_known = D.k_fix = 1; D.k_prior = 0;
         }
     }
     // a falling reference (the taper to a stop, a lower step) takes its share of the level with it, and in a gap (the brake
@@ -456,7 +465,7 @@ static void de_frame()
 static void de_reset(int level, const char *)
 {
     D.on = 0; D.lvl = D.u = D.pre = 0; D.gap = 0; D.gap_s = 0; D.blind = 0; D.bad_s = 0; D.hn = 0; D.a = 0; D.y = D.ya = 0;
-    if (level >= RESET_LOAD) { D.k_known = D.k_fix = 0; D.k = 1.0f / DC_G_NOM; }
+    if (level >= RESET_LOAD) { D.k_known = D.k_fix = D.k_prior = 0; D.k = 1.0f / DC_G_NOM; }
     act_brake(ACT_DECEL, 0);
     soft_off();
     g_decel_need = 0;

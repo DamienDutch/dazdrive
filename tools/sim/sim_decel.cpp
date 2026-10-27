@@ -214,12 +214,15 @@ struct sc {
     double release_t;                              // the lever released at this time (-1 = never)
     float ramp_s;                                  // ramp_s for this run (-1 = the default)
     int snap;                                      // the retarder back at full strength at the close, the lower gear's engine brake with it
+    float learn_x = 1;                             // the primed estimate is this much of the plant's real gain (a wrong estimate)
+    int learn;                                     // [core] brake_learn with the vehicle model's gain primed to this plant's (the force: gain x mass)
     sc() : mass_t(18), gain(1), n(4), step(2), enabled(1), thr(0), brk(0), cruise(0), gear_start(8), press_t(-1), press_thr(0), press_brk(0), aeb_t(-1), aeb(0),
-           air_t0(-1), air_t1(-1), engine_only(0), soften(0), tmin(0), ret_abs(0), cycle(CYCLE_S), release_t(-1), ramp_s(-1), snap(0) {}
+           air_t0(-1), air_t1(-1), engine_only(0), soften(0), tmin(0), ret_abs(0), cycle(CYCLE_S), release_t(-1), ramp_s(-1), snap(0), learn(0) {}
 };
 
 struct res {
     double t_stop;           // s, when the truck stood still (-1 = not within the run)
+    float gap_err1;          // the first judged gap's |deceleration - goal| (the gap before the loop has learned anything)
     float gap_err;           // worst |deceleration - goal| in a gap (goal = the target or, if less, the most the plant can give), m/s2
     int unreach;             // a judged gap's target was beyond the plant's reach (the retarder's floor + gain x max_brake)
     int gaps;                // how many gaps were judged
@@ -258,6 +261,8 @@ static res run(const sc &s)
     for (auto &p : g_params) *p.val = p.def;
     p_enabled = (float)s.enabled;
     D = decltype(D)();
+    g_brake_learn = (float)s.learn;
+    if (s.learn) { V.mass = s.mass_t * 1000; V.mass_ok = 1; T.trailer = 0; vehicle_brake_prime(0, s.learn_x * 6.0f * s.gain * V.mass, 0.02f, 8); }
     if (s.tmin > 0) p_tmin = s.tmin;
     if (s.ramp_s >= 0) p_ramp = s.ramp_s;
     memset(buf, 0, sizeof buf);
@@ -352,6 +357,7 @@ static res run(const sc &s)
             judged = gap_t0;
             float reach = ret + G * p_max, goal = fminf(tgt_full, reach);
             if (tgt_full > reach) r.unreach = 1;
+            if (gaps_judged == 0) r.gap_err1 = fabsf(a - goal);
             r.gap_err = fmaxf(r.gap_err, fabsf(a - goal)); gaps_judged++;
         }
         if (s.soften && (in_gap || (gap_t1 > 0 && t < gap_t1 + 0.8)) && v * 3.6f > 12) { r.gap_hi = fmaxf(r.gap_hi, a - tgt_full); r.gap_lo = fminf(r.gap_lo, a - tgt_full); }
@@ -399,6 +405,7 @@ static res run(const sc &s)
     }
     bu_end();
     r.gaps = gaps_judged;
+    if (s.learn) { g_brake_learn = 0; V.mass = 0; V.mass_ok = 0; }
     return r;
 }
 
@@ -684,6 +691,43 @@ int main(int argc, char **argv)
     }
     printf("%d scenarios, %d failed\n", nrun, nfail);
     fails += nfail;
+
+    // ---- [core] brake_learn: the vehicle model's learned gain in place of the nominal one (the plant's real gain x mass primed as the estimate).
+    // The first gap is the one the loop has learned nothing for: 'first' is its |deceleration - goal| at 1.0 s into it. Asserted: with the learned
+    // gain never worse than without (+0.05) in the first gap and over the whole run, and on average over the weak and the strong brakes clearly better.
+    {
+        printf("learned brake gain (brake_learn 1, the estimate = the plant's gain; per line: first gap's error without -> with, whole run's worst without -> with):\n");
+        float sum_off = 0, sum_on = 0; int nl = 0, nlf = 0;
+        for (float mass : { 18.0f, 36.0f }) for (float gain : { 0.6f, 1.0f, 1.5f }) for (int st : { 2, 4 }) {
+            sc s; s.mass_t = mass; s.gain = gain; s.n = 4; s.step = st;
+            res off = run(s);
+            s.learn = 1;
+            res on = run(s);
+            char why[200] = "";
+            check(on.gaps > 0 && on.gap_err1 <= off.gap_err1 + 0.05f, "first gap worse with the learned gain", why, sizeof why);
+            check(on.gap_err <= off.gap_err + 0.05f, "whole run worse with the learned gain", why, sizeof why);
+            check(on.ovs < 0.5f && on.jerk <= 1.5f * p_jerk && on.t_stop > 0 && on.final_jerk <= p_jerk && on.vmin >= 0 && on.v_rise <= 1e-4f && on.req_after_stop <= 0, "the descent's own checks with the learned gain", why, sizeof why);
+            nl++; if (why[0]) nlf++;
+            sum_off += off.gap_err1; sum_on += on.gap_err1;
+            printf("  %2.0ft g%.1f step %d tgt %.2f | first %.2f -> %.2f | worst %.2f -> %.2f | ovs %+.2f -> %+.2f jerk %.1f -> %.1f | %s%s\n", mass, gain, st, off.tgt, off.gap_err1, on.gap_err1, off.gap_err, on.gap_err, off.ovs, on.ovs, off.jerk, on.jerk,
+                   why[0] ? "FAIL: " : "ok", why);
+        }
+        printf("  mean first-gap error %.3f -> %.3f m/s2 (%d runs, %d failed)\n", sum_off / nl, sum_on / nl, nl, nlf);
+        // a wrong estimate (+-25 %) is what the loop corrects: the descent's own checks hold and the gap error stays under 0.4
+        for (float wx : { 0.75f, 1.25f }) {
+            int bad_w = 0; float worst = 0;
+            for (float mass : { 18.0f, 36.0f }) for (float gain : { 0.6f, 1.0f, 1.5f }) {
+                sc s; s.mass_t = mass; s.gain = gain; s.n = 4; s.step = 4; s.learn = 1; s.learn_x = wx;
+                res on = run(s);
+                worst = fmaxf(worst, on.gap_err);
+                if (!(on.gaps > 0 && on.gap_err < 0.4f && on.ovs < 0.5f && on.jerk <= 1.5f * p_jerk && on.t_stop > 0 && on.final_jerk <= p_jerk && on.vmin >= 0 && on.v_rise <= 1e-4f && on.req_after_stop <= 0)) bad_w++;
+            }
+            printf("  estimate x%.2f of the real gain (last step, 6 plants): worst gap error %.2f, %d failed\n", wx, worst, bad_w);
+            fails += bad_w;
+        }
+        fails += nlf;
+        if (!(sum_on < sum_off)) { printf("FAIL: the learned gain does not shrink the first gap's error on average\n"); fails++; }
+    }
 
     // ---- must do nothing / must end at once
     printf("cases:\n");
