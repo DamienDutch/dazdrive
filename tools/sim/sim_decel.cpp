@@ -30,6 +30,7 @@
 // shift's fall and recovery, the pull's build-up, the fade); they are printed (edge) next to the assist-off figure.
 // Build+run: tools/sim/run_decel.sh [-v]
 #include "core/suite.h"
+#include "sim_env.h"  // SIM_SET=section.key=value,... overrides ini defaults (sweeps)
 #include "core/game.h"
 #include "core/route.h"
 #include "core/vehicle.h"
@@ -771,6 +772,7 @@ static void check(bool ok, const char *what, char *why, size_t n)
 
 int main(int argc, char **argv)
 {
+    sim_env_apply("decel", g_params, sizeof g_params / sizeof g_params[0]); sim_env_apply("trueshift", m_trueshift.params, m_trueshift.n_params);
     for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "-v")) verbose = 1;
     if ((argc == 7 || argc == 8) && !strcmp(argv[1], "-t")) {   // one scenario with the trace: -t mass_t gain n step every_nth_step
         sc s; s.mass_t = (float)atof(argv[2]); s.gain = (float)atof(argv[3]); s.n = atoi(argv[4]); s.step = atoi(argv[5]); vstep = atoi(argv[6]); verbose = 1; if (argc == 8) { s.soften = 1; s.snap = 1; s.cycle = (float)atof(argv[7]); }
