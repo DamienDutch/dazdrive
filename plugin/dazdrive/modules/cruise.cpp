@@ -1402,17 +1402,15 @@ static void own_acc(char *g, float dt)
     // (Weights, not switches: the target is what the game's own overspeed braking reads at once, and it jumped by the whole gap between
     // "follow" and "hold the speed" at an opening of 0.3 m/s. Full calm from 0.6 m/s, so that the calm comes a little later than before,
     // never earlier; the state is lifted only at full weight.)
-    float w_pull = 0, w_close = 0;
-    if (p_acc_calm > 0) {
-        float w_open = ramp01(opening, 0.3f, 0.6f) * ramp01(lead, 0.5f * dstar, 0.6f * dstar);
-        w_pull = fmaxf(ramp01(opening, 1.0f, 1.3f), w_open) * ramp01(lead, 5.0f, 6.0f);
-    }
+    float w_open = ramp01(opening, 0.3f, 0.6f) * ramp01(lead, 0.5f * dstar, 0.6f * dstar);
+    float w_pull = fmaxf(ramp01(opening, 1.0f, 1.3f), w_open);   // 1 = pulling away (the old flag)
+    float w_close = 0;
     if (lead < 0.4f * dstar && s_acc_game == s_acc_game && s_acc_game >= 0) w_close = (1 - w_pull) * ramp01(0.45f * dstar - lead, 0.0f, 0.05f * dstar);   // (full from 0.4 x the wanted gap as before, in from 0.45)
-    float t_out = OA.t;
-    if (w_pull > 0) {
+    float t_out = OA.t, w_calm = p_acc_calm > 0 ? w_pull * ramp01(lead, 5.0f, 6.0f) : 0.0f;
+    if (w_calm > 0) {
         float hold = fmaxf(OA.t, fminf(kmh, set));
-        t_out += w_pull * (hold - t_out);
-        if (w_pull >= 1) OA.t = hold;
+        t_out += w_calm * (hold - t_out);
+        if (w_calm >= 1) OA.t = hold;
     }
     // far too close: never more than the game's own ACC target (it knows how to open a gap)
     if (w_close > 0) {
