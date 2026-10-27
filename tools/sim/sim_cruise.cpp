@@ -1508,7 +1508,11 @@ int main(int argc, char **argv)
         printf("   aeb_rising 0 against 1 (mode 1, standing lead, 26 t): deceleration 0.8 s into the braking -> when the speed drops under 2 m/s, final gap\n");
         for (int i = 0; i < 3; i++) {
             aebres r01[2];
-            for (int rs = 0; rs < 2; rs++) { p_aeb_rise = (float)rs; p_aeb_mode = 1; g_aeb_v0 = sp[i]; r01[rs] = aeb_run("rise", 14, 26000, 140); }
+            // rising needs the learned brake gain at least as good as the fit (brakes_good): primed to the plant's own gain
+            for (int rs = 0; rs < 2; rs++) { p_aeb_rise = (float)rs; p_aeb_mode = 1; g_aeb_v0 = sp[i]; g_prime_k = 1.0; r01[rs] = aeb_run("rise", 14, 26000, 140); }
+            g_prime_k = 0; { p_aeb_mode = 1; g_aeb_v0 = sp[i];   // without a learned gain the rise stays off: aeb_rising 1 must equal aeb_rising 0
+              aebres nl[2]; for (int rs = 0; rs < 2; rs++) { p_aeb_rise = (float)rs; nl[rs] = aeb_run("rise, no learned gain", 14, 26000, 140); }
+              bad |= fabsf(nl[1].final_gap - nl[0].final_gap) > 0.01f || fabsf(nl[1].dec_end - nl[0].dec_end) > 0.01f; }
             p_aeb_rise = 1;
             printf("   %2.0f km/h   rising 0: %.1f -> %.1f, %.2f m     rising 1: %.1f -> %.1f, %.2f m\n", sp[i], r01[0].dec_early, r01[0].dec_end, r01[0].final_gap, r01[1].dec_early, r01[1].dec_end, r01[1].final_gap);
             bad |= r01[1].hit || r01[1].dec_end < r01[1].dec_early - 0.1f || r01[1].dec_end < r01[0].dec_end + (i ? 0.3f : 0.0f);   // it ends at least as hard as it began, and harder than the constant plan (not at 30 km/h: little to gain)

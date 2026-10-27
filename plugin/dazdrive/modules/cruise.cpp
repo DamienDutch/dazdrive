@@ -136,7 +136,7 @@ static param g_params[] = {
     { "aeb_mode", &p_aeb_mode, 0, "AEB: 0 = stages by time to collision (aeb_warn_s ... aeb_full_s). 1 = by the deceleration it would take to stop short of the lead: leaves the driver in charge until late (a US-style system), then brakes firmly to stop about aeb_margin_m behind the lead" },
     { "aeb_margin_m", &p_aeb_margin, 0.5f, "AEB, mode 1: the gap it aims to stop at behind the lead (m)" },
     { "aeb_warn_decel", &p_aeb_warn_dec, 2.5f, "AEB, mode 1: warning tones when stopping behind the lead takes at least this deceleration (m/s2)" },
-    { "aeb_rising", &p_aeb_rise, 1, "AEB, mode 1: 1 = full braking rises during the event instead of settling: it starts at the level the room to spare allows (softer when there is room, at once at full when the stop takes nearly all the brakes can do) and gets harder at aeb_rise_rate, so the truck is put down firmly just before the lead. Planned again every tick from the gap and the speed, the stop still lands aeb_margin_m behind the lead. 0 = the deceleration the stop takes now (falls off as the truck slows down)" },
+    { "aeb_rising", &p_aeb_rise, 1, "AEB, mode 1: 1 = full braking rises during the event instead of settling: it starts at the level the room to spare allows (softer when there is room, at once at full when the stop takes nearly all the brakes can do) and gets harder at aeb_rise_rate, so the truck is put down firmly just before the lead. Only with [core] brake_learn 1 and brakes measured at least as good as the built-in estimate (otherwise as with 0). Planned again every tick from the gap and the speed, the stop still lands aeb_margin_m behind the lead. 0 = the deceleration the stop takes now (falls off as the truck slows down)" },
     { "aeb_rise_rate", &p_aeb_jerk, 2.0f, "AEB, mode 1, aeb_rising: how fast the planned deceleration rises (m/s2 per second). Higher = a shorter, harder rise" },
     { "aeb_full_frac", &p_aeb_full_frac, 0.85f, "AEB, mode 1: full braking when stopping takes this share of aeb_max_decel; it then brakes with exactly the deceleration the stop takes (never above aeb_max_decel)" },
     { "trace", &p_trace, 1, "1 = write cruise.csv (10 per second while cruise is on or Auto Hold holds) for analysis" },
@@ -1714,9 +1714,11 @@ static void aeb(char *g, float dt)
     // low is a bad measurement more likely than brakes that weak). So it can only make the AEB earlier and the request larger, for weak brakes
     // (a heavy trailer with poor brakes, a physics mod). It also sizes the feedforward below. Only in aeb_mode 1, the distance mode.
     float g_aeb = NAN;
+    int brakes_good = 0;   // aeb_rising's soft start only with brakes measured at least as good as the fit (Damien 27-10: less careful only when the brakes are known to do it)
     if (g_brake_learn > 0 && p_aeb_mode > 0) {   // (the time stages of aeb_mode 0 are tuned on their own: in the sim a larger request there made one 60 t case worse, so they stay as they are)
         float gl = vehicle_brake_gain();
         if (gl == gl) {
+            brakes_good = gl >= 0.98f * 10.0f / heavy;   // (0.98: the fit itself counts as good)
             g_aeb = fminf(fmaxf(gl, 2.6f), 10.0f / heavy);
             a_top = fminf(p_aeb_max_dec, 0.4f + g_aeb);
         }
@@ -1923,7 +1925,7 @@ static void aeb(char *g, float dt)
     if (st == AEB_PARTIAL) a_cmd = fminf(fmaxf(1.15f * a_need, fl * 0.7f * p_aeb_part_dec), 1.15f * p_aeb_part_dec);
     else if (st == AEB_FULL && p_aeb_mode > 0) {
         a_cmd = fminf(fmaxf(a_need, fl * 1.0f), a_top);  // what the stop takes, nothing more
-        if (p_aeb_rise > 0 && fresh && pl_v > 0.3f) {
+        if (p_aeb_rise > 0 && brakes_good && fresh && pl_v > 0.3f) {
             // rising (aeb_rising): the plan that stops at the margin with a deceleration that grows by aeb_rise_rate per second; the level of now
             // is lower than the constant one while there is room and the end is harder. Close to what the brakes can do (a_need 0.6 to 0.9 of a_top, fully
             // from there) the soft start fades: at least that share of the constant deceleration the stop takes, a_top at the limit
