@@ -8,6 +8,7 @@
 //    a retarder step, a wheel slip (the plant brakes at 60 % for a moment: ABS) -- within 10 % afterwards;
 //  - a load change keeps it: 18 -> 36 t (and back) gives the new mass's gain within 10 % before one new event;
 //  - a trailer is a separate slot: NAN until learned, the truck alone unchanged;
+//  - hot brakes (fade: x0.7 at 3x the temperature of the learned samples) neither move the estimate nor count as new brakes;
 //  - brakes that really change (x1.0 -> x0.6) are followed after four agreeing outliers;
 //  - persistence: after a (hard) reset the file brings the estimate back at once, confident; another truck's line is kept;
 //  - brake_learn = 0: nothing offered, no file.
@@ -254,6 +255,20 @@ int main(int argc, char **argv)
     check(fabsf(err()) <= 0.10f, "with a trailer: learned in 5 events (%+.1f %%)", err() * 100);
     T.trailer = 0; g_mass = 18000; g_gm_true = gm_solo; vehicle_reset(RESET_LOAD); for (int i = 0; i < 40; i++) frame(0, 0);
     check(fabsf(err()) <= 0.10f, "and the truck alone is as it was (%+.1f %%)", err() * 100);
+
+    // ---- fade: hot brakes give less, the estimate keeps the cool brakes
+    printf("--- fade (x0.7 while hot)\n");
+    {
+        float gm_cool = g_gm_true;
+        T.brake_temp = 60;
+        for (int i = 0; i < 4; i++) event(levels[i % 8], 4.0f, i & 1);   // the temperature of the learned samples
+        float e0 = err();
+        T.brake_temp = 180; g_gm_true = 0.7f * gm_cool;
+        for (int i = 0; i < 8; i++) event(levels[i % 8], 4.0f, i & 1);
+        g_gm_true = gm_cool;
+        check(fabsf(err()) <= 0.10f, "8 hot events leave it at the cool brakes (%+.1f %% -> %+.1f %%)", e0 * 100, err() * 100);
+        T.brake_temp = 65;
+    }
 
     // ---- the brakes change for good
     printf("--- brakes that change (x1.0 -> x0.6, a physics mod)\n");

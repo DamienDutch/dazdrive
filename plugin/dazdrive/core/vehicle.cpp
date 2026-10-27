@@ -168,7 +168,10 @@ float vehicle_accel(int g, float v, float share, float pct)
 // min(1, n / 5) x (1 - spread / 0.3), spread = the running mean of |sample / estimate - 1|; the gain is offered from 0.5 (4 clean
 // events). Slots persist in brake_gain.txt per truck (engine, gears, wheels), as lane keeps steer_profile.txt, so the next session
 // starts confident.
-struct bg_slot { float gm, dev, n; float first[3]; int nf; float rej[4]; int nr; int dirty; float told; int was_conf; };
+struct bg_slot { float gm, dev, n; float first[3]; int nf; float rej[4], rejt[4]; int nr; int dirty; float told; int was_conf; float tc; int tn; };
+// tc = the brake temperature the accepted samples had (a running mean over tn of them, this session; not saved). A hot brake may give less
+// (fade): a sample well above it is left out, and outliers taken while hot do not count as 'the brakes changed'. Relative to the truck's own
+// cool samples, no fixed degree figure: whether the game fades at all is for the logs to show.
 static struct {
     char key[96]; int loaded, primed;
     bg_slot s[2];
@@ -260,9 +263,16 @@ static void bg_save(const char *why)
 static void bg_break() { B.settle = 0; B.wt = 0; B.in_stretch = 0; }
 
 // A window's sample x (N per request) into slot t; first = the first window of its stretch.
-static void bg_add(int t, float x, int first)
+static const float BG_HOT = 1.25f;   // a sample is hot above this x the accepted samples' temperature
+static void bg_add(int t, float x, int first, float temp)
 {
     bg_slot &s = B.s[t];
+    int known = temp == temp && temp > 0;
+    if (known && s.tn >= 3 && temp > BG_HOT * s.tc) {
+        static double told_at = -1e9;
+        if (sim_s() - told_at > 60) { told_at = sim_s(); logv(2, "Brake gain: sample left out, the brakes are hot (%.0f C, the learned samples had %.0f C): %.0f N per request", temp, s.tc, x); }
+        return;
+    }
     float add = first ? 1.0f : 0.3f;
     if (s.nf < 3) {                                  // the first events: the median of them (a later window of the same stretch refines its event)
         if (first || s.nf == 0) s.first[s.nf++] = x;
@@ -277,23 +287,28 @@ static void bg_add(int t, float x, int first)
         s.dev = s.nf > 1 ? d : 0.15f;
         s.n += add;
         s.dirty = 1;
+        if (known) { s.tn++; s.tc += (temp - s.tc) / (float)s.tn; }
         return;
     }
     float rel = x / s.gm - 1;
     if (fabsf(rel) > BG_OUTLIER) {
-        if (s.nr < 4) s.rej[s.nr++] = x;
-        else { memmove(s.rej, s.rej + 1, 3 * sizeof(float)); s.rej[3] = x; }
+        if (s.nr < 4) { s.rejt[s.nr] = known ? temp : 0; s.rej[s.nr++] = x; }
+        else { memmove(s.rej, s.rej + 1, 3 * sizeof(float)); memmove(s.rejt, s.rejt + 1, 3 * sizeof(float)); s.rej[3] = x; s.rejt[3] = known ? temp : 0; }
         if (s.nr >= 4) {
-            float lo = s.rej[0], hi = s.rej[0], mean = 0;
-            for (int i = 0; i < 4; i++) { lo = fminf(lo, s.rej[i]); hi = fmaxf(hi, s.rej[i]); mean += 0.25f * s.rej[i]; }
-            if (hi - lo <= 0.15f * mean) {
-                logv(1, "Brake gain: the brakes changed (%.0f -> %.0f N per request): the estimate starts over", s.gm, mean);
+            float lo = s.rej[0], hi = s.rej[0], mean = 0, tmean = 0;
+            for (int i = 0; i < 4; i++) { lo = fminf(lo, s.rej[i]); hi = fmaxf(hi, s.rej[i]); mean += 0.25f * s.rej[i]; tmean += 0.25f * s.rejt[i]; }
+            if (hi - lo <= 0.15f * mean && mean < s.gm && s.tn >= 3 && tmean > 1.1f * s.tc) {
+                logv(1, "Brake gain: 4 weaker samples (%.0f -> %.0f N per request) while the brakes were warmer (%.0f C against %.0f C): not taken as new brakes", s.gm, mean, tmean, s.tc);
+                s.nr = 0;
+            } else if (hi - lo <= 0.15f * mean) {
+                logv(1, "Brake gain: the brakes changed (%.0f -> %.0f N per request, %.0f C): the estimate starts over", s.gm, mean, tmean);
                 s.gm = mean; s.n = 3; s.dev = 0.15f; s.nr = 0; s.dirty = 1;
             }
         }
         return;
     }
     s.nr = 0;
+    if (known) { s.tn++; s.tc += (temp - s.tc) / (float)(s.tn < 20 ? s.tn : 20); }
     float a = fmaxf(1.0f / (s.n + 1.0f), 0.12f);
     s.gm += a * (x - s.gm);
     s.dev += 0.25f * (fabsf(rel) - s.dev);
@@ -366,7 +381,7 @@ static void brake_learn_step()
     // the two halves must agree (a brake that gave way in the middle -- a slip, a patch of ice, an ABS cycle -- is not a sample)
     float a1 = (B.v0 - B.vmid) / (0.5f * BG_WIN_S), a2 = (B.vmid - v) / (0.5f * BG_WIN_S);
     if (a > 0 && fabsf(a1 - a2) <= 0.12f * a + 0.15f && a <= BG_MAX_A && net / V.mass >= BG_MIN_NET && gain >= BG_GAIN_LO && gain <= BG_GAIN_HI) {
-        bg_add(B.cur, x, B.first_in_stretch);
+        bg_add(B.cur, x, B.first_in_stretch, T.brake_temp);
         bg_announce(B.cur);
         B.in_stretch = 1;
     } else B.in_stretch = 0;

@@ -108,6 +108,7 @@ struct telemetry {
     // channels
     float rpm, in_thr, eff_thr, in_brake, eff_brake, in_clutch, eff_clutch, speed, cruise, speed_limit, air_psi;
     float in_steer;    // steering input -1..1, + = left (counterclockwise)
+    float brake_temp;  // service brake temperature, deg C (SDK truck.brake.temperature)
     float yaw;         // yaw rate, rotations per second, + = turning left
     int gear, dgear, motor_brake, parking_brake, engine_on, trailer, paused, air_warning;
     int light_brake;   // the brake lights are on (the game's own decision, whatever asked for the brake)
