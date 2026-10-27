@@ -195,12 +195,17 @@ static float road_flat(double) { return 0; }
 static float road_hills(double s) { return 2.5f * sinf((float)(s / 1200 * 6.2832)); }
 static float gear_up_kmh[] = { 8, 14, 20, 27, 35, 45, 56, 68, 80, 999 };
 
+// bend_now: a bend of radius g_bn_r (m, 0 = none) from position g_bn_s0, g_bn_len long; the truck's yaw rate follows it; g_run_mass overrides the 26 t
+static float g_bn_r, g_bn_s0, g_bn_len = 300, g_run_mass;
+static float g_bn_lat_max, g_bn_v_max;   // the sideways acceleration (m/s2) and the speed (km/h) the truck had in the bend
+
 struct result { float max_over, min_under, max_du, mean_abs_e; int stops_held, fed; };
 
 static result run(const char *name, int ours, float set_kmh, double secs, void (*ctl)(double), float v0)
 {
     memset(&M, 0, sizeof M); memset(GA, 0, sizeof GA); memset(&C, 0, sizeof C);
-    M.mass = 26000; M.v = v0 / 3.6f; g_s = 0; stock_thr = 0;
+    M.mass = g_run_mass > 0 ? g_run_mass : 26000; M.v = v0 / 3.6f; g_s = 0; stock_thr = 0;
+    g_bn_lat_max = g_bn_v_max = 0;
     p_smooth = ours; g_sg_ok = 1; g_low_ok = 1; g_sg_hold = 0; g_feed = 0; g_stopped_at = 0;
     *(unsigned char *)(GA + GA_ON) = 1; *(float *)(GA + GA_SET) = set_kmh;
     o_cruise = stock_cruise;
@@ -211,6 +216,11 @@ static result run(const char *name, int ours, float set_kmh, double secs, void (
         ctl(t);
         if (g_road) M.grade = g_road(g_s);
         T.speed = M.v; T.cruise = set_kmh / 3.6f;
+        T.yaw = 0;
+        if (g_bn_r > 0 && g_s >= g_bn_s0 && g_s < g_bn_s0 + g_bn_len) {
+            T.yaw = M.v / g_bn_r / 6.2831853f;
+            g_bn_lat_max = fmaxf(g_bn_lat_max, M.v * M.v / g_bn_r); g_bn_v_max = fmaxf(g_bn_v_max, M.v * 3.6f);
+        }
         T.place.orientation.pitch = atanf(M.grade / 100) / 6.2831853f;
         // ACC: lead vehicle
         float acc_t = 0;
@@ -263,6 +273,7 @@ static result run(const char *name, int ours, float set_kmh, double secs, void (
 
 static void c_none(double) { }
 static void c_lead_jam(double t) { M.lead = 1; if (t < 1) { M.lead_x = 40; } M.lead_v = t < 30 ? 30 : t < 45 ? 0 : t < 75 ? 25 : 0; }
+static void c_lead_pulls(double t) { M.lead = 1; if (t < 0.05) { M.lead_x = 30; } M.lead_v = 58; }   // a lead 30 m ahead at 58 km/h
 static void c_hills(double) { g_road = road_hills; }
 
 // ---- cruise keys: tap = one step to the next multiple of 5, hold = 1 km/h steps, retarder off on a press
@@ -1313,6 +1324,50 @@ int main(int argc, char **argv)
     for (int ours = 0; ours <= 1; ours++) run("hold 80 on hills +-2.5%", ours, 80, 180, c_hills, 80);
     g_road = road_flat;
     for (int ours = 0; ours <= 1; ours++) run("ACC jam: lead 30, stops, goes 25, stops", ours, 60, 110, c_lead_jam, 30);
+    // bend_now: the bend the truck is in (ride 8, 27-10: 47 -> 58 km/h inside a 40-65 m radius bend, lateral peaks 5.3). 33 t, set 63, a 50 m radius bend
+    // from 47 km/h, no lead / a lead 30 m ahead at 58; and the motorway curve (R 800 m at 85 km/h) that must not change.
+    {
+        int bad = 0;
+        g_run_mass = 33000; g_road = road_flat;
+        printf("--- bend_now: in a bend (R 50 m, 300 m long), 33 t, set 63, from 47 km/h; before (bend_now 0) -> after (bend_now 1)\n");
+        for (int lead = 0; lead <= 1; lead++) {
+            float lat[2], vmax[2];
+            for (int on = 0; on <= 1; on++) {
+                p_bend_now = (float)on; g_bn_r = 50; g_bn_s0 = 60; g_bn_len = 300;
+                char nm[96]; snprintf(nm, sizeof nm, "R 50 m, 63 set, %s, bend_now %d", lead ? "lead 58 km/h 30 m ahead" : "no lead", on);
+                run(nm, 1, 63, 30, lead ? c_lead_pulls : c_none, 47);
+                lat[on] = g_bn_lat_max; vmax[on] = g_bn_v_max;
+                printf("     in the bend: top speed %.1f km/h, lateral peak %.2f m/s2\n", g_bn_v_max, g_bn_lat_max);
+            }
+            bad |= !(vmax[0] > 55 && vmax[1] < 52.0f && lat[1] < 4.2f && lat[1] < lat[0] - 1.0f);
+        }
+        printf("--- bend_now: a motorway curve (R 800 m, 85 km/h, set 83 and 90) must not change\n");
+        const float sets[] = { 83.0f, 90.0f };
+        for (int si = 0; si < 2; si++) {
+            float set = sets[si], end[2], vmax[2];
+            for (int on = 0; on <= 1; on++) {
+                p_bend_now = (float)on; g_bn_r = 800; g_bn_s0 = 100; g_bn_len = 600;
+                char nm[96]; snprintf(nm, sizeof nm, "R 800 m, set %.0f, from 85, bend_now %d", set, on);
+                run(nm, 1, set, 60, c_none, 85);
+                end[on] = M.v * 3.6f; vmax[on] = g_bn_v_max;
+            }
+            bad |= fabsf(end[0] - end[1]) > 0.01f || fabsf(vmax[0] - vmax[1]) > 0.01f;
+        }
+        printf("--- bend_now: a sharp motorway-speed curve (R 300 m at 90 km/h, lateral 2.1 m/s2) must not change either\n");
+        {
+            float end[2];
+            for (int on = 0; on <= 1; on++) {
+                p_bend_now = (float)on; g_bn_r = 300; g_bn_s0 = 100; g_bn_len = 400;
+                char nm[96]; snprintf(nm, sizeof nm, "R 300 m, set 90, from 90, bend_now %d", on);
+                run(nm, 1, 90, 40, c_none, 90);
+                end[on] = M.v * 3.6f;
+            }
+            bad |= fabsf(end[0] - end[1]) > 0.01f;
+        }
+        p_bend_now = 1; g_bn_r = 0; g_run_mass = 0;
+        printf("bend_now test: %s\n", bad ? "FAIL" : "ok");
+        if (bad) return 1;
+    }
     // hill start
     {
         memset(GA, 0, sizeof GA); T.speed = 0; T.in_brake = 0.5f; T.in_thr = 0;

@@ -28,7 +28,7 @@
 #include <string.h>
 
 static float p_herm, p_bind_a;
-static float p_sg_rearm, p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_own_bias, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_lever, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade, p_aeb_mode, p_aeb_margin, p_aeb_warn_dec, p_aeb_full_frac, p_aeb_rise, p_aeb_jerk;
+static float p_sg_rearm, p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_own_bias, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_bend_now, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_lever, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade, p_aeb_mode, p_aeb_margin, p_aeb_warn_dec, p_aeb_full_frac, p_aeb_rise, p_aeb_jerk;
 static float p_rb_curves;  // roundabout_curves
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 static float p_app_mode, p_app_sh_eco, p_app_sh, p_app_sh_pw;  // approach_by_mode and the share of the pull to spare each mode asks
@@ -80,6 +80,7 @@ static param g_params[] = {
     { "emergency_kmh", &p_ess_kmh, 50, "only above this speed (km/h)" },
     { "air_min_psi", &g_air_min_psi, 75, "below this brake air pressure (psi) the module stops its own brake requests (bends, crawl descent) and leaves descents to the engine brake ([core] air_from_truck: 10 psi over the truck's own warning pressure instead)" },
     { "curve_lat", &p_curve_lat, 3.125f, "sideways acceleration (m/s2) allowed in bends at about 92 km/h, the same in every mode (higher = faster through bends). Slower bends get more, up to 1.23x (4 m/s2), like the allowance in a Mercedes-Benz patent" },
+    { "bend_now", &p_bend_now, 1, "1 = the speed is also capped by the bend the truck is IN (measured from its own yaw rate, no navigation needed): no acceleration above the speed curve_lat allows for that radius, and the usual gentle bend braking when over it. Motorway curves never trigger it (only radius under about 250 m). 0 = off, only the bends ahead on the route count" },
     { "route_hermite", &p_herm, 1, "1 = with navigation: the road between two route points is read as a curve through the directions of the points, so tight bends are seen earlier and sharper (0 = straight lines between the points, the older way)" },
     { "junctions", &p_junc, 1, "1 = with navigation: also slow down before junctions where the route turns, and before roundabouts (needs curves = 1; always on with own_acc = 1)" },
     { "junction_lat", &p_junc_lat, 2.5f, "sideways acceleration (m/s2) allowed in a junction turn (v = sqrt(this x turn radius), at least 15 km/h)" },
@@ -171,6 +172,7 @@ static int s_hs_armed;                                  // hill_start: stopped w
 static double s_hs_until;                               // hill_start: hold until
 static float s_lead_prev = -1, s_gap_rate;              // lead_rel_speed: gap filter
 static float s_bend_coast_kmh = NAN;   // the route's bend speed (coast plan) this frame, for the trace (Damien 11-10: a sharp bend at full set speed)
+static float s_bn_f, s_bn_pk; static int s_bn_init, s_bn_on, s_bn_cap; static double s_bn_said, s_bn_cap_at;   // bend_now: filtered path curvature (1/m), its held peak, state, last log
 static int s_curve_braking;                             // bend braking hysteresis
 static int s_isa_last = -1;                             // the limit (km/h) we last set the cruise to
 static double s_btn_down_at, s_btn_up_at;               // speed-limit button hold
@@ -610,6 +612,23 @@ static void keys_tick(char *ga)
     s_prev_on = on;
 }
 
+// bend_now: the sideways acceleration allowed at a speed, as route.cpp's lat_scale (the Mercedes-Benz patent shape: 5 m/s2 at 25 km/h ... 3.2 at 111,
+// as a factor on curve_lat = the value at 92 km/h, at most 4/3.25). A copy: that one is static in route.cpp.
+static float bn_lat_scale(float v_ms)
+{
+    static const float kmh[] = { 25, 51, 67, 92, 111 }, a[] = { 5.0f, 4.0f, 3.5f, 3.25f, 3.2f };
+    float k = v_ms * 3.6f, r;
+    if (k <= kmh[0]) r = a[0];
+    else if (k >= kmh[4]) r = a[4];
+    else {
+        int i = 0;
+        while (k > kmh[i + 1]) i++;
+        r = a[i] + (a[i + 1] - a[i]) * (k - kmh[i]) / (kmh[i + 1] - kmh[i]);
+    }
+    r /= 3.25f;
+    return r > 4.0f / 3.25f ? 4.0f / 3.25f : r;
+}
+
 static float cruise_body(void *ga, float dt, float pedal, float stock);
 static void own_acc(char *g, float dt);
 static float lead_rel_speed(char *g, float lead, float dt);
@@ -767,6 +786,7 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
     if (p_smooth <= 0 || !g || !*(unsigned char *)(g + GA_ON) || !(dt > 0 && dt < 0.5f)) {
         C.on = 0;
         s_cb_was_on = 0;
+        s_bn_init = 0; s_bn_on = 0;
         g_sg_hold = 0;
         g_feed = 0;
         s_sg_wait = 0;   // no 'B' on the dash from a wait that the cruise drop ended
@@ -940,6 +960,33 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
         if (st_abs > (kmh > 60 ? 0.25f : 0.15f) && st_abs < 0.95f) s_steer_until = wall_s() + 0.8;
         if (wall_s() < s_steer_until && kmh > 8 && target > kmh) target = kmh;
     }
+    // The bend the truck is IN (ride 8, 27-10, 1176-1187 s: bend ahead 45, then 47 -> 58 km/h inside a radius 40-65 m bend, lateral peaks 5.3): the route
+    // plan above only looks ahead, and the ACC target ignores the road. Path curvature = yaw rate / speed (lane o3 is not needed: the yaw is there
+    // with the lane assist off too), filtered over 0.5 s so a lane change does not count, the peak held with a 1.5 s decay (an S-bend, the bend's
+    // end: the cap lets go gently). The cap is the speed curve_lat allows for that radius, the same allowance the bend plan uses. Only a clear bend
+    // (curvature over 0.004 = radius under 250 m; a motorway curve at 90 km/h stays under 1.5 m/s2 at 0.0024), with hysteresis (off at 0.7x).
+    if (p_bend_now > 0 && T.speed > 0 && kmh >= 20) {
+        float k_in = fabsf(T.yaw) * 6.2831853f / fmaxf(T.speed, 5.0f);
+        if (!s_bn_init) { s_bn_f = s_bn_pk = k_in; s_bn_init = 1; }
+        else { s_bn_f += (k_in - s_bn_f) * fminf(1.0f, dt / 0.5f); s_bn_pk = fmaxf(s_bn_f, s_bn_pk * expf(-dt / 1.5f)); }
+        int was = s_bn_on;
+        s_bn_on = s_bn_pk > (was ? 0.0028f : 0.004f);
+        if (s_bn_on) {
+            float vc = sqrtf(p_curve_lat / s_bn_pk);
+            for (int it = 0; it < 3; it++) vc = sqrtf(p_curve_lat * bn_lat_scale(vc) / s_bn_pk);
+            float cap_kmh = fmaxf(vc * 3.6f, 15.0f);
+            int capping = cap_kmh < fmaxf(target, kmh) + (s_bn_cap ? 2 : -1);   // (it only says so once it really holds the truck back)
+            if (capping && !s_bn_cap) s_bn_cap_at = wall_s();
+            // said 0.6 s after it starts holding (the curvature filter has settled by then: the radius is the bend's)
+            if (capping && s_bn_cap_at > 0 && wall_s() - s_bn_cap_at > 0.6 && wall_s() - s_bn_said > 5) {
+                s_bn_said = wall_s(); s_bn_cap_at = 0;
+                logv(2, "Cruise: in a bend: speed capped at %.0f km/h (radius %.0f m; target %.0f, now %.0f)", cap_kmh, 1.0f / s_bn_pk, target, kmh);
+            }
+            s_bn_cap = capping;
+            target = fminf(target, cap_kmh);
+            bend_kmh = bend_kmh == bend_kmh ? fminf(bend_kmh, cap_kmh) : cap_kmh;   // over it: the same gentle bend braking as for a bend ahead
+        } else s_bn_cap = 0;
+    } else { s_bn_init = 0; s_bn_on = 0; s_bn_cap = 0; }
     float e = target - kmh;
     // Overshoot (Damien 13-10: a resume from 68 to 90 gave full throttle for 12 s into a descent, 92.5 km/h): the P term looks at the
     // error we will have in approach_s seconds at the speed we gain now, so the throttle eases off before the set speed is reached.
@@ -2279,7 +2326,7 @@ static void cr_reset(int level, const char *why)
     C.on = 0; C.u = C.i = 0;
     CF.fm = 0; CF.k = 1; CF.u = 0; CF.at = -1;
     g_sg_hold = 0; g_feed = 0; g_stopped_at = 0;
-    s_curve_braking = 0; s_desc_braking = 0;
+    s_curve_braking = 0; s_desc_braking = 0; s_bn_init = 0; s_bn_on = 0; s_bn_cap = 0;
     s_acc_f = 0; s_acc_init = 0;
     s_steer_until = s_jn_ignore_until = 0; s_stuck_since = 0;
     s_cr_prev = s_cr_rate = NAN; s_cr_since = -1; s_cr_said = 0;
