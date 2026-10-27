@@ -1187,7 +1187,7 @@ static int force_mode_test()
                fm, e.thr_max_near, 83 - e.loss, e.shifts);
         bad |= e.thr_max_near > 0.6f + 1e-4f;
     }
-    // approach_by_mode: the approach 70 -> 83 km/h on the flat, 33 t; 0 = the throttle follows the deficit up to full, 1 = Eco and Normal use a share of the pull to spare
+    // approach_by_mode: the approach 70 -> 83 km/h on the flat, 33 t; 0 = the throttle follows the deficit up to full, 1 = each mode uses its share of the pull to spare (0.9 / 0.95 / 1.0)
     printf("--- approach_by_mode: 70 -> 83 km/h, 33 t, flat; highest throttle before 82 km/h and the seconds to 82 km/h\n");
     float hi[2][3], ts[2][3];
     for (int ab = 0; ab < 2; ab++) {
@@ -1203,7 +1203,8 @@ static int force_mode_test()
     }
     p_app_mode = 1; g_full_power = 0;
     bad |= hi[0][0] < 0.99f || hi[0][1] < 0.99f;   // (today: full throttle)
-    bad |= hi[1][0] > 0.9f || hi[1][1] > 0.9f || hi[1][2] < 0.99f || !(ts[1][0] > ts[1][1] && ts[1][1] > ts[1][2]);
+    // (27-10: the modes pull up about equally hard, shares 0.9 / 0.95 / 1.0: Eco within 25 % of Power's time, still not faster than Normal and Power)
+    bad |= hi[1][2] < 0.99f || !(ts[1][0] >= ts[1][1] && ts[1][1] >= ts[1][2]) || ts[1][0] > 1.25f * ts[1][2];
     printf("force_mode test: %s\n", bad ? "FAIL" : "ok");
     return bad;
 }
