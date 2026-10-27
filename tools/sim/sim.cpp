@@ -4,6 +4,7 @@
 // takeover speed), a shift with a torque gap.
 // Build+run: tools/sim/run.sh [-v]   (-v prints every log line)
 #include "core/suite.h"
+#include "sim_env.h"  // SIM_SET=section.key=value,... overrides ini defaults (sweeps)
 #include "core/game.h"
 #include "core/route.h"
 #include "core/vehicle.h"
@@ -1987,6 +1988,7 @@ static int run_scores_cruisekick()
 
 int main(int argc, char **argv)
 {
+    sim_env_apply("trueshift", m_trueshift.params, m_trueshift.n_params);
     verbose = argc > 1 && !strcmp(argv[1], "-v");
     for (int i = 0; i < m_trueshift.n_params; i++) *m_trueshift.params[i].val = m_trueshift.params[i].def;
     T.fwd_gears = 12; T.diff = 2.85f; T.wheels = 4; T.retarder_steps = 5;

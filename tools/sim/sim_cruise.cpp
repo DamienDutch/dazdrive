@@ -5,6 +5,7 @@
 // that keeps integrating while the clutch is open) with ours.
 // Build+run: tools/sim/run_cruise.sh
 #include "core/suite.h"
+#include "sim_env.h"  // SIM_SET=section.key=value,... overrides ini defaults (sweeps)
 #include "core/game.h"
 #include "core/route.h"
 #include <math.h>
@@ -1312,6 +1313,7 @@ static int force_mode_test()
 
 int main(int argc, char **argv)
 {
+    sim_env_apply("cruise", m_cruise.params, m_cruise.n_params); sim_env_apply("decel", dc::g_params, sizeof dc::g_params / sizeof dc::g_params[0]);
     verbose = argc > 1;
     for (int i = 0; i < m_cruise.n_params; i++) *m_cruise.params[i].val = m_cruise.params[i].def;
     no_cruise_test();   // first: the actuator alone, before the module's phases are attached

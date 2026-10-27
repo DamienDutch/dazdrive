@@ -8,6 +8,7 @@
 // Hands-on = a driver who steers the bend himself (-3.3 o3, 75% of the need) with a hand tremor.
 // Build+run: tools/sim/run_lane.sh
 #include "core/suite.h"
+#include "sim_env.h"  // SIM_SET=section.key=value,... overrides ini defaults (sweeps)
 #include "core/game.h"
 #include <math.h>
 #include <initializer_list>
@@ -843,6 +844,7 @@ static int test_key()
 
 int main(int argc, char **argv)
 {
+    sim_env_apply("lane", g_params, sizeof g_params / sizeof g_params[0]);
     atexit(print_refmax);
     if (argc > 1 && !strcmp(argv[1], "learn")) return learn_tests(argc, argv);
     if (argc > 1 && !strcmp(argv[1], "sway")) return sway_tests(argc, argv);
