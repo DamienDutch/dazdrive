@@ -7,6 +7,9 @@
 // rule, stop rule on the owner's threshold, TrueShift's braking downshift, the generic gearbox with its gap state), calls
 // the owner's own tail hook before the generic gearbox, and stands in for Auto Hold, the ACC and Stop&Go with the arming lines of cruise.cpp
 // (the stand-ins copy those lines, cruise.cpp itself is not part of this sim) next to a lead vehicle.
+// L1-L4 (owner=1, step 3, the pull-away): the real chain. Creep (modules/creep.cpp, linked as its own object: the smooth-start law), TrueShift (its
+// chooser: the gear is held until the clutch is locked, the hand-off) and the owner run against a plant with an engine inertia and a clutch with a
+// torque capacity (the plant of sim_creep's launch tests, with the grade, the brake and the roll back). The comparison is the same plant with owner=0.
 // Plant: speed from pedals, brake, a little resistance and the grade; the engine at idle with an open clutch, on the driveline with
 // a closed one; a slip phase at a launch; the box in neutral when the engine would fall under idle + 150 rpm (+ the brake term),
 // one gear down when braking pulls the engine near idle, the start gear on a pedal at rest.
@@ -65,7 +68,7 @@ static float RATIO[16];
 static const float CURVE[8][2] = { {0,0},{700,0.60f},{900,0.97f},{1250,1},{1500,0.9f},{1700,0.72f},{1900,0.45f},{2100,0} };
 static const float RANGES[4][2] = { {1500,1900},{750,1450},{900,1250},{1200,1600} };
 static float g_mass = 36000, g_grade_pct;
-static struct { double v; int gear; float clutch; float rpm; int launching, crawl; double down_at; int target, drive, latch; } M;   // v m/s, clutch 0 closed .. 1 open; target, drive, latch: the box's gap state (S3-S6)
+static struct { double v; int gear; float clutch; float rpm; int launching, crawl; double down_at; int target, drive, latch; int force; double gap_until, shift_at; } M;   // v m/s, clutch 0 closed .. 1 open; target, drive, latch: the box's gap state (S3-S6)
 static int own_mode;                 // S3-S6: the plant is the game's automatic with the owner's hooks in
 static float (*s_stop_fn)(float, float, float);   // TrueShift's stop threshold, as the game's stop rule calls it
 static void (*s_tail_fn)(void *);    // the owner's hook at the update's tail
@@ -102,16 +105,35 @@ int gb_engage(void *, int) { return 0; }
 int game_engage_init() { return 1; }
 void gb_set_target(void *, int g) { if (own_mode) M.target = g; }
 void gb_rest_state(void *, int drive, int latch) { M.drive = drive; M.latch = latch; }
-void gb_force(void *) {}
-char *gb_inner(void *) { return NULL; }
+void gb_force(void *) { M.force = 1; }
+static int real_chain;               // L1-L4: Creep, TrueShift's chooser and the clutch plant are in
+static char F_INNER[0x2000], F_DRIVE[0x800], F_ENG[0x400];   // the game's vehicle for Creep: inner (the clutch at +0x142c, the drive at +0x150), the drive (the engine at +0x360, the idle add at +0x2dc), the engine (idle at +0x228)
+static float *F_CLUTCH = (float *)(F_INNER + 0x142c);
+char *gb_inner(void *) { return real_chain ? F_INNER : NULL; }
 float gb_thr_eff(void *) { return g_thr; }
 int game_letter(void *, char) { return 1; }
+void *game_cvar(const char *) { return NULL; }
+void game_cvar_set(void *, float) {}
 int game_ebrake_downshift(void *) { return 0; }
 float game_ebrake_level(void *) { return -1; }
-int game_patch_call(uintptr_t, void *) { return s_patch_ok; }
-int game_patch_tail(uintptr_t, void *pre) { s_tail_fn = (void (*)(void *))pre; return 1; }
+static window_fn s_decide; static gear_fn s_choose, s_start;   // TrueShift's hooks (L1-L4 call the chooser)
+int game_patch_call(uintptr_t site, void *stub)
+{
+    if (site == 1) s_decide = (window_fn)stub;
+    if (site == 2) s_choose = (gear_fn)stub;
+    if (site == 4) s_start = (gear_fn)stub;
+    return s_patch_ok;
+}
+static int s_tail_take;              // the next game_patch_tail is the owner's (Creep's start comes through here too)
+int game_patch_tail(uintptr_t, void *pre) { if (s_tail_take) s_tail_fn = (void (*)(void *))pre; return 1; }
 int game_patch_stop(uintptr_t, float (*fn)(float, float, float)) { s_stop_fn = fn; return 1; }
-int mem_readable(const void *, size_t) { return 0; }
+int mem_readable(const void *p, size_t n)
+{
+    const char *c = (const char *)p;
+    for (const char *b : { (const char *)F_INNER, (const char *)F_DRIVE, (const char *)F_ENG })
+        if (c >= b && c + n <= b + (b == F_INNER ? sizeof F_INNER : b == F_DRIVE ? sizeof F_DRIVE : sizeof F_ENG)) return real_chain;
+    return 0;
+}
 char *game_actor_safe() { return NULL; }
 int route_ok() { return 0; }
 float route_grade(float, float) { return NAN; }
@@ -123,13 +145,14 @@ float route_curve_speed(float, float, float) { return NAN; }
 uintptr_t game_scan(const char *) { return 0; }
 int game_patch_clutch_floor(uintptr_t, clutch_floor *) { return 0; }
 int game_patch_cf0_if(uintptr_t, int, const unsigned char *) { return 0; }
-void creep_info_get(creep_info *o) { *o = CI; }
+extern "C++" void real_creep_info_get(creep_info *o);   // creep.cpp's, renamed at link time
+void creep_info_get(creep_info *o) { if (real_chain) real_creep_info_get(o); else *o = CI; }
 void cruise_info_get(cruise_info *o) { *o = CU; }
 
 #include "modules/lowspeed.cpp"
 #include "core/rsc.cpp"
 #include "core/actuate.cpp"
-extern module m_trueshift;
+extern module m_trueshift, m_creep;
 
 static float rpm_of(int g, double v) { return g > 0 ? (float)(v / RADIUS * RATIO[g - 1] * DIFF * 9.5493) : 0; }
 static float kmh_of(int g, float rpm) { return rpm / (RATIO[g - 1] * DIFF * 9.5493f) * RADIUS * 3.6f; }   // the speed where gear g turns the engine at rpm
@@ -191,6 +214,7 @@ static void sim_reset(int level, const char *why)   // as core/telemetry.cpp ses
 {
     vehicle_reset(level);
     m_trueshift.reset(level, why);
+    if (real_chain) m_creep.reset(level, why);
     m_lowspeed.reset(level, why);
     act_reset(level, why);
 }
@@ -212,6 +236,7 @@ static void tick(double dt = 1.0 / 60)
     if (own_mode) { standins(dt); act_brake_write(GA); plant_game(dt); }
     else plant(dt);
     vehicle_frame();
+    if (real_chain) { m_trueshift.frame(); m_creep.frame(); }
     m_lowspeed.frame();
     if (n_rec < (int)(sizeof rec / sizeof rec[0])) rec[n_rec++] = { g_low.state, g_low.would_gear, M.gear, g_low.would_clutch, g_low.would_brake, (float)(fabs(M.v) * 3.6) };
     if (g_low.state != last_state) {
@@ -489,6 +514,60 @@ static int n_pre_writes, last_pre_tgt;   // changes of the box's target while in
 static float peak_sg_req;                // the brake request held while Stop&Go holds
 
 
+// Auto Hold's release in a launch (cruise.cpp auto_hold, case AH_LAUNCH, copied): the request falls with the drive force. With the owner the drive is the force
+// of the clutch it commands (low_drive_force), without it the estimate from the clutch the game shows (ah_drive_force).
+static struct { int on, st, released; float r, k; double launch_t, grab_until, roll_m, t_rel; } AHL;   // st 0 off, 1 holds, 2 releasing for a launch
+static void ah_launch_step(double dt, int owner_f_ok)
+{
+    const float h = 0.6f, gentle = 0.5f, hard_s = 0.15f, max_s = 2.5f;
+    float kmh = fabsf(T.speed) * 3.6f, grade = g_grade_pct;
+    switch (AHL.st) {
+    case 0:
+        AHL.r = AHL.r > 0 ? fmaxf(0, AHL.r - 3 * (float)dt) : 0;
+        if (low_stopped() && g_brake > 0.1f) AHL.st = 1;
+        break;
+    case 1:
+        AHL.r = fminf(h, AHL.r + 3 * (float)dt);
+        if (g_thr > 0.05f) { AHL.st = 2; AHL.launch_t = 0; AHL.grab_until = 0; AHL.released = 0; AHL.roll_m = 0; }
+        break;
+    case 2: {
+        AHL.launch_t += dt;
+        if (g_thr < 0.03f && kmh < 1.0f && T.speed > -0.05f) { AHL.st = 1; break; }
+        float m = V.mass, need = 1.1f * vehicle_resist_grade(0, grade) + m * 0.25f;
+        if (need < m * 0.12f) need = m * 0.12f;
+        float drive = NAN, lf = owner_f_ok ? low_drive_force() : NAN;
+        int owner_f = lf == lf;
+        if (owner_f) drive = AHL.k * lf;
+        else {
+            int g = T.gear; float r = wheel_radius();
+            if (V.eng_ok && g >= 1 && g <= 31 && r > 0.1f) {
+                float couple = fminf(fmaxf(1 - clutch_seen(), 0.0f), 1.0f);
+                drive = AHL.k * V.eng.torque * curve_factor(&V.eng, T.rpm) * T.eff_thr * T.ratio[g - 1] * T.diff * V.eta * couple / r;
+            }
+        }
+        float target = drive == drive ? h * fmaxf(0, 1 - drive / need) : 0;
+        int moving = T.speed > 0.3f / 3.6f;
+        if (moving || AHL.launch_t > max_s) target = 0;
+        if (grade < 1.5f) target = 0;
+        if (!owner_f && AHL.launch_t > 0.6 && clutch_seen() > 0.9f) target = fminf(target, h * 0.5f);
+        if (!owner_f && AHL.launch_t > 1.2 && clutch_seen() > 0.9f && g_thr > 0.7f) target = 0;
+        float ped = fminf(1, fmaxf(0, (g_thr - 0.25f) / 0.55f)), t_rel = gentle + (hard_s - gentle) * ped, rate = h / fmaxf(t_rel, 0.05f);
+        if (AHL.launch_t > max_s) rate = fmaxf(rate * 2, h / hard_s);
+        if (T.speed < -0.08f && grade > 0.5f) {
+            if (t_now > AHL.grab_until) AHL.k = fmaxf(0.3f, AHL.k * 0.7f);
+            AHL.r = fminf(h, AHL.r + 4 * (float)dt);
+            AHL.grab_until = t_now + 0.5;
+        } else if (t_now > AHL.grab_until) AHL.r = fminf(AHL.r, fmaxf(target, AHL.r - rate * (float)dt));
+        if (AHL.r <= 0.002f) {
+            AHL.r = 0;
+            if (!AHL.released) { AHL.released = 1; if (AHL.t_rel < 0) AHL.t_rel = t_now; }
+            if (kmh >= 2 || AHL.launch_t > 12) AHL.st = 0;
+        } else AHL.released = 0;
+        break; }
+    }
+    act_brake(ACT_HOLD, AHL.r);
+}
+
 static void standins(double dt)
 {
     float v = (float)M.v, kmh = v * 3.6f, gap = (float)(LEAD.x - X), lv = (float)LEAD.v;
@@ -528,16 +607,82 @@ static void standins(double dt)
         }
         act_brake(ACT_HOLD, AH.r);
     }
-    CU.hold = AH.state; CU.hold_req = AH.r; CU.sg_hold = ACC.sg_hold; CU.feed = ACC.feed;
+    if (AHL.on) ah_launch_step(dt, real_chain);
+    CU.hold = AHL.on ? AHL.st : AH.state; CU.hold_req = AHL.on ? AHL.r : AH.r; CU.sg_hold = ACC.sg_hold; CU.feed = ACC.feed;
     T.cruise = ACC.on ? ACC.set : 0;
     tick_no++;
+}
+
+// ---- L1-L4: the engine as an inertia against a clutch with a capacity (sim_creep's launch plant) plus the grade, the brake and the roll back
+static const float JERK_BOUND = 1735;   // m/s3: the largest jerk of sim_creep's launches (30 t, pedal 1.0, soft bite), measured the same way (1/240 s steps)
+static double E_w;                   // the engine, rad/s
+static float K_CLUTCH = 2.0f;        // capacity (1-c)^K: the game's is unknown; both ends are run
+static struct { double from, to; } CUT;        // an injected drop of the engine's own throttle (the 25-10 16:50 cut), sim_s
+static float g_thr_eng;              // the throttle the engine sees this tick
+static double g_rollback_m;          // the distance rolled backwards
+static double g_jerk_max, g_acc_prev; static int g_acc_valid;
+static double g_clutch_drive;        // the clutch value the drivetrain used this tick
+static engine_info g_eng;
+static int real_chooser;             // the game's chooser (TrueShift's stub over a stock stand-in) may shift
+static int n_shift_slip, n_shift_all;   // gear changes while the clutch slips / at all
+static int stock_choose(void *) { return M.gear > 0 && M.gear < 12 && T.rpm > 1500 && g_thr > 0.3f ? M.gear + 1 : M.gear; }   // the game's own automatic: up when the engine is high
+static float *stock_window(void *, float *out, unsigned) { out[0] = 900; out[1] = 1500; return out; }
+
+static void launch_physics(double dt, float brk)
+{
+    // The clutch is a stiff spring (1500 Nm per rad/s of slip) that gives way at its capacity, so locked and slipping are one smooth model (a hard
+    // lock snaps the wheel to the engine speed, a jerk that is no truck's). 16 substeps per frame; the jerk is measured on 1/240 s steps as sim_creep does.
+    const float J = 8.0f, CMAX = 1.3f * TORQUE, KC = 1500.0f;
+    const int sub = 16, grp = 4;
+    double h = dt / sub;
+    float m = g_mass;
+    float Fg = m * 9.81f * g_grade_pct / 100, Fr = m * 0.12f, Fb = brk * 6 * m;
+    // the clutch the drivetrain gets: ours while Creep posts one, else the game's own (it closes a clutch after an engage at its own rate)
+    float c;
+    if (M.gear == 0) { *F_CLUTCH = 1; c = 1; }
+    else if (s_cf.inner) c = s_cf.floor;
+    else { *F_CLUTCH = fmaxf(0.0f, *F_CLUTCH - 1.5f * (float)dt); c = *F_CLUTCH; }
+    g_clutch_drive = c;
+    double vg = M.v;
+    for (int i = 0; i < sub; i++) {
+        float rpm = (float)(E_w * 9.5493);
+        float te = g_thr_eng * TORQUE * curve_factor(&g_eng, rpm) + fmaxf(0.0f, fminf(600.0f, (IDLE - rpm) * 4.5f)) - 90;
+        if (rpm > LIMIT) te = fminf(te, 0);
+        double v = M.v;
+        float Fd = 0, tc = 0;
+        if (M.gear > 0 && c < 0.999f) {
+            float R = RATIO[M.gear - 1] * DIFF, per = R / RADIUS * 9.5493f;
+            float slip_rad = (rpm - (float)v * per) / 9.5493f, cap = CMAX * powf(fmaxf(1 - c, 0), K_CLUTCH);
+            tc = fmaxf(-cap, fminf(cap, KC * slip_rad));
+            Fd = tc * R / RADIUS;
+        }
+        E_w = fmax(0.0, E_w + (te - tc) / J * h);
+        double Fn0 = Fd - Fg;
+        if (fabs(v) < 1e-4 && fabs(Fn0) <= Fr + Fb) v = 0;
+        else if (fabs(v) < 1e-4) v += (Fn0 - copysign((double)(Fr + Fb), Fn0)) / m * h;
+        else {
+            double sg = v > 0 ? 1 : -1, F = Fd - Fg - sg * (Fr + Fb), v1 = v + F / m * h;
+            if (v * v1 < 0) v1 = 0;
+            v = v1;
+        }
+        M.v = v;
+        if (M.v < 0) g_rollback_m += -M.v * h;
+        if ((i + 1) % grp == 0) {
+            double acc = (M.v - vg) / (h * grp);
+            if (g_acc_valid) g_jerk_max = fmax(g_jerk_max, fabs(acc - g_acc_prev) / (h * grp));
+            g_acc_prev = acc; g_acc_valid = 1; vg = M.v;
+        }
+    }
+    M.rpm = (float)(E_w * 9.5493);
+    M.clutch = c;
 }
 
 static void plant_game(double dt)
 {
     float idle = IDLE, brk = fmaxf(g_brake, *(float *)(GA + 0x17c)), thr = fmaxf(g_thr, ACC.on ? ACC.u : 0), fed = fmaxf(g_thr, ACC.feed);
     double kmh = fabs(M.v) * 3.6;
-    T.gear = T.dgear = M.gear; T.in_thr = g_thr; T.eff_thr = thr; T.in_brake = g_brake; T.eff_brake = brk;
+    g_thr_eng = real_chain && t_now >= CUT.from && t_now < CUT.to ? 0.0f : thr;   // (the game's cut: the engine's own throttle is gone, the pedal is not)
+    T.gear = T.dgear = M.gear; T.in_thr = g_thr; T.eff_thr = g_thr_eng; T.in_brake = g_brake; T.eff_brake = brk;
     // the at-rest rule: neutral every update
     if (M.gear == 0 && kmh < 0.3) { M.target = 0; M.drive = 3; M.latch = 1; }
     // the stop rule: neutral when the engine of the gear that is in falls under the threshold (hook value + the game's brake term)
@@ -555,13 +700,40 @@ static void plant_game(double dt)
     if (M.gear > 1 && thr < 0.01f && brk > 0.05f && rpm_of(M.gear, M.v) < idle + 250 + brk * brk * idle && t_now - M.down_at > 0.25) { M.gear--; M.down_at = t_now; M.target = M.gear; }
     if (M.gear > 0) M.target = M.gear;
     if (s_tail_fn) s_tail_fn(&M);   // the owner's tail: the preselected gear in the gap
+    if (real_chain) {   // a forced shift at a standstill (the owner's start gear change): the clutch opens, the box waits, the target goes in
+        if (M.force && M.gear > 0 && M.target > 0 && M.target != M.gear && M.v * 3.6 < 1) { M.gear = 0; M.gap_until = t_now + 0.4; M.drive = 4; M.latch = 0; n_shift_all++; }
+        M.force = 0;
+        if (M.gear == 0 && M.gap_until > 0 && t_now >= M.gap_until && M.target > 0) { M.gear = M.target; M.gap_until = 0; *F_CLUTCH = 1; }
+        if (real_chooser && M.gear > 0 && t_now - M.shift_at > 0.5) {   // the game's chooser: TrueShift's stub over the stock stand-in
+            int r = s_choose ? s_choose(&M) : M.gear;
+            if (r > 0 && r != M.gear) {
+                if (g_clutch_drive >= 0.02f) n_shift_slip++;
+                n_shift_all++;
+                M.gear = M.target = r; M.shift_at = t_now;
+            }
+        }
+    }
     if (M.gear == 0) {
         if (M.target != last_pre_tgt) n_pre_writes++;
         last_pre_tgt = M.target;
     }
     // the generic gearbox: from the gap state only with throttle (a pedal, or the fed cruise throttle)
-    if (M.gear == 0 && fed > 0.01f) { M.gear = M.target > 0 ? M.target : ts_start_gear(fmaxf(fed, 0.3f)); M.target = M.gear; M.launching = 1; M.drive = 4; M.latch = 0; }
+    if (M.gear == 0 && fed > 0.01f && !(real_chain && M.gap_until > 0)) {
+        int og = real_chain && s_start ? s_start(&M) : 0;   // the game's start function (TrueShift's stub over the game's own number) when the target is not set
+        M.gear = M.target > 0 ? M.target : og > 0 ? og : ts_start_gear(fmaxf(fed, 0.3f)); M.target = M.gear; M.launching = 1; M.drive = 4; M.latch = 0;
+        if (real_chain) *F_CLUTCH = 1;
+    }
     if (M.gear > 0 && M.launching && fed < 0.01f && M.v < 0.05) M.launching = 0;
+    if (real_chain) {   // the clutch plant: the engine against the capacity, the grade, the brake
+        launch_physics(dt, brk);
+        T.speed = (float)M.v; T.rpm = M.rpm; T.eff_clutch = *F_CLUTCH; T.gear = T.dgear = M.gear; T.engine_on = 1;
+        X += M.v * dt;
+        static double lt; static float lv;
+        double d = t_now - lt;
+        if (d > 0.0 && d < 0.5) { float acc = (float)((fabsf(T.speed) - lv) / d); T.accel += (float)(d / (0.5 + d)) * (acc - T.accel); }
+        lt = t_now; lv = fabsf(T.speed);
+        return;
+    }
     // motion
     float rlock = rpm_of(M.gear, M.v), aim = idle + 300 + 600 * fed;
     float a = 0;
@@ -584,20 +756,35 @@ static void plant_game(double dt)
 }
 
 // TrueShift's stop hook and the owner's tail hook "found", the owner switched on: once, before the first owner scenario
+static int stock_start(void *) { return 4; }   // the game's own number for a solo truck
 static void own_setup()
 {
     s_patch_ok = 1;
-    G.decide_site = 1; G.stop_site = 1; G.tail_site = 0;
+    // TrueShift's call sites (decide 1, chooser 2, start function 4) over stock stand-ins; L1-L4 call the chooser and the start function
+    G.window_fn = (uintptr_t)stock_window; G.chooser_fn = (uintptr_t)stock_choose; G.start_fn = (uintptr_t)stock_start;
+    G.decide_site = 1; G.n_choose = 1; G.choose_sites[0] = 2; G.n_start = 1; G.start_sites[0] = 4;
+    G.stop_site = 1; G.tail_site = 0;
     m_trueshift.start();                 // installs the stop hook (the sim's stand-in captures it); no tail of its own
     G.tail_site = 1;
+    // Creep, linked for real (the smooth-start law), over a fake vehicle: inner (the clutch), the drive, the engine (the idle)
+    s_clutch_in = 1;
+    *(char **)(F_INNER + 0x150) = F_DRIVE; *(char **)(F_DRIVE + 0x360) = F_ENG; *(float *)(F_ENG + 0x228) = IDLE; *(float *)(F_DRIVE + 0x2dc) = 0;
+    real_chain = 1;                      // (Creep's start reads the fake vehicle; the scenarios of S3-S6 keep their own plant and never call its frame)
+    for (int i = 0; i < m_creep.n_params; i++) *m_creep.params[i].val = m_creep.params[i].def;
+    m_creep.start();
+    real_chain = 0;
+    gb_engine(NULL, &g_eng);
     set_param(m_lowspeed, "owner", 1);
+    s_tail_take = 1;
     m_lowspeed.start();                  // the owner's tail hook
+    s_tail_take = 0;
     own_mode = 1;
     check(s_stop_fn != NULL && s_tail_fn != NULL, "the stop hook and the owner's tail hook were not installed");
 }
 
 static void own_world(int gear, double kmh, float grade, float mass = 36000)
 {
+    memset(&AHL, 0, sizeof AHL);
     for (int o = 0; o < ACT_N; o++) { act_brake(o, 0); act_thr_floor(o, 0); }
     memset(GA, 0, sizeof GA);
     world(gear, kmh, grade, mass);
@@ -610,9 +797,18 @@ static float req_now() { return *(float *)(GA + 0x17c); }
 static int still(double kmh = 0.05) { return fabs(M.v) * 3.6 < kmh; }
 
 // S3: the cruise is on, the lead in front stops; the truck stops behind it, the owner holds (Stop&Go), the lead pulls away
+// (L4 runs the same drive through the real chain: s3_real, the plant with the engine and the clutch, Creep's law and TrueShift's chooser)
+static void owner_set(int on);
+static int s3_real, s3_seen_launch, s3_launch_on_cruise; static float s3_rpm_min, s3_jerk_after;
 static void s3(float stand_s, bool tap)
 {
+    if (s3_real) { owner_set(1); real_chain = 1; real_chooser = 1; }
     own_world(gear_for(25, 1100), 25, 0);
+    s3_seen_launch = s3_launch_on_cruise = 0; s3_rpm_min = 1e9f; s3_jerk_after = 0;
+    if (s3_real) {
+        E_w = M.rpm / 9.5493; K_CLUTCH = 2.0f; CUT.from = CUT.to = 1e18; g_rollback_m = 0; g_jerk_max = 0; g_acc_valid = 0; n_shift_slip = n_shift_all = 0;
+        *F_CLUTCH = 0; M.target = M.gear; M.force = 0; M.gap_until = 0; M.shift_at = -10;
+    }
     ACC.on = 1; ACC.set = 30 / 3.6f; LEAD.on = 1; LEAD.x = 45; LEAD.v = 25 / 3.6;
     SG_AUTO = 2;
     double t_stopped = -1, t_go = -1, t_move = -1; float min_gap = 1e9f, hold_req = 0; int gear0_unheld = 0, held_ticks = 0, tapped = 0;
@@ -626,6 +822,12 @@ static void s3(float stand_s, bool tap)
         if (tap && t_go >= 0 && t - t_go > 2 && !tapped && !ACC.on) { g_thr = 0.3f; tapped = 1; }   // a gas tap after the wait (Resume would set the cruise on again)
         if (tapped && t - t_go > 3) { g_thr = 0; ACC.on = 1; }
         tick();
+        if (s3_real) {
+            creep_info ci; real_creep_info_get(&ci);
+            if (ci.launch) { s3_seen_launch = 1; if (ACC.on && g_thr < 0.01f) s3_launch_on_cruise = 1; }   // the law ran with the cruise on and no pedal: the cruise throttle was the pedal
+            if (t_go >= 0 && M.gear > 0) s3_rpm_min = fminf(s3_rpm_min, M.rpm);
+            if (t_go < 0) g_jerk_max = 0;
+        }
         min_gap = fminf(min_gap, (float)(LEAD.x - X));
         if (M.gear == 0 && ACC.on && !ACC.sg_hold) gear0_unheld++;
         if (ACC.sg_hold && still()) { held_ticks++; hold_req = req_now(); peak_sg_req = fmaxf(peak_sg_req, hold_req); }
@@ -650,6 +852,16 @@ static void s3(float stand_s, bool tap)
         check(tap && t_move > 0 && ACC.on, "S3: no drive-off after the gas tap");
     }
     check(n_engage_lines == 0, "S3: %d 'engage' log lines", n_engage_lines);
+    if (s3_real) {
+        printf("   real chain: the smooth-start law %s on the cruise throttle, the engine low %.0f rpm after the drive-off, jerk after the lead left %.0f, %d chooser shift(s) before a clutch lock\n",
+               s3_launch_on_cruise ? "ran" : "did NOT run", s3_rpm_min, (float)g_jerk_max, n_shift_slip);
+        if (within) {
+            check(s3_launch_on_cruise, "L4: the smooth-start law did not run on the cruise throttle");
+            check(s3_rpm_min >= 0.7f * IDLE, "L4: the engine fell to %.0f rpm after the drive-off", s3_rpm_min);
+            check(g_jerk_max <= JERK_BOUND, "L4: jerk %.0f after the lead left", (float)g_jerk_max);
+        }
+        check(n_shift_slip == 0, "L4: %d chooser shift(s) before a clutch lock", n_shift_slip);
+    }
 }
 
 // S4: Auto Hold engages exactly once at rest; over 20 s no neutral or gear flicker
@@ -793,13 +1005,168 @@ static void s6(float brake, float mass_t)
     printf("   %4.0f t brake %.2f: start gear %2d, clutch opens at %.2f km/h (idle point %.2f), no gear after it, ends %s with gear %d preselected\n", mass_t, brake, sg, kmh_open, want, low_state_name(g_low.state), M.target);
 }
 
+
+// ---------------------------------------------------------------- L1-L4 (owner=1, step 3): the pull-away through the real chain
+// Creep's smooth-start law, TrueShift's chooser (over a stock stand-in that shifts up when the engine is high) and the owner against a plant
+// with an engine inertia and a clutch with a torque capacity. The same plant with owner=0 is "today"; the numbers are compared to it.
+extern "C++" void real_creep_info_get(creep_info *o);
+static void owner_set(int on)
+{
+    set_param(m_lowspeed, "owner", on);
+    if (!on) { g_o_on = g_o_pre = g_o_back = g_o_holding = g_o_sg = g_o_fix = g_o_hold = g_o_handed = 0; g_o_force = NAN; g_latch = 0; g_assist = 0; }
+}
+static void chain_world(int owner, float mass_t, float grade, float k = 2.0f)
+{
+    owner_set(owner);
+    real_chain = 1; real_chooser = 1;
+    own_world(0, 0, grade, mass_t * 1000);
+    E_w = IDLE / 9.5493; K_CLUTCH = k; CUT.from = CUT.to = 1e18;
+    g_rollback_m = 0; g_jerk_max = 0; g_acc_valid = 0; n_shift_slip = n_shift_all = 0;
+    *F_CLUTCH = 1;
+    M.gear = M.target = 0; M.force = 0; M.gap_until = 0; M.shift_at = -10;
+}
+struct launch_res {
+    float over, jerk, rollback, clutch_at_cut, clutch_max_cut, rpm_min; int gear_eng, sg, shifts_slip, shifts;
+    double t_engage, t_lock, t_hand, v_end, t_rel;
+};
+// the pedal ramps up (0.3 s) after 1.5 s of standstill; the run ends 1 s after the hand-off (or the lock, with owner=0), or after 15 s
+static launch_res run_chain(int owner, float mass_t, float grade, float pedal, float k = 2.0f, double cut_at_kmh = -1, double cut_s = 0, int auto_hold = 0)
+{
+    chain_world(owner, mass_t, grade, k);
+    if (auto_hold) { AHL.on = 1; AHL.st = 1; AHL.r = 0.6f; AHL.k = 1; AHL.t_rel = -1; }   // Auto Hold holds the stop (brake request 0.6) until the pedal
+    for (int i = 0; i < 90; i++) tick();     // the stop settles: STOPPED_FREE, the start gear preselected
+    launch_res r = {};
+    r.t_engage = r.t_lock = r.t_hand = r.t_rel = -1; r.rpm_min = 1e9f;
+    bool jerk_taken = false;
+    r.sg = ts_start_gear(fmaxf(pedal, 0.3f));
+    double t0 = t_now;
+    bool seen_launch = false, cut_on = false;
+    for (int i = 0; i < 60 * 15; i++) {
+        double t = t_now - t0;
+        g_thr = fminf(pedal, (float)(t / 0.3 * pedal));
+        if (cut_at_kmh >= 0 && !cut_on && fabs(M.v) * 3.6 >= cut_at_kmh && seen_launch) { CUT.from = t_now; CUT.to = t_now + cut_s; cut_on = true; r.clutch_at_cut = r.clutch_max_cut = (float)g_clutch_drive; }
+        tick();
+        if (t < 0.6) g_jerk_max = 0;
+        creep_info ci; real_creep_info_get(&ci);
+        float lockrpm = M.gear > 0 ? rpm_of(M.gear, M.v) : 0;
+        if (ci.launch) seen_launch = true;
+        if (seen_launch && M.gear > 0 && t > 0.5) r.rpm_min = fminf(r.rpm_min, M.rpm);
+        if (r.t_lock >= 0 && !jerk_taken && t_now >= r.t_lock + 0.3) { r.jerk = (float)g_jerk_max; jerk_taken = true; }   // the launch's jerk: up to 0.3 s after the lock
+        if (ci.launch && M.rpm - lockrpm > 80) r.over = fmaxf(r.over, M.rpm - ci.launch_aim);
+        if (getenv("TRACE1") && owner && fmod(t, 0.05) < 1.0 / 60) printf("      t %.2f pedal %.2f v %.2f km/h gear %d rpm %.0f aim %.0f clutch %.2f launch %d state %s\n", t, g_thr, fabs(M.v) * 3.6, M.gear, M.rpm, ci.launch_aim, g_clutch_drive, ci.launch, low_state_name(g_low.state));
+        if (cut_on && t_now >= CUT.from && t_now <= CUT.to) r.clutch_max_cut = fmaxf(r.clutch_max_cut, (float)g_clutch_drive);
+        if (M.gear > 0 && r.t_engage < 0) { r.t_engage = t_now; r.gear_eng = M.gear; }
+        if (r.t_lock < 0 && seen_launch && M.gear > 0 && g_clutch_drive < 0.02 && fabsf(M.rpm - lockrpm) < 80) r.t_lock = t_now;   // the owner's lock: the clutch closed and the engine on the driveline
+        if (r.t_hand < 0 && g_low.state == LOW_HANDED && r.t_lock >= 0) r.t_hand = t_now;
+        double end = owner ? r.t_hand : r.t_lock;
+        if (auto_hold && r.t_rel < 0 && AHL.t_rel > 0) r.t_rel = AHL.t_rel;
+        if (end >= 0 && t_now - end > 1.0 && (!auto_hold || r.t_rel >= 0)) break;
+    }
+    if (!jerk_taken) r.jerk = (float)g_jerk_max;
+    r.rollback = (float)g_rollback_m;
+    if (auto_hold && r.t_rel < 0 && AHL.t_rel > 0) r.t_rel = AHL.t_rel; r.shifts_slip = n_shift_slip; r.shifts = n_shift_all; r.v_end = fabs(M.v) * 3.6;
+    return r;
+}
+
+static void l1(float mass_t, float grade, float pedal, float k)
+{
+    launch_res o = run_chain(1, mass_t, grade, pedal, k);
+    launch_res b = run_chain(0, mass_t, grade, pedal, k);
+    char tag[80]; snprintf(tag, sizeof tag, "L1 %2.0f t %.0f%% pedal %.2f k %.1f", mass_t, grade, pedal, k);
+    bool starts = o.v_end > 1.0;
+    printf("   %s: start gear %d (engaged %d), over the aim %4.0f (today %4.0f) rpm, jerk %5.0f (today %5.0f), %d shift(s) before the lock (today %d), hand-off %.2f s after the lock, min rpm %.0f%s\n",
+           tag, o.sg, o.gear_eng, o.over, b.over, o.jerk, b.jerk, o.shifts_slip, b.shifts_slip, o.t_hand - o.t_lock, o.rpm_min, starts ? "" : "; the truck does not start (the pedal is too light for the grade)");
+    check(o.gear_eng == o.sg && o.sg > 0, "%s: engaged gear %d, the physics pick is %d", tag, o.gear_eng, o.sg);
+    check(o.over <= (pedal <= 0.2f ? 150.0f : b.over + 10), "%s: the engine ran %.0f rpm over the aim while the clutch slipped (today %.0f)", tag, o.over, b.over);
+    check(o.jerk <= JERK_BOUND, "%s: jerk %.0f", tag, o.jerk);
+    check(o.shifts_slip == 0, "%s: %d gear change(s) before the clutch locked", tag, o.shifts_slip);
+    check(o.rpm_min >= 0.7f * IDLE, "%s: the engine fell to %.0f rpm", tag, o.rpm_min);
+    if (starts && pedal >= 0.5f) check(o.t_lock > 0 && o.t_hand > 0 && o.t_hand - o.t_lock >= 0.45, "%s: lock at %.2f, hand-off at %.2f", tag, o.t_lock, o.t_hand);   // (a light pedal waits for idle + 150 rpm after the lock)
+}
+
+// L1b: the game put a gear in itself (right after the engine started, after reversing: the start function was not called; 24-10 it picked 2 for
+// 36.7 t where the physics said 4): the pedal goes down, gear 2 is in. The owner changes it at the standstill, once: no climb 2>3>4>5, and the
+// law starts after the shift. variant 0 = after the engine started, 1 = after a second in reverse.
+static void l1b(float mass_t, int variant)
+{
+    char tag[80]; snprintf(tag, sizeof tag, "L1b %2.0f t %s", mass_t, variant ? "after reversing" : "after the engine start");
+    float res[2][3] = {};
+    int shifts[2] = {}, gear_end[2] = {}, sg = 0;
+    for (int owner = 1; owner >= 0; owner--) {
+        chain_world(owner, mass_t, 0, 2.0f);
+        for (int i = 0; i < 90; i++) tick();
+        if (variant) { M.gear = -1; for (int i = 0; i < 60; i++) tick(); M.gear = 0; M.target = 0; for (int i = 0; i < 60; i++) tick(); }
+        sg = ts_start_gear(0.5f);
+        bool injected = false, seen = false;
+        double lock = -1;
+        float over = 0, jerk = 0; int gear_lock = 0, shifts_lock = 0;
+        double t0 = t_now;
+        g_jerk_max = 0; g_acc_valid = 0;
+        for (int i = 0; i < 60 * 12; i++) {
+            double t = t_now - t0;
+            g_thr = fminf(0.5f, (float)(t / 0.3 * 0.5));
+            if (!injected && g_thr > 0.06f) { M.gear = 2; M.target = 2; *F_CLUTCH = 1; M.shift_at = t_now; injected = true; }   // the game's own pick, not our start function
+            tick();
+            creep_info ci; real_creep_info_get(&ci);
+            float lockrpm = M.gear > 0 ? rpm_of(M.gear, M.v) : 0;
+            if (ci.launch) seen = true;
+            if (ci.launch && M.rpm - lockrpm > 80) over = fmaxf(over, M.rpm - ci.launch_aim);
+            if (lock < 0 && seen && M.gear > 0 && g_clutch_drive < 0.02 && fabsf(M.rpm - lockrpm) < 80) { lock = t_now; jerk = (float)g_jerk_max; gear_lock = M.gear; shifts_lock = n_shift_all; }
+            if (lock >= 0 && t_now - lock > 1.2) break;
+        }
+        res[owner][0] = over; res[owner][1] = jerk; shifts[owner] = shifts_lock; gear_end[owner] = gear_lock;
+        if (owner) {   // the gear the clutch started to carry in is the pick, and a second shift never came before the lock
+            check(lock > 0, "%s: no lock", tag);
+            check(n_shift_slip == 0, "%s: %d chooser shift(s) before the lock", tag, n_shift_slip);
+        }
+    }
+    printf("   %s: start gear %d, the game put 2 in; owner: %d shift(s) before the lock (the forced one at the standstill), in gear %d at the lock, over the aim %.0f rpm, jerk %.0f; today (no correction in this plant): in gear %d, %d shift(s) before the lock\n",
+           tag, sg, shifts[1], gear_end[1], res[1][0], res[1][1], gear_end[0], shifts[0]);
+    check(sg != 2, "%s: the physics pick is the game's own 2, the test says nothing", tag);
+    check(gear_end[1] == sg, "%s: in gear %d at the lock, the start gear is %d", tag, gear_end[1], sg);
+    check(shifts[1] == 1, "%s: %d shifts, one was due", tag, shifts[1]);
+    check(res[1][1] <= JERK_BOUND, "%s: jerk %.0f", tag, res[1][1]);
+}
+
+// L3 (the design's S6): Auto Hold holds a 36 t truck on 6 % (request 0.6) and lets go in the launch. With the owner the release follows the force of the
+// clutch the smooth-start law commands; today it follows an estimate from the clutch the game shows. No roll back over 0.05 m, the request at 0 within
+// 1.5 s of the clutch closing (before is fine).
+static void l3(float pedal, float k)
+{
+    launch_res o = run_chain(1, 36, 6, pedal, k, -1, 0, 1);
+    launch_res b = run_chain(0, 36, 6, pedal, k, -1, 0, 1);
+    char tag[80]; snprintf(tag, sizeof tag, "L3 36 t 6%% pedal %.2f k %.1f", pedal, k);
+    printf("   %s: rolled back %.3f m (today's estimate %.3f m), the request at 0 %.2f s after the clutch locked (today %.2f s), hand-off %.2f s after the lock, jerk %.0f (today %.0f)\n",
+           tag, o.rollback, b.rollback, o.t_rel - o.t_lock, b.t_rel - b.t_lock, o.t_hand - o.t_lock, o.jerk, b.jerk);
+    check(o.v_end > 1.0, "%s: the truck did not start", tag);
+    check(o.rollback <= 0.05f, "%s: rolled back %.3f m", tag, o.rollback);
+    check(o.t_rel > 0 && o.t_lock > 0 && o.t_rel - o.t_lock <= 1.5, "%s: the hold was let go %.2f s after the lock", tag, o.t_rel - o.t_lock);
+    check(o.jerk <= JERK_BOUND, "%s: jerk %.0f", tag, o.jerk);
+}
+
+// L2 (the design's S5b): the game's effective throttle goes to 0 for 0.8 s at 4 km/h with the pedal flat (25-10 16:50, 35.8 t). The owner freezes the
+// clutch: it does not open again. Without the owner (today) the law reads the sagging engine as dragged and opens it.
+static void l2()
+{
+    launch_res o = run_chain(1, 35.8f, 0, 1.0f, 2.0f, 1.5, 0.8);
+    launch_res b = run_chain(0, 35.8f, 0, 1.0f, 2.0f, 1.5, 0.8);
+    float ro = o.clutch_max_cut - o.clutch_at_cut, rb = b.clutch_max_cut - b.clutch_at_cut;
+    printf("   L2 35.8 t, pedal 1.0, the engine's throttle 0 for 0.8 s from 1.5 km/h (this plant's clutch is closed by 3.7 km/h): the clutch at the cut %.2f; it opens by %.2f during the cut with the owner, by %.2f today; engine low %.0f rpm (today %.0f), jerk to the lock %.0f (today %.0f)\n",
+           o.clutch_at_cut, ro, rb, o.rpm_min, b.rpm_min, o.jerk, b.jerk);
+    check(o.clutch_at_cut > 0.05f, "L2: the clutch was at %.2f when the cut came (closed already or the cut never came)", o.clutch_at_cut);
+    check(ro <= 0.02f, "L2: the clutch reopened by %.2f during the cut", ro);
+    check(rb > 0.05f, "L2: without the owner it reopens by only %.2f: the test does not show the problem", rb);
+    check(o.rpm_min >= 0.7f * IDLE, "L2: the engine fell to %.0f rpm", o.rpm_min);
+    check(o.jerk <= JERK_BOUND, "L2: jerk %.0f", o.jerk);
+}
+
 int main(int argc, char **argv)
 {
     verbose = argc > 1 && !strcmp(argv[1], "-v");
     float r[16];
     for (int k = 0; k < 12; k++) r[k] = 11.73f * powf(0.79f / 11.73f, k / 11.0f);   // Optidriver ATO2612F: 12 speeds, no crawl gears
     memcpy(RATIO, r, sizeof r);
-    for (module *m : { &m_trueshift, &m_lowspeed })
+    for (module *m : { &m_trueshift, &m_lowspeed, &m_creep })
         for (int i = 0; i < m->n_params; i++) *m->params[i].val = m->params[i].def;
     set_param(m_trueshift, "idle_rpm", IDLE);
     set_param(m_lowspeed, "trace", 1);
@@ -832,6 +1199,18 @@ int main(int argc, char **argv)
     bool moves = false;
     for (int i = 1; i < 3; i++) moves = moves || gears[i] != gears[0];
     check(moves, "S6: the start gear is %d, %d and %d at 18, 25 and 36 t: the open point does not move with the mass", gears[0], gears[1], gears[2]);
+    printf("== L1 pull-aways through the real chain (Creep's law, TrueShift's chooser, the owner): 13 / 30 / 40 t, flat and 4 %%, pedal 0.15 / 0.5 / 1.0\n");
+    for (float m : { 13.0f, 30.0f, 40.0f }) for (float g : { 0.0f, 4.0f }) for (float p : { 0.15f, 0.5f, 1.0f }) l1(m, g, p, 2.0f);
+    printf("== L1b the game put a gear in itself (the start function not called): the owner changes it at the standstill, once\n");
+    for (float m : { 13.0f, 40.0f }) for (int v : { 0, 1 }) l1b(m, v);
+    printf("== L2 an injected drop of the engine's own throttle at a full pedal: the clutch does not open again\n");
+    l2();
+    printf("== L4 Stop&Go drive-off behind a lead through the real chain: the launch law runs on the cruise throttle\n");
+    s3_real = 1;
+    s3(1.0f, false);
+    s3_real = 0; real_chain = 0; real_chooser = 0;
+    printf("== L3 Auto Hold lets go with the clutch torque the owner commands: 36 t on 6 %%\n");
+    for (float k : { 1.6f, 2.0f, 2.5f, 3.0f }) for (float p : { 0.3f, 0.5f, 1.0f }) l3(p, k);
     printf("\n%d checks, %d failed\n", n_checks, n_failed);
     return n_failed ? 1 : 0;
 }

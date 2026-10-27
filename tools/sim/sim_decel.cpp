@@ -140,6 +140,9 @@ int game_patch_tail(uintptr_t, void *pre) { s_tail = (void (*)(void *))pre; retu
 int game_patch_stop(uintptr_t, float (*)(float, float, float)) { return 0; }
 int low_owner_on() { return 0; }
 int low_owner_wanted() { return 0; }
+int low_start_gear() { return 0; }
+int low_launch_hold() { return 0; }
+int low_handed() { return 0; }
 float low_stop_rpm(float idle, float, float, int) { return 0.8f * idle; }
 int route_ok() { return 0; }
 float route_grade(float, float) { return NAN; }

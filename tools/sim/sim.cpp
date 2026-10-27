@@ -272,6 +272,9 @@ int game_patch_tail(uintptr_t site, void *pre) { s_tail = (void (*)(void *))pre;
 int game_patch_stop(uintptr_t, float (*)(float, float, float)) { return 0; }
 int low_owner_on() { return 0; }   // the low-speed owner (lowspeed.cpp) is not part of this sim
 int low_owner_wanted() { return 0; }
+int low_start_gear() { return 0; }
+int low_launch_hold() { return 0; }
+int low_handed() { return 0; }
 float low_stop_rpm(float idle, float, float, int) { return 0.8f * idle; }
 void gb_set_target(void *, int g) { M.target = g; }
 void game_cvar_set(void *, float v) { M.cvar = v; }

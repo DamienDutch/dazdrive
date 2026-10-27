@@ -75,6 +75,9 @@ int gb_engage(void *, int) { return 0; }
 int gb_engine(void *, engine_info *) { return 0; }
 float game_grade_deg(void *) { return NAN; }
 float curve_factor(const engine_info *, float) { return 1; }
+int low_owner_on() { return 0; }          // the low-speed owner (lowspeed.cpp) is not part of this sim
+float low_top_kmh() { return 0; }
+void cruise_info_get(cruise_info *o) { memset(o, 0, sizeof *o); }
 
 #include "modules/creep.cpp"
 #include "core/display.cpp"
@@ -238,7 +241,7 @@ static void run_launch(const char *name, float thr_end, float mass, float grade_
         if (t10 < 0 && v * 3.6f >= 10) t10 = t;
         if (verbose && n % 20 == 0) printf("   t=%4.2f pedal %.2f v %5.2f km/h rpm %5.0f aim %5.0f clutch %.2f launch %d acc %.2f\n", t, thr, v * 3.6f, w * 9.5493f, g_ln_ra, c, g_ln, acc);
     }
-    printf("   while launching: rpm max %.0f (%.0f over the aim), launch ended %s, clutch closed at %.1f s, speed then %.1f km/h\n", rpm_max, over_max, g_ln ? "NOT" : g_ln_why, lock_t, v_lock * 3.6f);
+    printf("   while launching: rpm max %.0f (%.0f over the aim), launch ended %s, clutch closed at %.1f s, speed then %.1f km/h, jerk max %.0f m/s3\n", rpm_max, over_max, g_ln ? "NOT" : g_ln_why, lock_t, v_lock * 3.6f, jerk_max);
 }
 
 static void ev_none(double) {}
