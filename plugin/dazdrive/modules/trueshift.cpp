@@ -56,7 +56,7 @@ static param g_params[] = {
     { "choice_over_weight", &p_ch_over, 1.0f, "choice 1: weight of the cost of revs over the mode's upshift point (it grows with the square of the distance; one quarter of the way from the point to the top of the window costs this much). 0 = off" },
     { "choice", &p_choice, 0, "0 = the gear is chosen by the shift points and rules (upshift and downshift points, reserve, skip checks). 1 = the gear is chosen by scores: of the gears the hard rules allow, the one with the lowest cost of throttle, revs and shift time wins (the hard rules still run first: rev limit, stall, braking, engine brake, kickdown, hints, dwell times). Aims at fewer shifts and more drive time" },
     { "choice_comfort_eco", &p_ch_eco, 0.9f, "choice 1, Eco: the share of its full-throttle force a gear may need for the acceleration asked before it starts to cost a lot (higher = skips as far as the engine can pull)" },
-    { "choice_comfort", &p_ch_norm, 0.8f, "choice 1, Normal: the same, a little more careful" },
+    { "choice_comfort", &p_ch_norm, 0.45f, "choice 1, Normal: the same, a little more careful" },
     { "choice_comfort_power", &p_ch_power, 0.65f, "choice 1, Power: the same, the most careful (skips the least)" },
     { "choice_rpm_weight", &p_ch_rpm, 0.5f, "choice 1: weight of the cost of the revs (far above the torque plateau, and just above idle under load). A guess, there is no efficiency map: 0 = revs do not count" },
     { "choice_shift_weight", &p_ch_shift, 8.0f, "choice 1: weight of the cost of a shift (the shift time of the gearbox times the power asked: the drive time it loses). Higher = fewer, longer shifts, more skipping, mostly with a slow gearbox" },
