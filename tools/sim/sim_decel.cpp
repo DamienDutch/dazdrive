@@ -31,6 +31,9 @@
 // Build+run: tools/sim/run_decel.sh [-v]
 #include "core/suite.h"
 #include "core/game.h"
+#include "core/route.h"
+#include "core/vehicle.h"
+#include <initializer_list>
 #include <math.h>
 #include <stdarg.h>
 #include <string.h>
@@ -62,8 +65,15 @@ double sim_s() { return t_now; }
 void csv_cap(FILE **, const char *) {}
 FILE *open_out(const char *, const char *) { return NULL; }
 static int verbose, vstep = 20;
+static struct { double t; char why[40]; } g_shlog[64];   // the gear shifts TrueShift logged (the geared runs): when, and the reason
+static int g_nshlog;
 void logline(const char *fmt, ...)
 {
+    if (!strncmp(fmt, "shift %d->%d (%s)", 17)) {
+        va_list ap; va_start(ap, fmt); va_arg(ap, int); va_arg(ap, int);
+        if (g_nshlog < 64) { g_shlog[g_nshlog].t = t_now; snprintf(g_shlog[g_nshlog++].why, sizeof g_shlog[0].why, "%s", va_arg(ap, const char *)); }
+        va_end(ap);
+    }
     if (!verbose) return;
     va_list ap; va_start(ap, fmt); printf("%7.2f  ", t_now); vprintf(fmt, ap); printf("\n"); va_end(ap);
 }
@@ -71,14 +81,104 @@ int mem_readable(const void *, size_t) { return 0; }
 uintptr_t game_scan(const char *) { return 0; }
 int game_patch_clutch_floor(uintptr_t, clutch_floor *) { return 0; }
 int game_patch_cf0_if(uintptr_t, int, const unsigned char *) { return 0; }
-int game_patch_call(uintptr_t, void *) { return 0; }
 char *game_actor_safe() { return NULL; }
 void cruise_info_get(cruise_info *o) { memset(o, 0, sizeof *o); }   // no Auto Hold here: the assist lets go at a standstill
-float wheel_radius() { return 0.5f; }
+static float g_radius = 0.5f;
+float wheel_radius() { return g_radius; }
+
+// ---- what TrueShift and the vehicle model (linked for real, for the geared runs) need of the game: the gearbox of the geared plant below
+static struct { int gear, target, state, parked, engaged, force; double shift_end; } GB;
+static float g_mass_kg = 18000, GB_SHIFT_S = 1.1f;
+static const float G_RATIO[12] = { 11.73f, 9.21f, 7.09f, 5.57f, 4.35f, 3.41f, 2.7f, 2.12f, 1.63f, 1.28f, 1.0f, 0.78f };   // the 12-speed of the TrueShift sim (Volvo FH 2400 Nm)
+static const float G_CURVE[8][2] = { {0,0},{600,0.62f},{900,1},{1230,1},{1600,0.77f},{1700,0.69f},{1800,0.44f},{2000,0} };
+static const float G_RANGES[4][2] = { {1500,1900},{750,1450},{900,1250},{1200,1650} };   // engine brake, low gear, high gear, power (down, up) rpm
+static const float G_DIFF = 2.85f, G_RADIUS = 0.506f, G_TORQUE = 2400, G_LIMIT = 1900;
+char *gb_inner(void *) { return (char *)&GB; }
+int gb_gear(void *) { return GB.gear; }
+int gb_target(void *) { return GB.target; }
+int gb_state(void *) { return GB.parked ? 1 : GB.state; }
+int gb_engage(void *, int g) { if (!GB.parked) return 0; GB.target = g; GB.engaged = 1; GB.parked = 0; return 1; }
+int game_engage_init() { return 1; }
+void gb_force(void *) { GB.force = 1; }
+void gb_set_target(void *, int g) { GB.target = g; }
+float gb_thr_in(void *) { return 0; }
+float gb_thr_eff(void *) { return 0; }
+int gb_engine(void *, engine_info *e)
+{
+    memset(e, 0, sizeof *e);
+    e->torque = G_TORQUE; e->rpm_limit = G_LIMIT; e->n_curve = 8; e->shift_time = GB_SHIFT_S;
+    memcpy(e->curve, G_CURVE, sizeof G_CURVE);
+    memcpy(e->range, G_RANGES, sizeof G_RANGES);
+    return 1;
+}
+float curve_factor(const engine_info *e, float rpm)
+{
+    if (rpm <= e->curve[0][0]) return e->curve[0][1];
+    for (int i = 1; i < e->n_curve; i++)
+        if (rpm <= e->curve[i][0])
+            return e->curve[i-1][1] + (rpm - e->curve[i-1][0]) / (e->curve[i][0] - e->curve[i-1][0]) * (e->curve[i][1] - e->curve[i-1][1]);
+    return e->curve[e->n_curve-1][1];
+}
+float game_mass() { return g_mass_kg; }
+float game_grade_deg(void *) { return 0; }
+float game_adaptive() { return 3; }
+int game_adaptive_blocked() { return 0; }
+int game_letter(void *, char) { return 1; }
+void *game_gearbox() { return (void *)&GB; }
+int game_ebrake_downshift(void *) { return 0; }
+float game_ebrake_level(void *) { return -1; }
+static window_fn s_decide; static gear_fn s_choose, s_start; static void (*s_tail)(void *);
+int game_patch_call(uintptr_t site, void *stub)
+{
+    if (site == 1) s_decide = (window_fn)stub;
+    if (site == 2) s_choose = (gear_fn)stub;
+    if (site == 4) s_start = (gear_fn)stub;
+    return 1;
+}
+int game_patch_tail(uintptr_t, void *pre) { s_tail = (void (*)(void *))pre; return 1; }
+int game_patch_stop(uintptr_t, float (*)(float, float, float)) { return 0; }
+int low_owner_on() { return 0; }
+int low_owner_wanted() { return 0; }
+float low_stop_rpm(float idle, float, float, int) { return 0.8f * idle; }
+int route_ok() { return 0; }
+float route_grade(float, float) { return NAN; }
+float route_max_grade(float, float) { return NAN; }
+float route_min_grade(float, float) { return NAN; }
+float route_crest_m(float) { return -1; }
+float route_junction_m() { return -1; }
+float route_curve_speed(float, float, float) { return NAN; }
+void creep_info_get(creep_info *o) { memset(o, 0, sizeof *o); }
+float cruise_wish_force(float) { return -1; }
+float pedal_wish_force(float) { return -1; }
+static float *f_window(void *, float *out, unsigned g)
+{
+    float k = (g - 1) / 11.0f;
+    out[0] = G_RANGES[1][0] + k * (G_RANGES[2][0] - G_RANGES[1][0]); out[1] = G_RANGES[1][1] + k * (G_RANGES[2][1] - G_RANGES[1][1]);
+    return out;
+}
+static float g_rpm_now() { return GB.gear > 0 ? fabsf(T.speed) / G_RADIUS * G_RATIO[GB.gear - 1] * G_DIFF * 9.5493f : 600; }
+// the game's stock chooser, roughly: one gear toward the window (the same guess as the TrueShift sim)
+static int f_choose(void *)
+{
+    GB.force = 0;
+    if (GB.gear == 0) {
+        int best = 1; float be = 1e9f;
+        for (int g = 1; g <= 12; g++) { float r = fabsf(T.speed) / G_RADIUS * G_RATIO[g-1] * G_DIFF * 9.5493f; if (fabsf(r - 1100) < be) { be = fabsf(r - 1100); best = g; } }
+        return best;
+    }
+    float w[2], r = g_rpm_now();
+    f_window(0, w, GB.gear);
+    if (r > w[1] && GB.gear < 12) return GB.gear + 1;
+    if (r < w[0] && GB.gear > 1) return GB.gear - 1;
+    return GB.gear;
+}
+static int f_start(void *) { return g_mass_kg > 20000 ? 1 : 4; }
 
 #include "modules/decel.cpp"
 #include "core/rsc.cpp"
 #include "core/actuate.cpp"
+
+extern module m_trueshift;
 
 // ---- plant
 static const float RET18[4] = { 0.8f, 1.6f, 2.4f, 3.0f };   // the retarder's deceleration per step of a 4-step truck at 18 t (measured)
@@ -301,6 +401,230 @@ static res run(const sc &s)
     return r;
 }
 
+// ---- the geared plant: the same truck, with a gearbox and TrueShift (linked for real) choosing the gears, from 60 km/h to a stop with the
+// lever held. What the flat plant above does not have: the retarder's torque is on the engine side, so its deceleration at the wheels
+// goes through the gear ratio (RET18 is the 18 t value at the ratio of 40 km/h at 1300 rpm, RT_REF; a lower gear brakes more, a higher
+// one less); it vanishes with the clutch open (down to the same floor as above); and an engine-brake term rises with the rpm, from
+// nothing a little under the engine's brake range (G_RANGES, from the engine definition) to its full strength inside it. The lever's
+// step sets the share of that engine brake (step / steps, as the game adds engine brake by itself to the retarder lever). The numbers
+// of the engine brake and the ratio dependence are assumptions (a plant), the proof is that the logic uses the engine's ranges, not them.
+static const float RT_REF = 6.2f, EB_TORQUE = 0.35f * G_TORQUE, DRAG_TORQUE = 0.05f * G_TORQUE, ETA = 0.9f;
+
+struct gsc {
+    float mass_t, gain; int n, step;
+    int dec_on, pre, dsa, hook, choice;
+    float kmh0, ramp_s;
+    int motor_brake;         // the engine brake lever instead of the retarder
+    gsc() : mass_t(18), gain(1), n(4), step(2), dec_on(1), pre(1), dsa(1), hook(1), choice(0), kmh0(60), ramp_s(-1), motor_brake(0) {}
+};
+struct gshift {
+    double t_open, t_close; int from, to; char why[40]; float kmh; float rpm_after;
+    int pre;                                          // a hand-over ahead of this shift had begun when the clutch opened
+    float bf_lo, bf_hi, in_lo, in_hi, af_lo, af_hi;   // deceleration - target in the 0.8 s before the open, from the open to the close, in the 1.0 s after the close
+    float af_jerk;
+    bool judged() const { return to < from && kmh >= 12 && t_open >= 2.0 && t_close > 0; }   // (not the lever's pull-in, not the last shifts before neutral)
+};
+struct gres {
+    double t_stop;           // s (-1 = no stop)
+    float brake_int, brake_int8;   // the integral of the brake request over the run (request x s), and above 8 km/h
+    float rpm_max;           // highest engine rpm with the clutch closed
+    int n_shift, n_assist, n_hunt;
+    float assist_rpm_lo, assist_rpm_hi;   // rpm after the shifts of the assist
+    float bf_lo, bf_hi, in_lo, in_hi, af_lo, af_hi;   // deceleration - target before / in / after the judged downshifts (see gshift), all of them
+    float pf_lo, pf_hi, pi_lo, pi_hi, pa_lo, pa_hi;   // the same over the ones a hand-over ahead of the shift had begun for
+    int n_dn, n_pre;                                  // judged downshifts, and how many had a hand-over ahead of them
+    float af_jerk, bu_sum; int bu_n, n_judged;   // largest jerk after a closing, the build-up of the retarder factor (mean), closings judged
+    float rt_sum; int rt_n;
+    int pre_started;         // how often a hand-over ahead of a shift began
+    float ret_off_s;         // the longest stretch the retarder factor stayed under 0.5 outside a gap and its ramp (a hand-over ahead of a shift that did not come)
+    gshift sh[40];
+};
+
+static gres run_g(const gsc &s)
+{
+    gres r; memset(&r, 0, sizeof r);
+    r.t_stop = -1; r.bf_lo = r.in_lo = r.af_lo = r.pf_lo = r.pi_lo = r.pa_lo = 99; r.bf_hi = r.in_hi = r.af_hi = r.pf_hi = r.pi_hi = r.pa_hi = -99; r.assist_rpm_lo = 99999;
+    rng = 12345; g_nshlog = 0;
+    memset(&T, 0, sizeof T);
+    T.fwd_gears = 12; T.diff = G_DIFF; T.wheels = 4;
+    for (int i = 0; i < 12; i++) T.ratio[i] = G_RATIO[i];
+    T.engine_on = 1; T.air_psi = 120;
+    if (s.motor_brake) { T.motor_brake = 1; T.retarder = 0; T.retarder_steps = 0; }
+    else { T.retarder = (unsigned)s.step; T.retarder_steps = (unsigned)s.n; }
+    g_mass_kg = s.mass_t * 1000; g_radius = G_RADIUS;
+    for (auto &p : g_params) *p.val = p.def;
+    p_enabled = (float)s.dec_on; p_pre = (float)s.pre;
+    if (s.ramp_s >= 0) p_ramp = s.ramp_s;
+    D = decltype(D)();
+    for (int i = 0; i < m_trueshift.n_params; i++) *m_trueshift.params[i].val = m_trueshift.params[i].def;
+    for (int i = 0; i < m_trueshift.n_params; i++) if (!strcmp(m_trueshift.params[i].key, "choice")) *m_trueshift.params[i].val = (float)s.choice;
+    memset(buf, 0, sizeof buf);
+    for (int o = 0; o < ACT_N; o++) { act_brake(o, 0); act_retarder_scale(o, 1); }
+    g_ret_scale = 1.0f; s_ret_in = s.hook != 0;
+    s_req_ours = 0; s_dec_was = 0; s_br_at = 0; s_hooked = 1;
+    s_aeb_was = s_hill_was = s_hold_was = 0;
+    t_now = 0;
+    vehicle_reset(RESET_HARD);
+    m_trueshift.reset(RESET_HARD, "sim");
+
+    const float k_m = 18.0f / s.mass_t, G = 6.0f * s.gain;
+    const float lo = G_RANGES[0][0], hi = G_RANGES[0][1];
+    float v = s.kmh0 / 3.6f, y = 0, rb = 0, hist[10] = { 0 }, tgt_full = decel_target(s.step, s.n);
+    memset(&GB, 0, sizeof GB);
+    {   // the gear nearest 1100 rpm
+        int best = 1; float be = 1e9f;
+        for (int g = 1; g <= 12; g++) { float rr = v / G_RADIUS * G_RATIO[g-1] * G_DIFF * 9.5493f; if (fabsf(rr - 1100) < be) { be = fabsf(rr - 1100); best = g; } }
+        GB.gear = GB.target = best;
+    }
+    T.speed = v; T.gear = T.dgear = GB.gear; T.rpm = g_rpm_now();
+    int neutral = 0, step_i = 0, hi_i = 0;
+    double frame_at = 0, gap_t0 = -1, gap_t1 = -1, flip_t = -1, stop_at = -1;
+    bool in_gap = false;
+    int ns = 0;
+    float a = 0, prev_v = v;
+    float bu_f[120]; int bu_i = 0; bool rt_got = false;
+    auto bu_end = [&]() {
+        if (bu_i >= 60 && fabsf(bu_f[bu_i - 1] - bu_f[0]) > 0.05f) {
+            int i = 0;
+            while (i < bu_i - 1 && (bu_f[i] - bu_f[0]) / (bu_f[bu_i - 1] - bu_f[0]) < 0.95f) i++;
+            r.bu_sum += (float)(i * DT); r.bu_n++;
+        }
+        bu_i = 0;
+    };
+    double judged_t1 = -1, last_t = -1; float last_v = 0, off_run = 0;
+    float dh[80], vh[80]; int dhn = 0;   // the last 0.8 s of decel - target and speed (the "before" of a shift is judged when it starts)
+    for (; t_now < 90; step_i++) {
+        double t = t_now;
+        // the gearbox: neutral under 5.2 km/h (the stop assist's part), else a shift in progress or the game's update
+        if (!neutral && v * 3.6f < NEUTRAL_KMH) {
+            neutral = 1; GB.gear = GB.target = 0; GB.state = 0; in_gap = false;
+            if (ns > 0 && r.sh[ns - 1].t_close < 0) { r.sh[ns - 1].t_close = t; r.sh[ns - 1].kmh = 0; }   // (the box goes to neutral: that shift is not judged)
+        }
+        if (!neutral && GB.state && flip_t >= 0 && t >= flip_t) { GB.gear = GB.target; flip_t = -1; }
+        if (!neutral && GB.state && t >= GB.shift_end) {
+            GB.state = 0; in_gap = false; gap_t1 = t;
+            if (ns > 0 && r.sh[ns - 1].t_close < 0) { r.sh[ns - 1].t_close = t; r.sh[ns - 1].rpm_after = v / G_RADIUS * G_RATIO[GB.gear - 1] * G_DIFF * 9.5493f; }
+        }
+        T.eff_clutch = in_gap ? 1.0f : 0.0f;
+        T.gear = T.dgear = GB.gear;
+        // the plant's forces
+        float rt = GB.gear > 0 ? G_RATIO[GB.gear - 1] * G_DIFF : 0, rpm = GB.gear > 0 ? v / G_RADIUS * rt * 9.5493f : 600;
+        rb += (1 - rb) * (float)(DT / BUILD_S);
+        float lever = s.motor_brake ? 0.0f : (ret_step18(s.step, s.n) * k_m);
+        float full = lever * (rt > 0 ? rt / RT_REF * fminf(1.0f, fmaxf(0.3f, rpm / 1300.0f)) : 1.0f) * rb, fl = fminf(FLOOR18 * k_m * (s.motor_brake ? 0.0f : 1.0f), full), env = 1;
+        if (in_gap) env = fmaxf(0.0f, 1 - (float)(t - gap_t0) / FALL_S);
+        float fade = fminf(fmaxf((v * 3.6f - 4.5f) / 1.5f, 0.0f), 1.0f);
+        float ret = neutral ? COAST : (fl + (full - fl) * env) * fade * g_ret_scale;
+        y += (cur_req() - y) * (float)(DT / LAG_S);
+        float bd = G * y;
+        float eb = 0, drag = 0;
+        if (!neutral && !in_gap && GB.gear > 0) {
+            float share = s.motor_brake ? 1.0f : (float)s.step / (float)s.n;
+            float fe = fminf(fmaxf((rpm - 0.6f * lo) / (0.4f * lo), 0.0f), 1.0f);
+            eb = EB_TORQUE * share * fe * rt * ETA / (G_RADIUS * g_mass_kg) * fade;
+            drag = DRAG_TORQUE * (rpm / G_LIMIT) * rt * ETA / (G_RADIUS * g_mass_kg) * fade;
+            r.rpm_max = fmaxf(r.rpm_max, rpm);
+        }
+        a = ret + bd + eb + drag;
+        // the frame (50 Hz): telemetry, the vehicle model, TrueShift, the assist
+        if (t >= frame_at) {
+            frame_at += 0.02;
+            T.sim_time = (scs_timestamp_t)(t * 1e6);
+            T.speed = v + NOISE * gauss();
+            T.rpm = neutral ? 600 : GB.gear > 0 ? fabsf(T.speed) / G_RADIUS * G_RATIO[GB.gear - 1] * G_DIFF * 9.5493f : 600;
+            double fdt = t - last_t;
+            if (fdt > 0.0 && fdt < 0.5) { float aa = (float)((fabsf(T.speed) - last_v) / fdt); T.accel += (float)(fdt / (0.5 + fdt)) * (aa - T.accel); }
+            last_t = t; last_v = fabsf(T.speed);
+            if (!neutral) { vehicle_frame(); m_trueshift.frame(); }
+            de_frame();
+        }
+        // the game's gearbox update (100 Hz): the window trigger, the chooser, the tail
+        if (!neutral && !GB.state && GB.gear > 0) {
+            GB.target = GB.gear;
+            float w[2];
+            s_decide((void *)&GB, w, GB.gear);
+            float rr = g_rpm_now();
+            if (GB.force || rr < w[0] || rr > w[1]) { GB.target = s_choose((void *)&GB); GB.force = 0; }
+            GB.engaged = 0;
+            if (s_tail) s_tail((void *)&GB);
+            if (GB.target != GB.gear) {
+                GB.state = 1; in_gap = true; gap_t0 = t; GB.shift_end = t + GB_SHIFT_S + GAP_JITTER * (2 * uni() - 1);
+                flip_t = GB.shift_end - TAIL_S - TAIL_JITTER * (2 * uni() - 1);
+                if (ns < 40) {
+                    gshift &g = r.sh[ns++];
+                    g.t_open = t; g.t_close = -1; g.from = GB.gear; g.to = GB.target; g.kmh = v * 3.6f; g.rpm_after = 0;
+                    g.why[0] = 0; g.pre = D.ph > 0.05f;
+                    g.bf_lo = g.in_lo = g.af_lo = 99; g.bf_hi = g.in_hi = g.af_hi = -99; g.af_jerk = 0;
+                    for (int k = 0; k < dhn; k++) if (vh[k] * 3.6f > 12) { g.bf_lo = fminf(g.bf_lo, dh[k]); g.bf_hi = fmaxf(g.bf_hi, dh[k]); }
+                }
+            }
+        }
+        act_brake_write(buf);   // the game tick
+        r.brake_int += cur_req() * (float)DT;
+        if (v * 3.6f > 8) r.brake_int8 += cur_req() * (float)DT;
+        // judge
+        float jerk = (a - hist[hi_i]) / 0.1f;
+        hist[hi_i] = a; hi_i = (hi_i + 1) % 10;
+        (void)hi; (void)prev_v;
+        if (dhn < 80) { dh[dhn] = a - tgt_full; vh[dhn] = v; dhn++; } else { for (int k = 0; k < 79; k++) { dh[k] = dh[k + 1]; vh[k] = vh[k + 1]; } dh[79] = a - tgt_full; vh[79] = v; }
+        // the shifts that downshift above 12 km/h: in (the open to the close) and after (1.0 s after the close); the before is judged above
+        for (int i = 0; i < ns; i++) {
+            gshift &g = r.sh[i];
+            if (g.to >= g.from || g.kmh < 12 || v * 3.6f < 12) continue;
+            float d = a - tgt_full;
+            if (t >= g.t_open && (g.t_close < 0 || t < g.t_close)) { g.in_lo = fminf(g.in_lo, d); g.in_hi = fmaxf(g.in_hi, d); }
+            else if (g.t_close >= 0 && t >= g.t_close && t < g.t_close + 1.0) { g.af_lo = fminf(g.af_lo, d); g.af_hi = fmaxf(g.af_hi, d); g.af_jerk = fmaxf(g.af_jerk, fabsf(jerk)); }
+        }
+        // the build-up after a closing (the retarder factor)
+        if (gap_t1 > 0 && !in_gap && t >= gap_t1 && t < gap_t1 + 1.0 && v * 3.6f > 12 && !neutral) {
+            if (judged_t1 != gap_t1) { bu_end(); rt_got = false; judged_t1 = gap_t1; r.n_judged++; }
+            if (bu_i < 120) bu_f[bu_i++] = g_ret_scale;
+            if (!rt_got && D.rt >= 0) { rt_got = true; r.rt_sum += D.rT; r.rt_n++; }
+        }
+        if (g_ret_scale < 0.5f && !in_gap && !neutral && D.rt < 0 && D.on) { off_run += (float)DT; r.ret_off_s = fmaxf(r.ret_off_s, off_run); }
+        else off_run = 0;
+        if (verbose && step_i % vstep == 0) printf("   t=%5.2f v=%5.1f g=%2d rpm=%4.0f a=%5.2f ret=%4.2f bd=%4.2f eb=%4.2f req=%.3f lvl=%.3f ph=%.2f k=%.2f kr=%.2f kb=%.3f eta=%5.2f %s\n", t, v * 3.6f, GB.gear, rpm, a, ret, bd, eb, cur_req(), D.lvl, D.ph, g_ret_scale, D.kr, D.k, D.on ? ts_brake_down_eta(fmaxf(D.a, 0)) : NAN, in_gap ? "gap" : neutral ? "neutral" : "");
+        // the truck
+        prev_v = v;
+        v -= a * (float)DT;
+        if (v < 0) v = 0;
+        t_now += DT;
+        if (v <= 0 && stop_at < 0) { stop_at = t_now; r.t_stop = t_now; }
+        if (stop_at >= 0 && t_now > stop_at + 1.0) break;
+    }
+    bu_end();
+    r.n_shift = ns;
+    for (int i = 0; i < ns; i++) {
+        double best = 1e9;   // the reason: the log line nearest the close
+        for (int k = 0; k < g_nshlog; k++) if (fabs(g_shlog[k].t - r.sh[i].t_close) < best && fabs(g_shlog[k].t - r.sh[i].t_close) < 0.3) { best = fabs(g_shlog[k].t - r.sh[i].t_close); snprintf(r.sh[i].why, sizeof r.sh[i].why, "%s", g_shlog[k].why); }
+        if (!strcmp(r.sh[i].why, "braking assist") && r.sh[i].to < r.sh[i].from) {
+            r.n_assist++;
+            r.assist_rpm_lo = fminf(r.assist_rpm_lo, r.sh[i].rpm_after); r.assist_rpm_hi = fmaxf(r.assist_rpm_hi, r.sh[i].rpm_after);
+        }
+        // hunting: a shift the other way within 4 s of the one before (only the ones above the neutral point)
+        if (i > 0 && r.sh[i].kmh > 0 && (r.sh[i].to - r.sh[i].from) * (r.sh[i-1].to - r.sh[i-1].from) < 0 && r.sh[i].t_open - r.sh[i-1].t_open < 4.0) r.n_hunt++;
+        const gshift &g = r.sh[i];
+        if (!g.judged()) continue;
+        r.n_dn++;
+        r.bf_lo = fminf(r.bf_lo, g.bf_lo); r.bf_hi = fmaxf(r.bf_hi, g.bf_hi); r.in_lo = fminf(r.in_lo, g.in_lo); r.in_hi = fmaxf(r.in_hi, g.in_hi);
+        r.af_lo = fminf(r.af_lo, g.af_lo); r.af_hi = fmaxf(r.af_hi, g.af_hi); r.af_jerk = fmaxf(r.af_jerk, g.af_jerk);
+        if (g.pre) {
+            r.n_pre++;
+            r.pf_lo = fminf(r.pf_lo, g.bf_lo); r.pf_hi = fmaxf(r.pf_hi, g.bf_hi); r.pi_lo = fminf(r.pi_lo, g.in_lo); r.pi_hi = fmaxf(r.pi_hi, g.in_hi);
+            r.pa_lo = fminf(r.pa_lo, g.af_lo); r.pa_hi = fmaxf(r.pa_hi, g.af_hi);
+        }
+    }
+    return r;
+}
+
+static void geared_init()
+{
+    G.tail_site = 5; G.decide_site = 1; G.n_choose = 1; G.choose_sites[0] = 2; G.n_start = 1; G.start_sites[0] = 4;
+    G.window_fn = (uintptr_t)f_window; G.chooser_fn = (uintptr_t)f_choose; G.start_fn = (uintptr_t)f_start;
+    for (int i = 0; i < m_trueshift.n_params; i++) *m_trueshift.params[i].val = m_trueshift.params[i].def;
+    m_trueshift.start();
+}
+
 static int fails;
 static bool bits_one(float f) { return f == 1.0f; }
 static void check(bool ok, const char *what, char *why, size_t n)
@@ -317,6 +641,16 @@ int main(int argc, char **argv)
         sc s; s.mass_t = (float)atof(argv[2]); s.gain = (float)atof(argv[3]); s.n = atoi(argv[4]); s.step = atoi(argv[5]); vstep = atoi(argv[6]); verbose = 1; if (argc == 8) { s.soften = 1; s.snap = 1; s.cycle = (float)atof(argv[7]); }
         res r = run(s);
         printf("ovs at %.2f s; gap err %.2f ovs %.2f jerk %.1f edge %.1f fin %.1f stop %.1f\n", r.ovs_t, r.gap_err, r.ovs, r.jerk, r.edge, r.final_jerk, r.t_stop);
+        return 0;
+    }
+    if (argc == 9 && !strcmp(argv[1], "-g")) {   // one geared run with the trace: -g mass_t step n dsa pre hook every_nth_step
+        geared_init();
+        gsc g; g.mass_t = (float)atof(argv[2]); g.step = atoi(argv[3]); g.n = atoi(argv[4]); g.dsa = atoi(argv[5]); g.pre = atoi(argv[6]); g.hook = atoi(argv[7]); vstep = atoi(argv[8]); verbose = 1;
+        gres r = run_g(g);
+        printf("stop %.1f s, brake integral %.2f (above 8 km/h %.2f), rpm max %.0f, %d shifts (%d by the assist), hunts %d\n", r.t_stop, r.brake_int, r.brake_int8, r.rpm_max, r.n_shift, r.n_assist, r.n_hunt);
+        for (int i = 0; i < r.n_shift; i++) printf("   shift %2d>%2d at %5.1f s, %4.1f km/h (%s)%s, open %.2f s, rpm after %.0f\n", r.sh[i].from, r.sh[i].to, r.sh[i].t_open, r.sh[i].kmh, r.sh[i].why, r.sh[i].pre ? ", hand-over ahead" : "", r.sh[i].t_close - r.sh[i].t_open, r.sh[i].rpm_after);
+        printf("   decel - target over %d judged downshifts: before %+.2f/%+.2f in %+.2f/%+.2f after %+.2f/%+.2f jerk %.1f; the %d with a hand-over ahead: before %+.2f/%+.2f in %+.2f/%+.2f after %+.2f/%+.2f\n",
+               r.n_dn, r.bf_lo, r.bf_hi, r.in_lo, r.in_hi, r.af_lo, r.af_hi, r.af_jerk, r.n_pre, r.pf_lo, r.pf_hi, r.pi_lo, r.pi_hi, r.pa_lo, r.pa_hi);
         return 0;
     }
     int nrun = 0, nfail = 0;
@@ -489,6 +823,61 @@ int main(int argc, char **argv)
                   "not the same as with ramp_s 0", why, sizeof why);
             check(r.k_min == 1.0f && W[ACT_RET_DECEL].ret == 1.0f, "a factor was posted", why, sizeof why);
             printf("  %-28s after %+.2f/%+.2f jerk %4.1f, lowest factor %.2f  %s%s\n", "18t s2, hook off", r.rel_hi, r.rel_lo, r.rel_jerk, r.k_min, why[0] ? "FAIL: " : "ok", why);
+            if (why[0]) fails++;
+        }
+    }
+    {   // ---- the geared plant: A (the build-up), B (the hand-over ahead of a shift), C (the earlier downshift)
+        geared_init();
+        printf("geared plant (TrueShift for real; the retarder through the gear ratio, an engine brake rising with the rpm), 60 km/h to a stop, lever held, a shift is a 1.1 s gap:\n");
+        printf("B: pre_blend 0 against 1 (downshift_assist 0). decel - target (m/s2) lowest/highest in the 0.8 s before the clutch opens, while it is open, in the 1.0 s after it\n"
+               "closes, over the downshifts above 12 km/h from 2 s on that had a hand-over ahead (n of m); asserted for pre_blend 1: in the shift within +-0.30; before and after within +-0.40 (the loop's own tracking: the first gap's guess of the brake's gain\n"
+               "is ~40 %% high in this plant, as in the flat one, and a hand-over sized with it is as far off); the jerk after the close within %.1f; the retarder never off for a second outside a shift\n", p_jerk);
+        struct { float mass; int step; } br[] = { { 18, 1 }, { 18, 2 }, { 25, 1 }, { 25, 2 }, { 36, 1 }, { 36, 2 } };
+        for (auto &c : br) {
+            gsc g; g.mass_t = c.mass; g.step = c.step; g.dsa = 0;
+            gsc g0 = g; g0.pre = 0;
+            gres r0 = run_g(g0), r1 = run_g(g);
+            char why[160] = "";
+            check(r1.n_pre >= 1, "no hand-over ahead of any shift", why, sizeof why);
+            check(r1.pi_lo >= -0.3f && r1.pi_hi <= 0.3f, "in the shift off by more than 0.30", why, sizeof why);
+            check(r1.pf_lo >= -0.4f && r1.pf_hi <= 0.4f, "before the open off by more than 0.40", why, sizeof why);
+            check(r1.pa_lo >= -0.4f && r1.pa_hi <= 0.4f, "after the close off by more than 0.40", why, sizeof why);
+            check(r1.af_jerk <= p_jerk, "jerk after the close over the limit", why, sizeof why);
+            check(r1.t_stop > 0 && r1.ret_off_s < 1.0f, "the retarder stayed off for a second outside a shift", why, sizeof why);
+            printf("  %2.0ft step %d | off (all %d downshifts): %+.2f/%+.2f in %+.2f/%+.2f after %+.2f/%+.2f jerk %.1f | on (%d of %d): before %+.2f/%+.2f in %+.2f/%+.2f after %+.2f/%+.2f jerk %.1f, retarder off at most %.2f s, brake integral %.2f (off %.2f)  %s%s\n",
+                   c.mass, c.step, r0.n_dn, r0.bf_lo, r0.bf_hi, r0.in_lo, r0.in_hi, r0.af_lo, r0.af_hi, r0.af_jerk, r1.n_pre, r1.n_dn, r1.pf_lo, r1.pf_hi, r1.pi_lo, r1.pi_hi, r1.pa_lo, r1.pa_hi, r1.af_jerk,
+                   r1.ret_off_s, r1.brake_int, r0.brake_int, why[0] ? "FAIL: " : "ok", why);
+            if (why[0]) fails++;
+        }
+        {   // the same without the retarder hook: only the brake side, by a small amount; it must not make the shift worse
+            gsc g; g.mass_t = 25; g.step = 2; g.dsa = 0; g.hook = 0;
+            gsc g0 = g; g0.pre = 0;
+            gres r0 = run_g(g0), r1 = run_g(g);
+            char why[120] = "";
+            check(r1.in_lo >= r0.in_lo - 0.05f && r1.in_hi <= r0.in_hi + 0.05f, "worse in the shift than without the hand-over", why, sizeof why);
+            printf("  25t step 2, hook off | pre_blend 0: in %+.2f/%+.2f after %+.2f/%+.2f | pre_blend 1: in %+.2f/%+.2f after %+.2f/%+.2f (the brake rises ahead of the shift by at most %.1f m/s2; the retarder stays)  %s%s\n",
+                   r0.in_lo, r0.in_hi, r0.af_lo, r0.af_hi, r1.in_lo, r1.in_hi, r1.af_lo, r1.af_hi, DC_PRE_OVS, why[0] ? "FAIL: " : "ok", why);
+            if (why[0]) fails++;
+        }
+        printf("A: the build-up after the close on the geared plant (pre_blend 0, downshift_assist 0): the length the jerk limit gave it and the time the factor needed for 95 %%\n");
+        struct { float mass; int step; const char *name; } ar[] = { { 10, 1, "light truck, step 1" }, { 36, 3, "heavy truck, step 3" } };
+        float rt_a[2] = { -1, -1 }, bu_a[2] = { -1, -1 };
+        for (int i = 0; i < 2; i++) {
+            gsc g; g.mass_t = ar[i].mass; g.step = ar[i].step; g.dsa = 0; g.pre = 0;
+            gres r = run_g(g);
+            rt_a[i] = r.rt_n ? r.rt_sum / (float)r.rt_n : -1; bu_a[i] = r.bu_n ? r.bu_sum / (float)r.bu_n : -1;
+            char why[120] = "";
+            check(r.n_dn >= 1 && r.af_jerk <= p_jerk, "jerk after the close over the limit", why, sizeof why);
+            printf("  %-20s %2.0f t | jerk-limited %.2f s, factor settled in %.2f s (%d closings) | after the close %+.2f/%+.2f, jerk %.1f  %s%s\n", ar[i].name, ar[i].mass, rt_a[i], bu_a[i], r.bu_n, r.af_lo, r.af_hi, r.af_jerk,
+                   why[0] ? "FAIL: " : "ok", why);
+            if (why[0]) fails++;
+        }
+        {
+            char why[120] = "";
+            // (the geared plant's shifts come where TrueShift puts them: a heavy truck's top steps stall out above 12 km/h, so only the order is asserted here;
+            // the flat plant above holds the pair that differs by a set margin)
+            check(rt_a[0] > 0 && rt_a[1] >= rt_a[0], "the large hand-over was built up faster than the small one", why, sizeof why);
+            printf("  the small hand-over took %.2f s, the large one %.2f s  %s%s\n", rt_a[0], rt_a[1], why[0] ? "FAIL: " : "ok", why);
             if (why[0]) fails++;
         }
     }

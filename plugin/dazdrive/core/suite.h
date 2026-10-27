@@ -226,6 +226,7 @@ float low_stop_rpm(float idle, float thr, float brake, int gear);   // the stop 
 int ts_start_gear(float thr);   // TrueShift: the start gear by physics (mass, grade, engine) for this pedal, whether or not TrueShift has the truck; 0 = unknown
 int ts_stop_hooked();            // TrueShift: the game's stop threshold hook is in (the owner's clutch-open point needs it)
 float ts_idle_rpm();            // TrueShift: the idle rpm (learned at a standstill, else the ini's; not the game's engine figure Creep reads)
+float ts_brake_down_eta(float decel);   // TrueShift: seconds until its next downshift in braking at this deceleration (m/s2, > 0), from the speed falling to the point the braking rules have set; NAN = none expected
 int ts_mode();                  // TrueShift: the driving mode (MODE_ECO / MODE_NORMAL / MODE_POWER) of an automatic truck it can read; -1 = manual box, M, or an unsupported truck
 // Pedal (modules/pedal.cpp): the wish pedal. The driver's pedal p becomes a wish for power; the throttle that delivers it in the gear
 // the truck is in. Returns 1 and the throttle in *out where it applies, else 0 and *out = p (pass-through: the old pedal path).

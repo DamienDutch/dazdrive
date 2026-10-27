@@ -294,6 +294,11 @@ static struct {
     double lift_at;         // the driver's pedal went off (under 0.05) from a pull above 15 km/h; 0 = not lifted
     float lift_prev;        // the pedal of the last update (for that)
     double lift_used;       // lift_at of the lift that already had its upshift (one per lift)
+    // the braking downshift rules as decide_gear last looked at them (ts_brake_down_eta reads them): the rule's rpm threshold, the
+    // seconds of speed the shift loses before the rule judges (the engine brake keep point, the braking rule, the downshift point)
+    double bd_at, bd_after;   // when the rule looked, and not before
+    int bd_gear;
+    float bd_floor, bd_lead;
 } S;
 
 // The driver's lifts (pedal off from a pull until the pedal again, a brake or a standstill), for lift_upshift: the last LIFT_N of the
@@ -574,6 +579,7 @@ static void ts_reset(int level, const char *why)
     S.demand_at = S.pedal_at = 0;           // the next dt is "unknown": filters step, no kickdown from a stale pedal
     S.ours_at = S.shift_at = none;          // dwell and take-over timers must not hold a shift back after a pause
     S.top_at = none; S.crest_ref = 0; S.crest_said = 0;  // no "over the top" hold across a teleport
+    S.bd_at = none;               // no braking downshift is expected across a break
     S.blocked_log_at = 0;
     S.gap_since = 0;                        // a pause in the gap state is not a stuck shift (the timer starts again)
     S.pedal_prev = clampf(T.in_thr, 0, 1);
@@ -1064,6 +1070,21 @@ static gs_cfg score_cfg(int skips, int skips_up, int skips_later, int low_edge, 
     return c;
 }
 
+// The rpm under which decide_gear's downshift rule (choice 0) takes a gear off: the demand-raised point only counts when this gear
+// lacks pull; a gear that can still just hold the speed on a climb (needs 75-100 % of its full-throttle force) while the speed falls
+// under real throttle: the point rises smoothly to the torque plateau, so the revs do not sag first (Damien 24-10: "subtieler, zonder bog
+// down"). No kickdown behavior: it needs the load, not a burst of throttle; over 100 % the lugging rule takes over. *base = the point
+// before the load raised it.
+static float dn_point(int cur, float v, float thr, float f_res, float *base)
+{
+    float fmax = force_at(cur, v, 1.0f);
+    float dn_eff = (fmax - f_res) / V.mass < a_power() ? S.dn_pt : base_dn(cur);
+    float load = fmax > 1 ? f_res / fmax : 0;
+    *base = dn_eff;
+    if (p_load_from < 1 && thr > 0.25f && T.accel < -0.1f && load > p_load_from) dn_eff = fmaxf(dn_eff, lerpf(dn_eff, V.plateau + 50, smooth(p_load_from, 1.0f, load)));
+    return dn_eff;
+}
+
 static int decide_gear(void *self, int *why)
 {
     *why = W_NONE;
@@ -1166,6 +1187,7 @@ static int decide_gear(void *self, int *why)
         float lo = V.eng.range[R_BRAKE][0], hi = V.eng.range[R_BRAKE][1];
         int full = p_eb_down > 0 || (p_eb_down < 0 && S.eb_full);
         float keep = full ? lo : lerpf(fminf(by_mode(p_eb_light - 100, p_eb_light, p_eb_light + 150), lo), lo, S.eb_level);
+        S.bd_at = now; S.bd_gear = cur; S.bd_floor = keep - 50; S.bd_lead = 0; S.bd_after = S.shift_at + p_min_gap;
         if (rpm < keep - 50 && cur > 1 && since > p_min_gap) {
             int l = pick_down(cur, v, full ? 0.5f * (lo + hi) : fminf(keep + 150, hi - 100), true);
             // two at a time when the second still fits under the brake range: every downshift costs a throttle blip
@@ -1191,6 +1213,7 @@ static int decide_gear(void *self, int *why)
         // (choice 1: the speed at the end of a shift started now, at the deceleration of now: under the brake the revs fall through a slow
         // box's shift, and a gear chosen for the speed of now lands under the floor or at the stall rule)
         float v_l = stop_c ? fmaxf(0.5f, v - fmaxf(0.0f, -T.accel) * (V.eng.shift_time + 0.25f)) : v;
+        S.bd_at = now; S.bd_gear = cur; S.bd_floor = floor; S.bd_lead = stop_c ? V.eng.shift_time + 0.25f : 0; S.bd_after = S.shift_at + 0.5;
         if (rpm_at(cur, v_l) < floor && cur > 1 && since > 0.5) {
             // land high, so that fewer downshifts are needed on the way down
             int l = pick_down(cur, v_l, eco_up(1) + by_mode(-300, -200, -100), true);
@@ -1200,6 +1223,8 @@ static int decide_gear(void *self, int *why)
         return cur;
     }
 
+    // (ts_brake_down_eta: the downshift point of choice 0 is a downshift to expect in braking too; it is noted before the dwell, which it counts)
+    if (p_choice < 1 && cur > 1) { float b; S.bd_at = now; S.bd_gear = cur; S.bd_floor = dn_point(cur, v, thr, f_res, &b); S.bd_lead = 0; S.bd_after = S.shift_at + p_min_gap; }
     if (since < p_min_gap) { *why = W_MIN_GAP; return cur; }
 
     // The last upshift has no pull (strain built up): back down, and learn.
@@ -1236,13 +1261,8 @@ static int decide_gear(void *self, int *why)
     if (p_choice > 0 && !lug && thr > 0.8f && rpm < V.plateau && cur > 1 && !(S.shift_dir > 0 && since < p_dwell_ud) &&
         rpm_at(cur - 1, v) < V.eng.range[R_POWER][1] - p_hyst)
         lug = 1;
-    // The demand-raised point only counts when this gear lacks pull.
-    float dn_eff = (fmax - f_res) / V.mass < a_power() ? S.dn_pt : base_dn(cur);
-    // A gear that can still just hold the speed on a climb (needs 75-100 % of its full-throttle force) while the speed falls under real
-    // throttle: the downshift point rises smoothly to the torque plateau, so the revs do not sag first (Damien 24-10: "subtieler, zonder bog
-    // down"). No kickdown behavior: it needs the load, not a burst of throttle; over 100 % the lugging rule above takes over.
-    float load = fmax > 1 ? f_res / fmax : 0, dn_base = dn_eff;
-    if (p_load_from < 1 && thr > 0.25f && T.accel < -0.1f && load > p_load_from) dn_eff = fmaxf(dn_eff, lerpf(dn_eff, V.plateau + 50, smooth(p_load_from, 1.0f, load)));
+    // The demand-raised point, and a climb's raise of it (the gear that can just hold the speed): see dn_point.
+    float dn_base, dn_eff = dn_point(cur, v, thr, f_res, &dn_base);
     if (cur > 1 && ((p_choice < 1 && rpm < dn_eff) || lug)) {   // choice 1: only lugging; the scores decide the rest below
         // maneuvering (Damien 24-10, 3856-3877 s: 6>4>5>3>4>5>6>7>8>9 in 21 s between 6 and 25 km/h): at a gentle pedal and a low speed only
         // a near-stall or lugging takes a gear off, not the demand-based downshift point
@@ -1855,6 +1875,24 @@ int ts_start_gear(float thr)
     return launch_pick(T.trailer ? 1 : (n < 4 ? n : 4), clampf(thr, 0, 1), true);
 }
 float ts_idle_rpm() { return idle_rpm(); }
+
+// Seconds until TrueShift's next downshift in braking, at this deceleration: the speed falls to the point where the rule that
+// looked last (the engine brake's keep point, the braking rule's floor, the downshift point) judges the gear, less
+// the speed the shift itself loses; 0 = due now (or waiting only for the dwell), NAN = no such rule is looking.
+float ts_brake_down_eta(float decel)
+{
+    float v = fabsf(T.speed);
+    int cur = T.gear;
+    if (!(decel > 0.05f) || !(v > 0.5f) || cur < 2 || !V.eng_ok) return NAN;
+    float per = rpm_at(cur, 1.0f), eta = NAN;   // rpm per m/s
+    if (!(per > 0)) return NAN;
+    double now = sim_s();
+    if (S.bd_gear == cur && now - S.bd_at < 0.3 && now >= S.bd_at) {
+        float t = (v - (S.bd_floor / per + decel * S.bd_lead)) / decel;
+        eta = fmaxf(fmaxf(t, 0.0f), (float)(S.bd_after - now));
+    }
+    return eta;
+}
 // For the wish pedal (suite.h): the mode from the game's cvar, as the module reads it, so it is also right where our hooks are not in.
 int ts_mode()
 {
