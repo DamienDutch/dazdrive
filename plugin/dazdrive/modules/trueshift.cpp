@@ -280,6 +280,7 @@ static struct {
     double skip_log_at;     // last 'single up, no skip' log line
     double score_log_at;    // last 'score' log line (choice = 1)
     double veto_log_at;     // last 'score veto' log line (choice = 1)
+    double hold_log_at;     // last 'score hold' log line (choice = 1)
     double calm_since;      // Power: since when the driving is flat, light and steady
     float calm_k;           // Power: 0 = full Power shift points, 1 = like Normal (after a calm stretch)
     const char *unsupported; // why this truck is left to the game's own automatic (NULL = fine)
@@ -593,7 +594,7 @@ static void ts_reset(int level, const char *why)
     }
     if (level >= RESET_HARD) {
         S.calm_k = 0; S.calm_since = 0;     // Power starts with its own shift points again
-        S.pedal_on_at = none; S.skip_log_at = S.veto_log_at = 0; S.kd_at = none;
+        S.pedal_on_at = none; S.skip_log_at = S.veto_log_at = S.hold_log_at = 0; S.kd_at = none;
         memset(g_learn, 0, sizeof g_learn);
         g_learn_mass = 0;
         S.self = NULL;                      // refresh() starts over from the gearbox it sees next
@@ -1423,7 +1424,19 @@ static int decide_gear(void *self, int *why)
             }
         }
         if (lift_g && w == cur) w = lift_g;
-        if (w == cur) { *why = so.wait ? W_SKIP_WAIT : W_HOLD; return cur; }   // (choice_objective 1: waiting for a skip that lands a little later)
+        if (w == cur) {   // (choice_objective 1: waiting for a skip that lands a little later)
+            // the gear stays because it scores best: when the runner-up is a higher gear, say by how much and why (one line per 5 s), so a ride
+            // log shows what kept the top gear out (ride 7: 22 s in 11 at 83 km/h, and nothing in the log said why)
+            if (so.second > cur && so.cur_ok && (now - S.hold_log_at > 5 || now < S.hold_log_at)) {
+                S.hold_log_at = now;
+                const gs_term &c0 = so.t[cur], &c2 = so.t[so.second];
+                logv(2, "score hold %d: gear %d %.3f (share %.2f, %.0f rpm; gas %.3f revs %.3f shift %.3f stay %.3f), gear %d %.3f (share %.2f, %.0f rpm; gas %.3f revs %.3f shift %.3f, %d shifts) (%.0f km/h, pedal %.2f, throttle %.2f, demand %.2f, asks %.0f N, to hold %.0f N (model bias %.0f N), grade %.1f%%)",
+                     cur, cur, c0.score, c0.share, c0.rpm, c0.gas, c0.rpmc, c0.shiftc, c0.stay, so.second, c2.score, c2.share, c2.rpm, c2.gas, c2.rpmc, c2.shiftc, c2.shifts,
+                     v * 3.6f, T.in_thr, thr, S.demand, need, f_hold, V.f_bias, grade_pct());
+            }
+            *why = so.wait ? W_SKIP_WAIT : W_HOLD;
+            return cur;
+        }
         if (w) {
             bool forced = !so.cur_ok;   // this gear is outside the window or cannot make the demanded pull: a change is due, whatever the timers say
             int ret = -1, why_v = W_NONE;
@@ -1480,9 +1493,9 @@ static int decide_gear(void *self, int *why)
                 S.veto_log_at = now;
                 char cs[24] = "out";
                 if (so.cur_ok) snprintf(cs, sizeof cs, "%.3f", so.t[cur].score);
-                logv(2, "score veto %d->%d (%s%s%s): gear %d %.3f (share %.2f, %.0f rpm), gear %d %s (share %.2f, %.0f rpm) (%.0f km/h, pedal %.2f, throttle %.2f, demand %.2f, asks %.0f N, grade %.1f%%)",
+                logv(2, "score veto %d->%d (%s%s%s): gear %d %.3f (share %.2f, %.0f rpm), gear %d %s (share %.2f, %.0f rpm) (%.0f km/h, pedal %.2f, throttle %.2f, demand %.2f, asks %.0f N, to hold %.0f N, grade %.1f%%)",
                      cur, w, why_text[why_v], not_steady ? ": " : "", not_steady ? not_steady : "", w, so.t[w].score, so.t[w].share, so.t[w].rpm, cur, cs,
-                     so.t[cur].share, so.t[cur].rpm, v * 3.6f, T.in_thr, thr, S.demand, need, grade_pct());
+                     so.t[cur].share, so.t[cur].rpm, v * 3.6f, T.in_thr, thr, S.demand, need, f_hold, grade_pct());
             }
             if (ret != cur && now - S.score_log_at > 0.5) {
                 S.score_log_at = now;
