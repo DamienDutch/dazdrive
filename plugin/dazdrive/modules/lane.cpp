@@ -103,9 +103,9 @@ static param g_params[] = {
     { "indicator_resume", &p_ind_resume, 0, "with indicator_pause: lane keeping that went off during the lane change (above min_kmh) is switched on again afterwards (sets the game's lane-keeping flag). Off by default: the game does not switch it off for an indicator, and with keep_on not for speed, so it would mostly undo your own key press" },
     { "non_ffb_mode", &p_nonffb, 0, "without a force-feedback wheel (keyboard, gamepad, mouse steering: the game adds the assist to the steering angle instead of turning the wheel; recognized from the steering data in ~1 s): 0 = the game's own law (mode 2 is fitted on FFB wheels), 2 = mode 2 anyway (not tuned)" },
     { "tone", &p_tone, 1, "1 = a rising tone when lane keeping is switched on, a falling one when it goes off" },
-    { "control", &p_control, 1, "1 = the game's lane-keeping key tells a tap from a hold: a tap switches lane keeping on or off as always, holding it (calibration_hold_s) arms the steering calibration test. Needs mode 2 and learn 1. The key is found by watching its first presses: until then a hold is a plain toggle. 0 = the key only toggles" },
-    { "calibration_hold_s", &p_cal_hold, 0.8f, "control: hold the lane-keeping key this long (s) to arm the steering calibration; hold it again to disarm. Lane keeping is on afterwards" },
-    { "calibration_timeout_s", &p_cal_timeout, 300, "control: an armed calibration that finds no suitable stretch (straight road, a lane seen, lane centering steering, nobody close ahead, a speed the model is valid at) gives up after this many seconds, with a tone" },
+    { "control", &p_control, 1, "1 = the game's lane-keeping key tells a tap from a hold: a tap switches lane keeping on or off as always, holding it (calib_hold_s) arms the steering calibration test. Needs mode 2 and learn 1. The key is found by watching its first presses: until then a hold is a plain toggle. 0 = the key only toggles" },
+    { "calib_hold_s", &p_cal_hold, 0.8f, "control: hold the lane-keeping key this long (s) to arm the steering calibration; hold it again to disarm. Lane keeping is on afterwards" },
+    { "calib_timeout_s", &p_cal_timeout, 300, "control: an armed calibration that finds no suitable stretch (straight road, a lane seen, lane centering steering, nobody close ahead, a speed the model is valid at) gives up after this many seconds, with a tone" },
 };
 
 enum { GA_U = 0x1d5c, V_STEER_IN = 0x1408, V_A = 0x1420, V_STEER = 0x640 };
@@ -1418,9 +1418,9 @@ static void lane_state_tick()
 // distance key. The offset of the lane key's pointer is not in our notes, so it is found from the presses (key_vote): the slots next to
 // the cruise keys that read non-zero just before the bit flipped, twice in a row for the same slot. Until it is found, or if it
 // goes wrong, every press is a plain toggle with its tone at once, as with control 0.
-//   TAP  (released before calibration_hold_s): the game's toggle stands; its tone and letter come when the key is released.
-//   HOLD (calibration_hold_s): arms the steering calibration (cal_arm); lane keeping is on afterwards (the toggle of the press undone).
-//   A later gesture on the same key (about 3 s held) belongs in key_tick next to the hold: the hold fires at calibration_hold_s and
+//   TAP  (released before calib_hold_s): the game's toggle stands; its tone and letter come when the key is released.
+//   HOLD (calib_hold_s): arms the steering calibration (cal_arm); lane keeping is on afterwards (the toggle of the press undone).
+//   A later gesture on the same key (about 3 s held) belongs in key_tick next to the hold: the hold fires at calib_hold_s and
 //   K_down_at keeps counting, so a longer threshold can be tested there. Not built.
 enum { KEY_LO = 0x1e600, KEY_N = 96, KEY_STATE = 0xf8 };
 static int g_key_off, g_key_bad;                                  // game_actor offset of the lane key's action pointer (0 = not found), gave up

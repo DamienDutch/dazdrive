@@ -63,7 +63,7 @@ static const struct { const char *sec, *key; float lo, hi; } k_bounds[] = {
     { "lane", "edge_from", 0, 2 }, { "lane", "edge_full", 0.1f, 3 }, { "lane", "driver_rate", 0.005f, 1 },
     { "lane", "driver_attack", 0.02f, 5 }, { "lane", "driver_release", 0.05f, 10 }, { "lane", "driver_leak", 0, 0.5f },
     { "lane", "min_kmh", 5, 55 }, { "lane", "on_kmh", 5, 90 }, { "lane", "cruise_switches_on", 0, 1 },
-    { "lane", "control", 0, 1 }, { "lane", "calibration_hold_s", 0.2f, 5 }, { "lane", "calibration_timeout_s", 10, 3600 },
+    { "lane", "control", 0, 1 }, { "lane", "calib_hold_s", 0.2f, 5 }, { "lane", "calib_timeout_s", 10, 3600 },
     { "creep", "creep_kmh", 1, 15 }, { "creep", "manoeuvre_kmh", 2, 30 }, { "creep", "on_kmh", 1, 20 },
     { "creep", "off_kmh", 3, 40 }, { "creep", "max_pedal", 0.05f, 1 }, { "creep", "brake", 0.05f, 1 },
     { "creep", "descent_kmh", 1, 30 }, { "creep", "descent_brake", 0, 1 },

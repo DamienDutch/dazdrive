@@ -795,7 +795,7 @@ static int test_key()
     press(3, 0.3, true);
     g_cal = CAL_IDLE; g_cues.clear();
     press(3, 0.6, true);         // shorter than 0.8 s = a tap
-    check("0.6 s press (under calibration_hold_s) is a tap", g_cal == CAL_IDLE && g_cues.size() == 1);
+    check("0.6 s press (under calib_hold_s) is a tap", g_cal == CAL_IDLE && g_cues.size() == 1);
     // the letter
     {
         press(3, 0.3, true);     // on
