@@ -143,6 +143,7 @@ static void params_default()
     p_wish = 1;
     p_ref_kwt = 0;   // the exponents as the ini has them; the per-truck scaling has its own test (D2)
     p_ref_now = g_ref_now;
+    p_tq_share = 0;   // these sections test the wish itself; torque_share (the hold in a gear) has its own sim (sim_pedalmix)
 }
 
 // The truck at a speed in a gear, clutch closed, locked. mode: MODE_*.
@@ -682,6 +683,7 @@ static void ref_now_checks()
             check(bad == 0, "G %.0f km/h %.0f t: wish 0 changed the pedal %d times", kmh, mass / 1000, bad);
         }
     p_ref_now = g_ref_now;
+    p_tq_share = 0;   // these sections test the wish itself; torque_share (the hold in a gear) has its own sim (sim_pedalmix)
 }
 
 int main(int argc, char **argv)
