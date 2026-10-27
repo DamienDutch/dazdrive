@@ -56,3 +56,11 @@ float vehicle_resist_grade(float v, float pct);          // the same on another 
 // "Can this gear do it with a bit more throttle?" in one call: acceleration (m/s2) in gear at v with this share against the
 // resistance on grade pct (NAN = the grade of now). For the score-based gear choice; no caller yet
 float vehicle_accel(int gear, float v, float share, float pct);
+
+// The service brake's gain, learned from steady braking (core/vehicle.cpp). All of it is off while [core] brake_learn is 0.
+extern float g_brake_learn;                               // [core] brake_learn: 0 = nothing is measured, stored or offered (the modules keep their own guesses)
+float vehicle_brake_gain();                               // m/s2 per unit of brake request at the mass of now; NAN until confident (or off, or the mass unknown)
+float vehicle_brake_conf();                               // 0..1; 0.5 and up = confident (the gain is offered)
+float vehicle_brake_req(float decel, float fallback);     // the request (0..1) for a wanted deceleration (m/s2); fallback while the gain is unknown
+float vehicle_brake_hold_req(float grade_pct, float fallback);  // the request (0.2..1) that holds the truck on a grade (%) with margin; fallback while the gain is unknown
+void vehicle_brake_prime(int trailer, float gm, float dev, float n);  // sims: set a slot (gm = N per request, dev = spread, n = events) as if it had been learned

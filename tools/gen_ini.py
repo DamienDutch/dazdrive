@@ -27,7 +27,7 @@ VERSION = re.search(r'#define SUITE_VERSION "([^"]*)"', open(f"{ROOT}/core/suite
 STANDARD = {
     # Players: a quiet log plus incident files (what went wrong, with the 20 s before and 15 s after). At most ~6 MB in all:
     # the log 0.6 MB x (log, .1, previous session) and 4 MB of incidents. The developer's compiled defaults are 10x that.
-    "core": {"log_level": 2, "log_max_mb": 0.6, "incident_mb": 4},   # BETA: bug hunt on by default until the first full release (make_release refuses a full release with it)
+    "core": {"log_level": 2, "log_max_mb": 0.6, "incident_mb": 4, "brake_learn": 0},   # BETA: bug hunt on by default until the first full release (make_release refuses a full release with it)
     "trueshift": {
         "takeover_rpm": 0,       # players: by speed only (the developer's default takes over at 1250 rpm in any gear)
         "takeover_kmh": 10,      # players: the proven handover (the developer's compiled default takes over earlier, from 7 km/h, still being tested)
@@ -102,7 +102,7 @@ STANDARD = {
 # or not ridden yet.
 NO_PAGE = ("pedal", "lowspeed", "decel")
 # Single keys of a shown section that stay off the page too (still in the ini, with their help text).
-NO_PAGE_KEYS = (("core", "retarder_hook"), ("core", "dash_messages"), ("cruise", "force_mode"))
+NO_PAGE_KEYS = (("core", "retarder_hook"), ("core", "brake_learn"), ("core", "dash_messages"), ("cruise", "force_mode"))
 
 STANDARD_HEADER = ("standard preset (stable on, except the look-ahead ones; beta and experimental (ACC, Stop & Go, Auto Hold, ISA, JunctionSense, lane centering, crawl mode, smooth start) off).")
 
