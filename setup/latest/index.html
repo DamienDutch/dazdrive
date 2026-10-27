@@ -1,0 +1,1019 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DazDrive setup</title>
+<style>
+/* One step at a time (wizard), or everything on one page (?all). Light or dark with the system. */
+:root{--bg:#f3f4f1;--card:#fff;--fg:#1c2421;--mute:#5d6863;--line:#d8ddd8;--acc:#b8520f;--accfg:#fff;--on:#2f7d4f;--onbg:#e7f3ec;--sel:#fbf0e6;
+  --warn:#9a5b06;--bad:#c0262d;--code:#eef0ec;--dash:#1b1f1e;--dashfg:#f1f3ef;--dashmute:#9aa6a0;--bar:rgba(255,255,255,.92);--glow:rgba(210,97,26,.25)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121615;--card:#1b201e;--fg:#e6ebe8;--mute:#9aa6a0;--line:#2f3633;--acc:#f08a3c;--accfg:#1a0d03;
+  --on:#6cc28f;--onbg:#17291f;--sel:#2a211a;--warn:#e7a54f;--bad:#ff7b80;--code:#101413;--dash:#0c0f0e;--dashfg:#f1f3ef;--dashmute:#8e9994;--bar:rgba(27,32,30,.92);--glow:rgba(240,138,60,.3);color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#121615;--card:#1b201e;--fg:#e6ebe8;--mute:#9aa6a0;--line:#2f3633;--acc:#f08a3c;--accfg:#1a0d03;
+  --on:#6cc28f;--onbg:#17291f;--sel:#2a211a;--warn:#e7a54f;--bad:#ff7b80;--code:#101413;--dash:#0c0f0e;--dashfg:#f1f3ef;--dashmute:#8e9994;--bar:rgba(27,32,30,.92);--glow:rgba(240,138,60,.3);color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:860px;margin:0 auto;padding:12px 16px 110px}
+h1{font-size:1.5rem;margin:0;letter-spacing:.01em;display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px}
+h1 svg{width:30px;height:30px;flex:none}
+h1 .ver{white-space:nowrap;font:600 .8rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--acc);border:1px solid var(--acc);border-radius:99px;padding:1px 8px;align-self:center}
+h2{font-size:1.15rem;margin:0 0 .6em;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+h2 .n{font:700 .8rem ui-monospace,monospace;color:var(--accfg);background:var(--acc);border-radius:99px;padding:1px 8px}
+h2 .opt{font-size:.8rem;font-weight:400;color:var(--mute)}
+h3{font-size:.85rem;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:26px 0 10px}
+p{margin:.55em 0}
+.mute,small{color:var(--mute)}
+small{display:block;font-size:.82rem;line-height:1.35;margin-top:2px}
+code{background:var(--code);padding:0 4px;border-radius:4px;overflow-wrap:anywhere}
+/* dashboard strip */
+.dash{background:var(--dash);color:var(--dashfg);border-bottom:3px solid var(--acc)}
+.dash .in{max-width:860px;margin:0 auto;padding:20px 16px;display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;justify-content:space-between}
+.dash .facts{display:flex;gap:14px;flex-wrap:wrap;margin:0;padding:0;list-style:none;font-size:.85rem;color:var(--dashmute)}
+.dash .facts b{color:var(--dashfg);font-weight:600}
+/* cards */
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin:18px 0}
+section.card{scroll-margin-top:12px}
+/* start */
+.start{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+.big{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:14px 16px;cursor:pointer;text-align:left;display:grid;gap:3px;min-width:0}
+.big b{font-size:1rem}
+.big:hover{border-color:var(--acc)}
+.big.drop{border-color:var(--acc);border-style:dashed;background:var(--onbg)}
+.big input{position:absolute;opacity:0;width:0;height:0}
+.big:has(input:focus-visible){outline:2px solid var(--acc);outline-offset:2px}
+.note{border-left:3px solid var(--acc);padding:4px 10px;margin:10px 0 0;background:var(--bg);border-radius:0 8px 8px 0}
+#restore2{display:none;margin:0 0 10px}
+body.wiz #restore2:not([hidden]){display:block}
+button.link{border:0;background:none;color:var(--acc);padding:0;font:inherit;cursor:pointer;text-decoration:underline}
+/* era timeline */
+.tl{position:relative;display:grid;grid-template-columns:repeat(var(--n,5),1fr);margin:24px 0 10px;--p:50%;--n:5}
+.tl::before,.tl::after{content:"";position:absolute;left:calc(50% / var(--n));right:calc(50% / var(--n));top:17px;height:5px;background:var(--line);border-radius:3px}
+.tl::after{right:auto;width:calc((100% - 100% / var(--n)) * var(--p) / 100%);background:var(--acc);transition:width .2s}
+.stop{position:relative;display:grid;justify-items:center;text-align:center;cursor:pointer;padding:0 4px;gap:3px;z-index:1}
+.stop input{position:absolute;opacity:0;pointer-events:none}
+.stop .dot{width:38px;height:38px;border-radius:50%;background:var(--card);border:4px solid var(--line);transition:all .15s;display:grid;place-items:center;font-size:1rem}
+.stop .yr{font:700 .95rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--acc);margin-top:2px}
+.stop b{font-size:.85rem;line-height:1.2}
+.stage{font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;border-radius:99px;padding:0 7px;border:1px solid}
+.stage.stable{color:var(--on);border-color:var(--on)}
+.stage.beta{color:var(--warn);border-color:var(--warn)}
+.stage.experimental{color:var(--bad);border-color:var(--bad)}
+.tile .stage{justify-self:start;margin-top:3px}
+.legend{font-size:.82rem;color:var(--mute);margin:18px 0 0;display:flex;gap:6px 14px;flex-wrap:wrap}
+.stop:hover .dot{border-color:var(--acc)}
+.stop:has(input:checked) .dot{background:var(--acc);border-color:var(--acc);box-shadow:0 0 0 7px var(--glow)}
+.stop:has(input:focus-visible) .dot{outline:2px solid var(--acc);outline-offset:3px}
+.erablurb{margin:20px 0 0;padding:14px 16px;border-radius:8px;background:var(--bg);display:flex;flex-direction:column;gap:2px;align-items:flex-start}
+.erablurb b{font-size:1.05rem}
+@media (max-width:560px){
+  .tl{grid-template-columns:1fr;gap:4px;margin-top:8px}
+  .tl::before,.tl::after{display:none}
+  .stop{grid-template-columns:auto 1fr;justify-items:start;text-align:left;gap:2px 12px;padding:4px 0}
+  .stop .dot{grid-row:1/5;width:30px;height:30px;border-width:3px}
+  .stop .yr{margin:0}
+  .start{grid-template-columns:1fr}
+}
+/* feature switches */
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+.tile{color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;grid-template-columns:1fr auto;gap:0 12px;min-width:0;align-content:start}
+.tile .body{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;text-align:left;cursor:pointer;display:grid;gap:2px;min-width:0;align-content:start;border-radius:6px}
+.tile .body:hover b{text-decoration:underline dotted}
+.tile b{font-size:.95rem}
+.tile small{margin:0}
+.tile .need{font-size:.78rem;color:var(--warn);margin:2px 0 0}
+.tile .need:empty{display:none}
+.tile.waits b,.tile.waits small{opacity:.6}
+.sw::before{content:"";position:absolute;inset:-12px -6px}
+.sw{border:0;padding:0;margin:0;align-self:start;width:40px;height:22px;border-radius:11px;background:var(--line);position:relative;flex:none;cursor:pointer;transition:background .15s}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .15s}
+.tile[aria-pressed=true]{background:var(--onbg);border-color:var(--on)}
+.tile[aria-pressed=true] .sw{background:var(--on)}
+.tile[aria-pressed=true] .sw::after{left:21px}
+.tile[aria-pressed=mixed] .sw{background:linear-gradient(90deg,var(--on) 50%,var(--line) 50%)}
+.tile[aria-pressed=mixed] .sw::after{left:12px}
+.chip:focus-visible,button:focus-visible,.big:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+dialog{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:12px;padding:18px 20px;max-width:min(520px,calc(100vw - 32px));box-shadow:0 10px 40px rgba(0,0,0,.35)}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+dialog h3{font:700 1.1rem/1.3 system-ui,sans-serif;text-transform:none;letter-spacing:0;color:var(--fg);margin:0 0 4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+dialog .since{color:var(--mute);font-size:.85rem;margin:0 0 8px}
+dialog .needs{font-size:.88rem;margin:8px 0 0}
+dialog .needs .off{color:var(--warn)}
+dialog .also{font-size:.88rem;color:var(--on);margin:6px 0 0}
+dialog .also:empty{display:none}
+dialog .btns{margin:14px 0 0;justify-content:flex-end}
+.tag{display:inline-block;font-size:.68rem;border:1px solid var(--warn);color:var(--warn);border-radius:99px;padding:0 7px;vertical-align:middle;font-weight:400}
+.count{font:600 .85rem ui-monospace,monospace;color:var(--mute)}
+/* fine-tuning */
+details.tune{margin:10px 0;padding:0 16px}
+details.tune summary{list-style:none;cursor:pointer;display:flex;gap:10px;align-items:center;padding:12px 0;font-weight:600}
+details.tune summary::-webkit-details-marker{display:none}
+details.tune summary::before{content:"▸";color:var(--mute);transition:transform .15s}
+details.tune[open] summary::before{transform:rotate(90deg)}
+details.tune summary .cur{margin-left:auto;font-weight:500;font-size:.85rem;color:var(--acc);border:1px solid var(--acc);border-radius:99px;padding:0 9px;white-space:nowrap}
+details.tune .body{padding:0 0 14px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 2px}
+.chip{font:inherit;font-size:.92rem;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:99px;padding:5px 14px;cursor:pointer}
+.chip[aria-pressed=true]{background:var(--acc);border-color:var(--acc);color:var(--accfg);font-weight:600}
+.chipdesc{font-size:.88rem;color:var(--mute);margin:4px 0 0}
+.custom{margin-top:8px}
+.row{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--line)}
+.row>label.name{flex:1;min-width:0;cursor:pointer}
+.row input[type=checkbox]{width:22px;height:22px;margin-top:2px;flex:none;accent-color:var(--on)}
+input[type=text],select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 8px}
+input[type=text]{width:6em;flex:none}
+input.bad{border-color:var(--bad);outline:1px solid var(--bad)}
+.err{color:var(--bad);font-weight:600}
+.err:empty{display:none}
+details{margin-top:10px}
+summary{cursor:pointer;color:var(--mute)}
+/* buttons, lists */
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:7px 12px;cursor:pointer}
+button.primary{background:var(--acc);color:var(--accfg);border-color:var(--acc);font-weight:600;padding:9px 16px}
+button:disabled,button.blocked{opacity:.5}
+button:disabled{cursor:default}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;max-height:420px;font-size:.78rem;margin:8px 0;white-space:pre}
+ol{padding-left:1.3em}
+.facts{list-style:none;padding:0;margin:6px 0;display:grid;gap:3px;color:var(--mute)}
+ol.facts{list-style:decimal inside}
+.facts b{color:var(--fg)}
+#msg{min-height:1.4em}
+/* sticky bar */
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--bar);backdrop-filter:blur(8px);border-top:1px solid var(--line);z-index:5}
+.bar .in{max-width:860px;margin:0 auto;padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.bar .status{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font:600 .9rem ui-monospace,SFMono-Regular,Menlo,monospace}
+.bar .status .chg{color:var(--acc)}
+.bar .status .ok{color:var(--on)}
+.bar .status .badn{color:var(--bad)}
+.toast{position:fixed;z-index:9;left:50%;transform:translateX(-50%);bottom:16px;width:min(828px,calc(100vw - 32px));padding:10px 14px;border-radius:10px;
+  background:var(--dash);color:var(--dashfg);border:1px solid var(--acc);box-shadow:0 6px 24px rgba(0,0,0,.35);font-size:.9rem;cursor:pointer}
+.toast.bad{border-color:var(--bad)}
+.bar .steps{color:var(--mute);font-size:.85rem}
+.bar .wiznav{display:none;gap:8px;align-items:center;flex:1;justify-content:space-between}
+.bar .wiznav .wr{display:flex;gap:8px}
+/* wizard mode: one step at a time */
+body.wiz [data-step]{display:none}
+body.wiz [data-step].cur{display:block}
+body.wiz #guide{display:none}
+body.wiz .bar{display:none}
+body.wiz main{padding-bottom:40px}
+body:not(.wiz) .go,body:not(.wiz) .go2{display:none}
+.go{margin-top:26px;grid-template-columns:repeat(auto-fit,minmax(220px,380px));justify-content:center}
+.go .big{text-align:center;justify-items:center}
+.go2{margin-top:6px;grid-template-columns:repeat(auto-fit,minmax(220px,380px));justify-content:center}
+.go2 .big{text-align:center;justify-items:center}
+.wizhead{display:flex;justify-content:space-between;align-items:center;gap:6px;margin:14px 0 0;font-size:.85rem;color:var(--mute);flex-wrap:wrap}
+body:not(.wiz) .wizhead .wsteps{display:none}
+.wizhead .wsteps{display:flex;gap:4px;flex:1;flex-wrap:wrap}
+.wizhead .wst{font-size:.82rem;padding:3px 10px;border-radius:99px;color:var(--mute)}
+.wizhead .wst.done{color:var(--fg);border-color:var(--on)}
+.wizhead .wst[aria-current=step]{background:var(--acc);border-color:var(--acc);color:var(--accfg);font-weight:600}
+#s-start .start{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+/* fine-tuning layers: Presets / Advanced / Custom */
+.tabs{display:flex;gap:0;margin:10px 0 4px;border:1px solid var(--line);border-radius:9px;overflow:hidden;width:max-content;max-width:100%}
+.tabs .tab{border:0;border-radius:0;padding:6px 14px;background:var(--card);font-size:.92rem}
+@media (max-width:560px){.tabs .tab{padding:6px 9px;font-size:.85rem;white-space:nowrap}}
+.big[hidden]{display:none}
+.tabs .tab+.tab{border-left:1px solid var(--line)}
+.tabs .tab[aria-selected=true]{background:var(--fg);color:var(--bg);font-weight:600}
+.panel[hidden]{display:none}
+.knob{padding:10px 0;border-top:1px solid var(--line)}
+.knob label.name{display:grid;grid-template-columns:1fr auto;gap:0 10px;cursor:pointer}
+.knob label.name small{grid-column:1/-1}
+.knob output{font:600 .9rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--acc);white-space:nowrap}
+.knob input[type=range]{width:100%;margin:8px 0 0;accent-color:var(--acc)}
+.knob select{width:100%;margin-top:6px}
+.knob.tg{display:flex;gap:10px;align-items:flex-start}
+.knob.tg input{width:22px;height:22px;margin-top:2px;flex:none;accent-color:var(--on)}
+.knob.tg label.name{display:block;flex:1}
+.knob .odd{color:var(--warn);font-size:.8rem}
+.marks{position:relative;height:1.6em;margin:0 9px}
+.marks button{position:absolute;transform:translateX(-50%);font-size:.75rem;padding:0 6px;border-radius:99px;color:var(--mute);white-space:nowrap}
+.marks button.on{color:var(--acc);border-color:var(--acc)}
+.rawnote{font-size:.88rem;color:var(--warn);margin:6px 0}
+.row .key{font:600 .88rem ui-monospace,SFMono-Regular,Menlo,monospace}
+/* header text (a line, not a list) */
+.dash p{margin:0;color:var(--dashmute);font-size:.88rem;flex-basis:100%}
+/* the era step: one line always, the rest on request */
+details.more{margin:10px 0 0}
+details.more>summary{color:var(--acc);cursor:pointer}
+.story{margin:16px 0 0}
+/* fine-tuning: modules on the left, the chosen one on the right, everything big */
+.pane{display:grid;grid-template-columns:240px 1fr;gap:22px;align-items:start;margin-top:14px}
+.side{display:grid;gap:10px}
+.big2{font:inherit;color:var(--fg);background:var(--card);border:2px solid var(--line);border-radius:14px;padding:16px 18px;cursor:pointer;text-align:left;display:grid;gap:3px;min-width:0;width:100%}
+.big2 b{font-size:1.05rem}
+.big2 small{margin:0}
+.big2:hover{border-color:var(--acc)}
+.big2[aria-pressed=true]{border-color:var(--acc);background:var(--sel);box-shadow:inset 0 0 0 1px var(--acc)}
+.side .big2[aria-pressed=true]{border-left-width:6px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.h3b{font-size:.85rem;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:24px 0 8px}
+.h3b:first-child{margin-top:0}
+.pn>h2{font-size:1.25rem;margin:0 0 14px}
+.ctl{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin:12px 0}
+.ctl .top{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.ctl .top b{font-size:1.02rem}
+.ctl .val{font:700 1.25rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--acc);white-space:nowrap}
+.ctl>small.x{margin-top:6px}
+.ctl input[type=range]{width:100%;height:34px;margin:10px 0 0;accent-color:var(--acc)}
+.opts{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+.opt2{font:inherit;color:var(--fg);background:var(--bg);border:2px solid var(--line);border-radius:12px;padding:10px 18px;min-height:46px;cursor:pointer}
+.opt2:hover{border-color:var(--acc)}
+.opt2[aria-pressed=true]{border-color:var(--acc);background:var(--acc);color:var(--accfg);font-weight:700}
+.optlist{margin:8px 0 0;padding-left:1.2em;font-size:.88rem;color:var(--mute)}
+.optlist li{margin:2px 0}
+.tg2{display:flex;justify-content:space-between;align-items:center;gap:14px}
+.tg2 .sw{flex:none}
+.tg2 .sw[aria-checked=true]{background:var(--on)}
+.tg2 .sw[aria-checked=true]::after{left:21px}
+.ctl .odd{display:block;color:var(--warn);font-size:.82rem;margin-top:6px}
+.note2{color:var(--warn);font-size:.9rem;margin:10px 0 0}
+.raw{margin:22px 0 0;color:var(--acc);cursor:pointer;text-decoration:underline;background:none;border:0;font:inherit;padding:6px 0}
+.rawbox{margin-top:8px}
+@media(max-width:700px){.pane{grid-template-columns:1fr}.side{grid-template-columns:repeat(2,1fr)}}
+/* Extra info: extra text is hidden until the switch in the step bar is on (what must be seen, like stages and "needs", never is .x) */
+.x{display:none}
+body.explain .x{display:block}
+body.explain .nx{display:none}
+body.explain .tile .body{cursor:default}
+.tile .body:disabled{color:inherit}
+body.explain .tile .body:hover b{text-decoration:none}
+body.explain ul.facts.x{display:grid}
+body.explain .tiles{grid-template-columns:1fr}
+.xinfo{font-size:.85rem;color:var(--mute);margin-top:8px}
+.xsw{display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--fg);font-size:.9rem;position:relative;margin-left:auto}
+.xsw input{position:absolute;opacity:0;width:0;height:0}
+.xsw i{width:36px;height:20px;border-radius:10px;background:var(--line);position:relative;flex:none}
+.xsw i::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .15s}
+.xsw input:checked+i{background:var(--on)}
+.xsw input:checked+i::after{left:19px}
+.xsw input:focus-visible+i{outline:2px solid var(--acc);outline-offset:2px}
+</style>
+</head>
+<body>
+<header class="dash"><div class="in">
+<h1>DazDrive<span class="ver" id="ver"></span>setup</h1>
+<p>For ETS2 1.60 (Steam beta temporary_1_60). Gearbox on Automatic. Singleplayer, not TruckersMP. Nothing leaves this page.</p>
+</div></header>
+<main>
+<nav class="wizhead" aria-label="Steps"><div class="wsteps" id="wsteplist"></div><label class="xsw"><input type="checkbox" id="explain"><i></i><span>Extra info</span></label></nav>
+
+<section class="card" data-step data-title="Start" id="s-start">
+<h2>Do you have a dazdrive.ini?</h2>
+<p class="mute x">Open it to change only what you want. New settings get their standard value.</p>
+<div class="start">
+<label class="big"><b>Open my dazdrive.ini</b><small>Click, or drop the file here. It is in <code>plugins\dazdrive\</code>.</small><input type="file" id="open" accept=".ini,text/plain"></label>
+<button class="big" id="resume" type="button" hidden><b>Continue where I left off</b><small id="resumewhen"></small></button>
+<button class="big" id="fresh" type="button"><b>Start fresh</b><small>Pick a truck year and go from there. First time here? Take this: the ini in the zip is the ~2010 year, nothing is lost.</small></button>
+</div>
+<p class="note" id="restore" hidden></p>
+</section>
+
+<section class="card" data-step data-title="Truck year" id="s-era">
+<p class="note" id="restore2" hidden></p>
+<h2><span class="n">1</span> Truck year</h2>
+<p class="mute">What real trucks had by then. Newer years are less tested.</p>
+<div class="tl" id="eras"></div>
+<p class="erablurb" id="erablurb"></p>
+<p class="story x" id="erastory"></p>
+<p class="legend"><span><span class="stage stable">Stable</span> tested a lot</span><span><span class="stage beta">Beta</span> light testing</span><span><span class="stage experimental">Experimental</span> not proven</span></p>
+<div class="start go">
+<button class="big" type="button" data-go="s-feat"><b>Check the feature list</b><small>See what is on, switch single features</small></button>
+<button class="big" type="button" data-go="s-tune"><b>Continue</b><small>Go on with this year as it is</small></button>
+</div>
+</section>
+
+<section class="card" data-step data-title="Features" id="s-feat">
+<h2><span class="n">2</span> Features <span class="opt">optional</span> <span class="count" id="count"></span></h2>
+<p class="mute nx">Click a name for details.</p>
+<div id="tiles"></div>
+<div class="start go">
+<button class="big" type="button" data-go="s-tune"><b>Continue</b><small>Fine-tune the settings</small></button>
+</div>
+</section>
+
+<section class="card" data-step data-title="Fine-tuning" id="s-tune">
+<h2><span class="n">3</span> Fine-tuning <span class="opt">optional</span></h2>
+<p class="mute x">Pick a module. A preset sets several things at once. Adjust changes single things. All raw settings lists every setting of the module in the ini.</p>
+<div class="pane"><div class="side" id="modside"></div><div id="modpanels"></div></div>
+<p class="mute offnote" id="offnote"></p>
+<div class="start go">
+<button class="big" type="button" data-go="s-save"><b>Continue</b><small>Save your settings</small></button>
+</div>
+</section>
+
+<section class="card" data-step data-title="Save" id="s-save">
+<h2><span class="n">4</span> Save</h2>
+<p class="mute" id="savestatus"></p>
+<div class="start go2">
+<button class="big" type="button" id="save2"><b>Save dazdrive.ini</b><small id="save2sub"></small></button>
+<button class="big" type="button" id="copy2"><b>Copy</b><small>If saving does not work</small></button>
+</div>
+<ol class="facts" id="savesteps"></ol>
+<p id="msg" class="mute"></p>
+<details><summary>Preview of the file</summary><pre id="preview"></pre></details>
+<details><summary>Save did not work?</summary><p class="mute">Press Copy, paste into Notepad, and save as <code>dazdrive.ini</code> (type "All files", not .txt) in the folder above. If copying fails, select the text in the preview and copy it yourself.</p></details>
+</section>
+</main>
+
+<dialog id="info">
+<h3><span id="i_title"></span><span id="i_stage" class="stage"></span></h3>
+<p class="since" id="i_since"></p>
+<p id="i_text"></p>
+<p class="needs" id="i_needs"></p>
+<p class="also" id="i_also"></p>
+<div class="btns"><button type="button" id="i_toggle"></button><button type="button" class="primary" id="i_close">Close</button></div>
+</dialog>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<footer class="bar">
+<div class="in">
+<div class="status" id="status"></div>
+<div class="normal btns" style="margin:0">
+<button type="button" id="copy">Copy</button>
+<button class="primary" type="button" id="save">Save dazdrive.ini</button>
+</div>
+</div></footer>
+
+<script>
+var DATA = {"version": "0.6.0-beta.4", "order": ["core", "trueshift", "cruise", "lane", "creep"], "tables": {"core": [["incident_mb", "40", "incidents folder: something went wrong (hunting gearbox, a shift you fought, rpm limiter, stuck in neutral, AEB, ...) = one file with the 20 s before and 15 s after, with the log lines of that time. The folder is kept under this size (MB), oldest first; 0 = no incident files"], ["log_level", "2", "dazdrive.log: 0 = start-up, errors, mode changes and one line per incident, 1 = + every shift and the modules' detail lines, 2 = + periodic traces and the csv trace files. The detail lines of level 1 are in every incident file anyway"], ["csv_max_mb", "5", "a csv trace (log_level 2 only) moves to <name>.1 and starts again beyond this size (MB, 0.5-200): ~2.5 hours of driving per file"], ["log_max_mb", "5", "dazdrive.log moves to dazdrive.log.1 and starts again beyond this size (MB, 0.2-100). The log of the previous session stays as dazdrive.prev.log"]], "trueshift": [["enabled", "1", "1 = TrueShift on, 0 = the game's own automatic"], ["takeover", "1", "1 = TrueShift picks the gears, 0 = only log what it would do"], ["takeover_kmh", "7", "TrueShift takes over from the game's automatic above this speed"], ["takeover_rpm", "1000", "TrueShift takes over as soon as the engine has reached this rpm with the clutch closed in any gear (the clutch is locked then, so the rpm is real); 0 = by speed only (takeover_kmh)"], ["handback_kmh", "4", "and hands back below this speed (starting, stopping, maneuvering)"], ["eco_rev_ceiling_rpm", "200", "Eco: an upshift never waits for revs above the top of the efficient range plus this (rpm), also with the pedal down; a kickdown lifts it. 0 = off. Saves fuel on long pulls"], ["mode_character", "1", "1 = Eco and Power differ from Normal in the small drivetrain details too, with their own fixed values: kickdown only at a floored pedal in Eco (0.97) and easier in Power (0.85) instead of kickdown_pedal; Power holds a gear 4 s after a downshift and 8 s after a kickdown, Eco 3 s, instead of dwell_down_up_s and kick_dwell_s; a roll must last Eco 12 / Normal 15 / Power 20 s; hint hold, engine brake and pedal filter per mode. 0 = only the main differences, the ini values for all"], ["hint_hold_s", "10", "seconds a gear chosen with the shift-hint buttons is held (0 = off)"], ["min_gap_s", "0.5", "minimum time between two shifts"], ["dwell_up_down_s", "3", "after an upshift, no downshift for this long (unless kickdown or lugging)"], ["dwell_down_up_s", "2", "after a downshift, no upshift for this long (unless clearly past the upshift point)"], ["max_skip", "2", "most gears an upshift may skip (0 = never skip)"], ["skip_accel", "0.15", "acceleration (m/s2) the skipped-to gear must still give"], ["launch_correct", "1", "1 = when the game picked a lower start gear than the physics of launch_max_kmh / launch_slip_s allow (after reversing, after the engine started, or its own downshift at a stop), the gear is changed at the standstill before the pull-away: no climbing through the low gears (0 = off)"], ["load_down_from", "0.75", "on a climb: a gear that needs this share of its full-throttle force to hold the speed (and the speed falls under real throttle) gets its downshift point raised towards the torque plateau (1 = off; a gear that cannot hold it at all downshifts at once anyway)"], ["skip_wait_over_rpm", "400", "skip_wait_s: how far over the upshift point the revs may build up while waiting for a skip (rpm; never above 85 % of the limit)"], ["kick_dwell_s", "5", "after a kickdown or lugging downshift no upshift for this long, unless clearly past the upshift point (the rpm path, not the rev limit)"], ["skip_wait_s", "6", "pulling lightly: wait up to this long for the revs to build up so a skip can land (0 = shift one gear at once)"], ["skip_relax_rpm", "80", "pulling lightly at low speed: a skip may land up to this much lower (rpm), never under the downshift point plus hysteresis_rpm. Full below pedal 0.40 or under 20 km/h at any pedal, fading out by pedal 0.65 and from 45 to 75 km/h (0 = off)"], ["hysteresis_rpm", "50", "an upshift must land at least this far above the next downshift point"], ["kickdown_pedal", "0.92", "pedal position for kickdown"], ["kickdown_rate", "1.5", "pedal speed (per second) that makes a full press a kickdown"], ["power_from", "0.65", "pedal (0-1) where the shift points start moving to the power range"], ["power_full", "1", "pedal where the shift points reach the power range"], ["cruise_rpm", "0", "Normal: an early upshift lands at least this far above the start of the torque plateau"], ["reserve", "1.3", "Normal: an early upshift needs this much more force in the new gear than now (1.3 = ~75% pedal)"], ["learn_rpm", "100", "after an upshift without pull: lowest landing rpm +this on that kind of grade (fades with distance)"], ["learn_reserve", "0.1", "and the force reserve +this"], ["learn_km", "3", "half of what was learned is forgotten after this many km (faster when upshifts hold)"], ["eco_rpm", "-75", "Eco: shift points and cruise rpm moved by this much"], ["power_rpm", "150", "Power: shift points and cruise rpm moved by this much"], ["eco_reserve", "1.2", "Eco: force reserve for an early upshift"], ["power_reserve", "1.5", "Power: force reserve for an early upshift"], ["cruise_damp_s", "4", "cruise control throttle is smoothed over this many seconds before it counts as demand"], ["ebrake_downshift", "-1", "engine brake downshifts: -1 = full when the engine's def asks for it (engine_brake_downshift), else by level; 0 = always by level; 1 = always full"], ["ebrake_skip", "1", "1 = engine brake / retarder downshifts go two gears at a time when that still fits the brake range (half the shifts, half the game's throttle blips)"], ["ebrake_light_rpm", "1100", "rpm the lightest engine brake/retarder stage keeps (the full stage keeps the engine's brake range)"], ["m_style", "0", "M mode: 0 = European (like Volvo, Mercedes): every shift is yours, also at the rev limiter; a warning tone when the engine goes over its limit (the wheels push it, e.g. downhill). 1 = protected (like Eaton): also one gear up at the rev limiter and one down before the engine stalls. 2 = assisted (like a VW DSG): also kickdown, downshifts when braking to a stop and one gear down when lugging"], ["m_lug_rpm", "1000", "M mode with m_style 2: one gear down below this rpm with a lot of pedal and no pull"], ["dash_letter", "1", "1 = the dashboard shows the mode (D, E, S, M) instead of A"], ["start_gear_fix", "1", "1 = lower the game's start gear when the launch would be too slow"], ["launch_max_kmh", "14", "a start gear above the game's pick is allowed when the clutch would be closed by this speed (km/h at launch_rpm) and the slip time stays within launch_slip_s: on a light or downhill start the truck no longer revs a low gear to the limiter. Not in Power or M. 0 = never above the game's pick (the game picks by a number in the truck definition: 4 solo, 1 with a trailer, whatever the gear ratios are). With this on, a full pedal does not demand a quicker clutch than a normal one"], ["launch_slip_s", "1", "longest clutch-slip time accepted for a start gear"], ["launch_torque", "0.6", "share of max torque the clutch passes while starting"], ["launch_rpm", "1000", "rpm at which the clutch closes when starting"], ["rolling_resistance", "0.006", "rolling resistance coefficient"], ["drag_area", "6", "air drag Cd*A in m2 for trucks (vehicles under 4.5 t use 1.0: cars, pickups)"], ["efficiency", "0.9", "driveline efficiency"], ["idle_rpm", "550", "engine idle rpm to start with (learned while standing still)"], ["lookahead", "1", "1 = use the navigation route ahead (climbs, tops, junctions); without a route TrueShift stays careful"], ["crest_band_kmh", "5", "with the route (predictive cruise, PCC): no downshift for a top ahead that this gear gets over at full throttle while losing at most this much below the set speed (without cruise: below the speed when the top came into view) and staying on the torque plateau. Full at 40 t, 60 % solo, 60 % in Power; 0 = off"], ["eco_roll_under_kmh", "1.5", "Normal mode, with cruise control: the roll ends when the speed is about to drop this far below the set speed (km/h; Volvo I-Roll: 1-3) (Written for a set speed of 70 km/h; it scales with the set speed.)"], ["eco_roll_under_eco_kmh", "2", "the same in Eco: a little more room, the most relaxed (Written for a set speed of 70 km/h; it scales with the set speed.)"], ["eco_roll_under_power_kmh", "1", "the same in Power: the strictest (keep it between 1 and 2 km/h; values around 0.5 give very short rolls that hunt) (Written for a set speed of 70 km/h; it scales with the set speed.)"], ["eco_roll_boost_kmh", "2", "with cruise control, Eco and Normal: just before an eco-roll starts, the cruise control lets the speed come this far over the set speed (km/h), so the roll takes the speed down to a little under it and the average stays near the set speed (0 = roll from the set speed) (Written for a set speed of 70 km/h; it scales with the set speed.)"], ["low_calm_kmh", "12", "below this speed (km/h) with a gentle pedal the gear is only changed down for a stall or lugging: no hunting through the gears while maneuvering (0 = off)"], ["eco_roll_max_decel", "0.04", "eco-roll only where the truck would lose at most this much speed in neutral (m/s2; 0.04 = ~3 km/h in 20 s: a slight descent, not the flat)"], ["eco_roll_max_decel_eco", "0.08", "the same in Eco: a slightly steeper stretch may still be rolled (0.08 = ~6 km/h in 20 s)"], ["eco_roll_min_kmh_eco", "40", "Eco: the lowest speed that starts an eco-roll (km/h; Normal and Power: 50)"], ["eco_roll", "1", "1 = roll in neutral with the pedal released on gentle stretches (Eco, Normal and Power; not in M; never with any brake)"], ["eco_roll_cruise", "1", "1 = roll in neutral also while the cruise control is on, even with eco_roll 0. Needs SteadyCruise, predictive cruise (PCC), lookahead and a route; 0 = only with the cruise off"], ["eco_roll_cruise_min_s", "15", "with cruise: when the cruise first has to build the roll boost speed, a roll must be expected to last this long (s); without the boost 10 s"], ["tones", "1", "1 = a short tone when the mode changes (Eco low, Normal middle, Power rising, M two short)"], ["retarder_downshift", "0", "1 = the retarder also makes TrueShift keep the rpm up like the engine brake (a retarder does not need it); 0 = only the engine brake does"], ["air_charge_psi", "100", "brake air below this (psi): keep the rpm up so the engine-driven compressor refills it; 0 = off"], ["air_charge_rpm", "1200", "the rpm kept while charging (no upshift below it)"], ["no_creep", "1", "1 = with crawl switched off the truck never creeps on the clutch at idle: pedals free below 8 km/h opens the clutch"], ["smooth_stop", "1", "1 = when braking to a stop the clutch opens around idle +150 rpm (more when braking harder) instead of pushing to ~2 km/h"], ["trace", "1", "1 = write trueshift.csv (10 per second) for analysis"]], "cruise": [["enabled", "1", "1 = cruise module on"], ["acc_short_s", "1", "adaptive cruise gap in seconds when the game option is the short distance (20). Real trucks: 2.4-3.6 s (Detroit default 3.6), but the game is scaled: 1 s feels normal"], ["acc_middle_s", "1.25", "... the middle distance (30)"], ["acc_long_s", "1.5", "... the long distance (40)"], ["crest_heavy_factor", "1.6", "predictive cruise: the ease-off before a top with a descent after it is this many times larger at a gross weight of 40 t or more (linear from 20 t; Scania allows -8 %). 1 = same at every weight"], ["eco_cruise_throttle_cap", "1", "Eco with the cruise on: the cruise never asks for more than this throttle (0..1; 1 = no cap) while the speed is within 4 km/h of the target; further under it the cap is lifted (a climb, a resume)"], ["pedal_curve_eco", "1.35", "Eco: the throttle the engine gets is the pedal to this power (1 = linear; 1.35: half pedal = 39 % throttle, flat pedal still 100 %). Not with the cruise on, not while crawling or below pedal_curve_from_kmh"], ["pedal_curve_power", "1.6", "Power: the pedal is front-loaded, throttle = 1 - (1 - pedal) to this power (1 = linear; 1.6: 60 % pedal = 77 % throttle). Same limits as pedal_curve_eco"], ["pedal_curve_switch_travel", "1", "after a mode change the pedal curve stays the old one until you have moved the pedal this much in total (1 = a full stroke), then it blends into the new one: unchanged over the first quarter of that travel, fully the new curve at the end of it. A held pedal never changes. 0 = at once"], ["pedal_curve_from_kmh", "8", "the Eco and Power pedal curves work from this speed (km/h), so parking and maneuvering stay linear"], ["rollover_guard", "3", "rollover guard (a growing sideways swing, two opposite lateral peaks within 2.5 s, also when you drive by hand): 0 = off, 1 = a tone only, 2 = also no throttle, 3 = also a soft or firm brake"], ["rollover_bend", "0", "rollover guard also for one bend taken too fast without a swing (lateral 3.5 m/s2 = tone, 4.5 = no throttle, 6 = soft brake, 8.5 = firm): 0 = off, 1 = on. Off by default: the limits depend on the physics (mods), so they fire in ordinary bends on some trucks"], ["overspeed_cap_kmh", "5", "the extra speed we grant over the set speed (hills, descents, coasting boost, smart overspeed) stops this far over the speed limit (km/h; 0 = no cap). Only while the limit is known"], ["acc_fast_from_kmh", "75", "ACC: from this speed (km/h) the time gap shrinks toward acc_fast_factor, so it follows closer on a motorway (country roads keep the full gap)"], ["acc_fast_full_kmh", "95", "ACC: from this speed (km/h) the time gap is acc_fast_factor times the set gap; in between it changes smoothly"], ["acc_fast_factor", "0.8", "ACC: the time gap times this at motorway speed (1 = same gap at every speed). Never below 0.7 s"], ["acc_min_m", "15", "the gap never gets shorter than this (meters)"], ["acc_max_m", "90", "and never longer than this"], ["speed_limit", "1", "speed-limit following at the first start (before any on/off choice is remembered): 1 = on (at every new limit the cruise set speed becomes limit + offset; +/- still work until the next sign); after that your last on/off choice is remembered (cruise_state.txt)"], ["speed_limit_hold_s", "0.8", "hold the ACC distance key of the game this long (s) to switch speed-limit following on/off; the distance stays as it was. No button number to set"], ["speed_limit_offset_kmh", "3", "set speed = limit plus this (3: 80 -> 83)"], ["auto_hold", "1", "1 = Auto Hold: after stopping with the brake the truck stays held when you release the pedal (any slope, no timer) until you give gas; it lets go smoothly as the engine pulls. Not with crawl on, the parking brake, reverse or Stop&Go. With auto_hold on, hill_start is not used"], ["auto_hold_request", "0.6", "how hard the hold brakes (brake request 0..1)"], ["auto_hold_gentle_s", "0.5", "letting go after a gentle launch (light pedal) takes about this long (s)"], ["auto_hold_hard_s", "0.15", "after a hard launch (pedal 0.8+) about this long (s), still ramped"], ["auto_hold_park_s", "60", "Auto Hold: after standing held this long (s) the parking brake goes on and the service brake lets go (no air spent, like a real truck); gas or Resume releases it, with the hold taken over for the pull-away. The plugin checks that the game really shows the parking brake and switches this off for the session if not. 0 = off"], ["auto_hold_max_s", "2.5", "the hold never fights the pedal longer than this (s); then it is released at the hard rate"], ["hill_start", "1", "1 = (only with auto_hold 0) after stopping on a slope the brake holds for a moment when you release it, until you give gas"], ["hill_start_pct", "3", "from this grade (%)"], ["hill_start_s", "3", "at most this long (s)"], ["stop_go", "1", "1 = adaptive cruise keeps going in a jam: stays on at a standstill behind a vehicle and drives off with it"], ["stop_go_rearm_s", "60", "Stop&Go: when the cruise drops by itself at a standstill behind a vehicle, the first tap on the gas pedal within this many seconds (also Resume) puts it back on with the old set speed, and B stays on the dashboard until then. 0 = off"], ["stop_go_auto_s", "0", "after standing longer than this (s), driving off needs resume or the pedal; 0 = always drives off by itself (real trucks, MAN/Detroit: 2)"], ["descent", "1", "1 = on a descent of 2 % or more (a navigation route lets it start earlier) brake gently ahead (engine brake / retarder) so the set speed holds instead of overshooting"], ["curves", "1", "1 = with navigation: slow down gently before sharp bends and exits"], ["acc_cycle_up", "1", "1 = the ACC distance key steps further away: off, close, middle, far, off (the game: far, middle, close, off)"], ["acc_calm_cut_in", "1", "1 = a vehicle cutting in or pulling away (the gap opening) does not make the cruise slow down, it only stops speeding up"], ["acc_letter", "0", "dashboard after an ACC distance change: 0 = 1 / 2 / 3 (close, medium, far; C = plain cruise, ACC off), 1 = A (the tones tell the distance)"], ["emergency_hazards", "1", "1 = hazards on by themselves when braking very hard at speed (like an emergency stop signal); off again when you drive on"], ["emergency_decel", "4", "deceleration (m/s2) that counts as an emergency stop"], ["emergency_off_decel", "2.5", "below this deceleration (m/s2) before the truck stops, the hazards go off again (real trucks: 2.5)"], ["emergency_kmh", "50", "only above this speed (km/h)"], ["air_min_psi", "75", "below this brake air pressure (psi) the module stops its own brake requests (bends, crawl descent) and leaves descents to the engine brake"], ["curve_lat", "3.125", "sideways acceleration (m/s2) allowed in bends at about 92 km/h, the same in every mode (higher = faster through bends). Slower bends get more, up to 1.23x (4 m/s2), like the allowance in a Mercedes-Benz patent"], ["route_hermite", "1", "1 = with navigation: the road between two route points is read as a curve through the directions of the points, so tight bends are seen earlier and sharper (0 = straight lines between the points, the older way)"], ["junctions", "1", "1 = with navigation: also slow down before junctions where the route turns, and before roundabouts (needs curves = 1; always on with own_acc = 1)"], ["junction_lat", "2.5", "sideways acceleration (m/s2) allowed in a junction turn (v = sqrt(this x turn radius), at least 15 km/h)"], ["junction_margin_kmh", "10", "junctions and roundabouts: brake only down to the junction's speed plus this (km/h); the rest is yours. 0 = down to the junction speed itself"], ["junction_coast_decel", "0.2", "approaching a junction or roundabout the cruise may still pick up speed while the truck could coast down to the junction speed at this deceleration (m/s2; a loaded truck coasts at about 0.1 to 0.2); no gas above that speed"], ["junction_approach_over_kmh", "20", "and never faster than the junction speed plus junction_margin_kmh plus this (km/h) on the approach"], ["junction_handover_kmh", "6", "the cruise is only cancelled for a junction once the speed is down to the junction speed plus the margin plus this (km/h) ..."], ["junction_handover_m", "30", "... or when the junction is this close (m), whatever the speed"], ["speed_limiter_kmh", "0", "our own speed limiter (km/h, 0 = off): the throttle fades out only when the speed is about to pass the limit (where it will be in 1 s, over the last 1.5 km/h), so a climb at 92 keeps its full throttle; in every mode and with the pedal curves, and the cruise set speed never goes above it. Switch the game's own limiter off"], ["junction_signal_deg", "50", "a junction on the route that turns less than this (degrees, not a roundabout) is only slowed for when you use an indicator: the route is not where you are going, and a crossing you drive straight over needs no braking. 0 = always slow for it"], ["junction_cancel_s", "5", "this many seconds before a junction or roundabout we slowed for, the cruise is cancelled with a sound (the game's Resume brings the set speed back). 0 = never"], ["junction_min_deg", "25", "turns smaller than this (degrees) are not slowed for"], ["roundabout_kmh", "25", "speed at the entry of a roundabout, also when going straight through"], ["roundabout_ratio", "1.4", "a prefab counts as a roundabout when the path through it is this many times its entry-exit chord (lower = more prefabs count)"], ["roundabout_curves", "2", "a prefab the route crosses in this many navigation curves or more counts as a roundabout, also straight through (2 = every roundabout seen so far; 3 = only those where the route uses the ring; 9 = off, the path ratio alone decides)"], ["descent_overspeed_kmh", "2", "on a descent (descent = 1) the engine brake / retarder hold the set speed plus this (km/h; 0 = exactly the set speed) (Written for a set speed of 70 km/h; it scales with the set speed.)"], ["smart_overspeed_kmh", "3", "cruise downhill: how far over the set speed the truck may run before the engine brake / retarder hold it (the game's 'smart' cruise option, km/h); -1 = keep the game's setting (at 0 the retarder comes in the moment the truck is over the set speed). On a descent of 2 % or more descent_overspeed_kmh applies instead; never less than the predictive cruise (PCC) momentum asks for (Written for a set speed of 70 km/h; it scales with the set speed.)"], ["acc_ignore_crossing", "1", "own ACC: a vehicle crossing in front (on a roundabout, at a junction) is passed, not followed: no braking or stopping for it, only no speeding up. Seen as a lead that drives (> 11 km/h) while the gap closes as if it stood still"], ["junction_plan_decel", "1.15", "junctions and roundabouts: the BRAKES are planned with this deceleration (m/s2); higher = later and firmer braking"], ["curve_brake_decel", "1.05", "bends (on/off-ramps): the brakes are planned with this deceleration (m/s2): only when it takes this much"], ["curve_coast_decel", "0.4", "bends and junctions: lifting off the throttle is planned with this gentle deceleration (m/s2), so the truck coasts first and brakes late"], ["curve_brake", "1", "1 = and brake gently (engine brake / retarder first) when releasing the throttle is not enough"], ["predictive", "1", "1 = with navigation: carry a few km/h extra into a climb, ease off before a top with a descent after it (Eco most, Power half)"], ["band_up_kmh", "6", "with predictive = 1 and navigation (predictive cruise, PCC): carry up to this much over the set speed into a climb, and in a dip (a descent with a climb right after it) let the truck run up to it before the engine brake / retarder hold it. At most this: only as much as the next climb needs (TrueShift: mass, engine, route; solo often 0); 0 = off (Written for a set speed of 70 km/h; it scales with the set speed.)"], ["band_max_s", "40", "a dip may run over the set speed for at most this long, then the engine brake / retarder hold the set speed again (Mercedes PPC: 40 s)"], ["min_kmh", "5", "lowest speed at which cruise control can be switched on or resumed (game: 30), e.g. in a jam"], ["limiter_kmh", "90", "with the game's speed limiter on, the cruise set speed never goes above this (km/h; 0 = no cap)"], ["min_set_kmh", "20", "the set speed never goes below this: switched on slower, it sets this (with ACC it follows the vehicle ahead)"], ["step_tap_kmh", "5", "a short tap on cruise + / - changes the set speed by this (rounded to a multiple of it: 83 -> 85); 0 = the game's own step"], ["step_hold_kmh", "1", "holding + / - changes it in steps of this (not rounded to the tap step)"], ["hold_s", "0.5", "how long + / - must be held before it counts as holding (s)"], ["hold_rate", "2", "while holding: steps per second"], ["retarder_off_on_set", "1", "1 = pressing cruise on / set / resume while the retarder lever is on first switches the retarder off (the game refuses or cancels cruise otherwise)"], ["resume_to_limit", "1", "1 = pressing resume while cruise is already on sets the speed limit + speed_limit_offset_kmh (only while limit following is on; lower eases down, higher at once)"], ["speed_limit_ahead", "1", "not working yet: the route data carries no speed limits, so this does nothing; kept for a later build (meant to start easing early for a lower limit ahead on the route)"], ["speed_limit_probe", "0", "not working yet, debugging only: the route data carries no speed limits; 1 = at every speed-limit change write the route nodes around the truck to the log (max 30 dumps). Leave at 0"], ["own_acc", "1", "1 = own ACC speed target from the lead vehicle's gap and speed (read from the game's radar), smooth; the game's emergency braking stays. 0 = the game's ACC target"], ["own_acc_gain", "0.3", "own ACC: m/s of speed offset per meter of gap error (target = lead speed + gain x (gap - wanted gap))"], ["own_acc_stop_m", "6", "own ACC: gap kept at a standstill (m); the wanted gap is this plus time gap x speed"], ["own_acc_plan_decel", "1.2", "own ACC: approaching a slower lead is planned with this deceleration (m/s2), so the game's emergency braking (which empties the brake air) is not needed; 0 = off"], ["own_acc_brake", "0.35", "own ACC: brake request (0..1) it may use itself when lifting off is not enough, so the game's emergency braking is not needed; 0 = never"], ["own_acc_decel", "1.2", "own ACC: how fast the target may fall (m/s2; faster, up to 8x, when closing in needs more than 0.5 m/s2)"], ["own_acc_accel", "0.8", "own ACC: how fast the target may rise (m/s2)"], ["aeb", "1", "1 = own emergency brake assist (AEB): warning tones, then partial braking, then full braking, all ramped; it replaces the game's ACC emergency braking and the game's AEB (both empty the brake air). 0 = the game's"], ["aeb_evade_steer", "0.01", "AEB: the indicator to one side plus steering that way by this much (share of the full steering range, 0.01 = ~4.5 degrees on a 900-degree wheel; or the truck turning that way at 1.4 deg/s) for 0.3 s = an evasive lane change: a warning or partial braking stands down for 3 s. 0 = off"], ["aeb_without_cruise", "1", "1 = the AEB also watches when you drive yourself (cruise off); needs the game's radar, which runs with an ACC distance, blind spot or emergency brake switched on in the options"], ["aeb_warn_s", "3", "AEB: warning tones when the time to collision drops below this (s), or earlier when more than ~1.5 m/s2 of braking would be needed (with cruise on: 2 s / 2.8 m/s2)"], ["aeb_partial_s", "2", "AEB: partial braking below this time to collision (s)"], ["aeb_full_s", "1.2", "AEB: full braking below this time to collision (s)"], ["aeb_partial_decel", "3", "AEB: deceleration of the partial stage (m/s2; Mercedes ABA: ~3)"], ["aeb_max_decel", "6.5", "AEB: the most it asks for in the full stage (m/s2)"], ["aeb_min_kmh", "15", "AEB: only steps in above this speed (km/h); once braking it brakes to a stop. Slower is the ACC's job"], ["trace", "1", "1 = write cruise.csv (10 per second while cruise is on or Auto Hold holds) for analysis"], ["approach_s", "2.5", "own cruise throttle: the throttle eases off when the truck would reach the set speed within about this many seconds at the speed it is gaining now (also on a descent), so it arrives without overshooting. Eco 1.2x, Power 0.6x. 0 = off"], ["smooth", "1", "1 = own smooth cruise throttle (no bursts after shifts; Eco gentle, Power keen), 0 = the game's"]], "lane": [["mode", "2", "lane assist: 0 = the game's own law (the plugin only measures it, in lane.csv), 2 = model-based law fitted on real rides: offset + heading + bend feed-forward + assist feedback (1 is treated as 2)"], ["offset_gain", "0.009", "mode 2: assist offset A asked per meter of offset from the lane center (the game's own law: 0.015 per m at 80 km/h)"], ["heading_gain", "0.55", "mode 2: assist offset A asked per unit of heading error o2 (the game's own: 0.24). This is the damping: do1/dt = -0.88 v o2, so heading is the lead that the ~0.5 s of lag in game integrator + wheel needs"], ["assist_feedback", "40", "mode 2: request per unit of error in A (fast loop around the game's integrator: its time constant goes from 0.26 s to ~0.1 s). 0 = off"], ["bend_assist", "2.9", "mode 2: assist offset A per unit of curvature term o3 that the bend feed-forward asks for (a bend needs 4.4 when you do not steer; 2.9 = 65%, the offset term and I do the rest; you steering yourself in the bend adds to it)"], ["edge_boost", "1", "mode 2: extra stiffness of the offset term between edge_from and edge_full (1 = twice as stiff at edge_full): firm when drifting"], ["i_gain", "0.001", "mode 2: slow correction: assist offset A per meter of offset per second (steady offset, also in long bends)"], ["i_max", "0.004", "mode 2: the slow correction never gets bigger than this assist offset A"], ["wheel_gain_ref", "1.3", "mode 2: how far the wheel turns per unit of assist offset A that the gains are tuned for (typically 1.2-1.5). The wheel's real answer is measured live (it can be up to 3x in a sharp bend) and every A term is scaled down by this / the live value (never up, never below 0.35)"], ["bend_max_lat", "2.5", "mode 2: the bend feed-forward never asks for more than a bend of this sideways acceleration (m/s2) at the speed you drive: a road does not bend sharper than that at highway speed, so a lane term that jumps there is a shifting or splitting lane, not a bend (seen at 94 km/h on a straight: the lane term flipped sign within a second and the truck swung 1.5 m). 0 = off"], ["bend_lead_s", "0.35", "mode 2: the bend feed-forward looks this many seconds further ahead than the game's lane term (it sees ~0.25 s ahead, the wheel follows ~0.45 s late): o3 + this x its rate of change, so the wheel is not left short in a sharp bend that comes on quickly. 0 = off"], ["bend_hold", "0.5", "mode 2: in a bend the assist always keeps at least this share of the bend feed-forward, and it does not unwind while the wheel is under this share of what the bend needs (so the wheel does not unwind to 0 in a sharp bend). 0 = off"], ["unwind_s", "0.8", "mode 2: in a bend the wanted assist offset unwinds (towards the outside) at most this fast: seconds from the full bend feed-forward to 0. 0 = no limit"], ["soft_start", "0.35", "mode 2: right after lane keeping comes on (or finds its lane again) it steers with only this share, ramped in over 1 s, until the truck has been near the center for 0.5 s (or 20 s), then grows to full over 2 s; heading for the line (1.5 s ahead beyond 0.8 -> 1.4 m) it is full anyway. Avoids a hard jolt when switching it on; 0 = off"], ["heading_ref_kmh", "60", "mode 2: above this speed the heading gain shrinks with 1/speed (at most to half)"], ["rate2", "12", "mode 2: how fast the request may change (per second; the assist feedback needs it fast)"], ["anti_sway", "1", "mode 2: 1 = a live sway detector: o1 swinging to and fro around the center (period 1-6 s, not dying out) cuts the offset and heading gains at once and gives them back slowly; the learner takes it as 'too much gain'"], ["sway_cut", "0.65", "anti-sway: share of the gains that is left after each detected sway (0.65 = cut by 35%, twice = 42%; never below 0.4)"], ["sway_recover_s", "25", "anti-sway: seconds to give the cut back once it is calm (it waits 5 s first)"], ["sway_amp", "0.15", "anti-sway: swings (peak to peak) smaller than 1.5x this many meters do not count"], ["learn", "1", "mode 2: 1 = the law learns how your wheel responds (strength, damping, delay) and scales its gains to keep the loop calm; stored per wheel in steer_profile.txt. 0 = the fixed gains"], ["learn_rate", "0.4", "learning: share of the way to the estimated best gain scale taken per update (0.1 = slow, 1 = at once)"], ["learn_min", "0.7", "learning: the gains are never scaled below this (x the ini gains)"], ["learn_max", "1", "learning: and never above this: 1 = the learner may only soften the gains (a scale of 1.27 on a strong real wheel rang in an S-bend at 85 km/h)"], ["learn_update_s", "30", "learning: seconds of usable driving (hands off, straight-ish, fast enough) between two profile updates"], ["learn_save_s", "240", "learning: the profile file is written at most this often (and when the game closes)"], ["assist_max", "0.12", "the assist's wheel offset never grows past this (the game lets it build up to 1)"], ["assist_leak", "0.005", "share of the assist offset that leaks away every physics step (stops the build-up)"], ["gain", "1", "share of the game's steering request"], ["dead_zone", "0.01", "requests smaller than this become 0 (the wheel is yours)"], ["u_max", "1", "the request never gets bigger than this (the game's own maximum is 1)"], ["driver_backoff", "1", "share of the assist that is left while you steer yourself (1 = no backing off, the default: the assist should not care whether you hold the wheel)"], ["edge_from", "0.3", "offset from the lane center (m) where the assist starts to grow (like a VW: gentle in the middle, firmer towards the line)"], ["edge_full", "0.9", "and the offset (m) where it is at full strength"], ["edge_look_s", "1.5", "the strength follows where you will be this many seconds ahead (drifting off: wheel wrong for the bend, hands off) and not only where you are"], ["driver_rate", "0.06", "wheel speed (wheel range per second) at which you count as fully steering; a third of it is ignored (hand noise)"], ["driver_follow", "3", "wheel speed the assist itself may cause per unit of assist offset (same direction as the assist; not counted as you steering)"], ["driver_attack", "0.15", "seconds until the assist is backed off when you start steering"], ["driver_release", "1", "seconds until the assist is back at full strength after you let go"], ["follow", "0", "mode 2: 1 = shared steering: an offset you hold with the wheel (passing a cyclist, a parked car) becomes the aim for a while, the assist then keeps damping and steering the bends but stops pulling back to the lane center; 0 = off"], ["lane_bias_m", "0", "mode 2: the assist aims this far to the RIGHT of the lane center (m), like a driver who keeps right (0 = the center). It builds up slowly and fades out in bends (the truck cuts those inside by itself) and is gone in a sharp one"], ["runaway_guard", "1", "mode 2: 1 = a safety net: when the assist runs away (the request hits its ceiling three times in alternating directions within 3.5 s, or the heading error goes over 0.18 rad above 40 km/h) the game's own assist takes over for 4 s, with a tone, then ours comes back softly; 0 = off"], ["lane_bend_out_m", "0", "mode 2: in a bend the assist aims this far to the OUTSIDE of the bend (m): the tractor swings wide so the trailer has room (a right bend: to the left of the lane center, a left bend: to the right). It comes with the bend (o3), instead of the keep-right bias"], ["bend_blend", "0", "shared steering in a bend: 1 = while you steer into the bend yourself the assist leaves its own bend steering out for the part you already do, and builds it back within 0.3 s when you let go; 0 = the assist always adds its full bend steering (can cut the bend inside when you steer too)"], ["bend_blend_max", "0.6", "bend_blend: the most of the assist's own bend steering it leaves out (0-1)"], ["follow_pull", "0.002", "shared steering: the assist must pull the wheel at least this much (wheel range) for a still hand against it to show; a gentle offset hardly moves the wheel, so steering speed alone does not see it"], ["follow_act", "0.3", "shared steering: how much steering (0-1) counts as you holding a position"], ["follow_hold_s", "0.4", "shared steering: the offset must stay steady (not drifting) this long before it is taken over"], ["follow_window_s", "3", "shared steering: the aim follows your offset only within this many seconds after you last steered"], ["follow_max_m", "0.6", "shared steering: the most of an offset it takes over (m)"], ["follow_tau_s", "0.5", "shared steering: seconds in which the aim moves to your offset"], ["return_tau_s", "6", "shared steering: seconds in which the aim goes back to the lane center after you let go"], ["return_rate", "0.1", "shared steering: the aim never goes back faster than this (m/s)"], ["follow_backoff", "0.3", "shared steering: share of the offset pull left while you are steering (the heading damping and the bend steering stay at 100%)"], ["follow_bend_o3", "0.004", "shared steering: no taking over of an offset in a bend sharper than this (|o3|): steering there is the bend, not a position"], ["driver_leak", "0.02", "extra share of the assist offset that leaks away per physics step while you steer"], ["min_kmh", "20", "the assist steers from this speed (game: 55 km/h); below it the wheel is free"], ["slow_resume", "0", "0 = after lane keeping went off on a slow stretch it stays off until you press its key (a switch-on by itself when the speed comes back to about 55 km/h is undone); 1 = leave that to the game"], ["keep_on", "1", "1 = the game never switches lane keeping off for low speed: it can be switched on standing still and waits until min_kmh (mode 2 gives no request below it). 0 = off below min_kmh, back on from on_kmh"], ["on_kmh", "39", "keep_on = 0: after dropping below min_kmh it only comes back from this speed"], ["indicator_pause", "1", "1 = an indicator (one side, not the hazards) pauses the assist: the wheel is yours for the lane change; after the indicator goes off and a lane is found again (or 4 s) it comes back gently over 1 s. 0 = only no steering back against the indicator"], ["indicator_off", "1", "with indicator_pause: the indicator also switches the game's lane keeping itself off (silently), and it is switched on again after the lane change. Not when you switch it back on yourself meanwhile"], ["needs_cruise", "1", "1 = lane centering steers only while the cruise control is on, and switching the cruise on switches lane keeping on (like a travel assist); without the cruise only the game's warning stays. 0 = also without the cruise"], ["roundabout_off", "1", "1 = when the cruise control cancels itself for a roundabout, lane keeping goes off with it (a roundabout is yours to steer), and comes back on when the cruise is resumed (within 90 s). Junctions: use your indicator"], ["indicator_resume", "0", "with indicator_pause: lane keeping that went off during the lane change (above min_kmh) is switched on again afterwards (sets the game's lane-keeping flag). Off by default: the game does not switch it off for an indicator, and with keep_on not for speed, so it would mostly undo your own key press"], ["non_ffb_mode", "0", "without a force-feedback wheel (keyboard, gamepad, mouse steering: the game adds the assist to the steering angle instead of turning the wheel; recognized from the steering data in ~1 s): 0 = the game's own law (mode 2 is fitted on FFB wheels), 2 = mode 2 anyway (not tuned)"], ["tone", "1", "1 = a rising tone when lane keeping is switched on, a falling one when it goes off"]], "creep": [["enabled", "1", "1 = crawl / maneuver mode on (automatic only; the clutch slips at idle in gears 1, 2 and R)"], ["creep_kmh", "5", "crawl speed with both pedals released (km/h); the brake pedal lowers it"], ["manoeuvre_kmh", "10", "speed the throttle can ask for while maneuvering: at max_pedal (km/h), in between it follows the pedal"], ["on_kmh", "8", "the mode starts below this speed (km/h)"], ["off_kmh", "17", "and ends above this speed (km/h); with throttle it ends above manoeuvre_kmh"], ["max_pedal", "0.3", "throttle (0..1) above which you have the full engine and the mode ends"], ["brake", "0.3", "brake pedal (0..1) that takes the crawl away completely; below it the brake lowers the crawl speed"], ["from_rest", "1", "1 = after a stop, with both pedals free, engage gear 1 and crawl off (the stock automatic waits in neutral)"], ["descent_kmh", "8", "downhill: the crawl starts braking above this speed (km/h)"], ["descent_brake", "0.4", "downhill: brake request (0..1) the crawl may use to hold its speed; 0 = off"], ["start_on", "0", "crawl switched on when the game starts (else hold the gearbox-mode key at a standstill to switch it on)"], ["toggle_mode_key", "1", "1 = hold the game's gearbox-mode key (Eco/Normal/Power/M) at a standstill to switch crawl on/off; the mode it stepped to is put back"], ["toggle_hold_s", "0.8", "how long to hold it"], ["arm_kmh", "0", "from_rest only after the truck has been driven faster than this since the engine started (km/h); 0 = always"], ["rest_delay_s", "0.3", "from_rest: both pedals free this long (s) before the truck starts crawling"], ["reverse", "1", "1 = crawl in reverse too (keeps going after you reverse, never starts it: the game's brake-at-rest makes R)"], ["close_rate", "0.3", "clutch closing speed at most (per second)"], ["open_rate", "1", "clutch opening speed at most (per second)"], ["release_s", "0.8", "handing the clutch back to the game takes this long (s)"], ["heavy_t", "20", "loads from this mass (metric tons, truck + trailer) are heavy: crawl in a low gear with a little throttle; lighter: clutch only, in a higher gear"], ["max_gear", "5", "light load: highest gear used for crawling (the lowest gear whose idle lock-up speed reaches creep_kmh)"], ["heavy_gear", "2", "heavy load: highest gear used for crawling"], ["crawl_max_rpm", "950", "heavy load: crawl in the lowest gear in which the engine stays at or under this speed (rpm) at the crawl speed: the clutch is closed there and the engine pulls from a higher speed with a little throttle. Lighter or when no gear fits: the clutch slips at idle in a higher gear as before. 0 = old rule (heavy_gear)"], ["heavy_throttle", "0.15", "heavy load: most throttle the plugin adds when the clutch alone is not enough (0 = none; needs the Cruise module on)"], ["smooth_start", "1", "1 = smooth start: pulling away (forward, from a standstill, automatic) the plugin closes the clutch itself, with or without crawl: the engine rises to a speed that follows the pedal, the clutch slips to hold it until the wheels catch up, then closes gently. 0 = the game's own clutch"], ["smooth_start_rpm_light", "200", "smooth start: engine speed above idle (rpm) the slip aims for with a light pedal"], ["smooth_start_rpm_full", "1200", "smooth start: engine speed (rpm) the slip aims for with the pedal flat"], ["smooth_start_rpm_heavy", "100", "smooth start: extra rpm for a heavy load (heavy_t), the engine needs more torque to get it going"], ["smooth_start_bite", "0.96", "smooth start: clutch position (1 = open) where the clutch starts to carry, the engine rises against it first"], ["smooth_start_gain", "0.5", "smooth start: how fast the clutch closes (per second) per 100 rpm the engine is above its aim; and opens when below"], ["smooth_start_creep", "0.1", "smooth start: the clutch always closes at least this fast (per second) so the slip ends; grows after 1 s"], ["smooth_start_final", "1.2", "smooth start: closing speed (per second) of the last part, once engine and wheels are within smooth_start_sync_rpm; only used at the very end"], ["smooth_start_max_rate", "2", "smooth start: the fastest the clutch ever closes while it holds the engine at its aim (per second)"], ["smooth_start_sync_rpm", "80", "smooth start: engine and wheel speed this close (rpm) = the clutch closes the rest"], ["smooth_start_max_s", "2.5", "smooth start: longest slip time (s), then it closes at smooth_start_final whatever the engine does"], ["smooth_start_end_kmh", "14", "smooth start: at this speed (km/h) it is over, the clutch is closed and handed back to the game"], ["letter", "1", "1 = show C (crawl) on the dashboard while the mode is on"], ["trace", "1", "1 = write creep.csv (10 per second while the mode is on)"]]}, "standard": {"core": {"log_level": "2", "log_max_mb": "0.6", "incident_mb": "4"}, "trueshift": {"takeover_rpm": "0", "takeover_kmh": "10", "handback_kmh": "6", "eco_roll": "1", "lookahead": "0", "no_creep": "1", "smooth_stop": "1", "dash_letter": "1", "tones": "1", "trace": "1"}, "cruise": {"smart_overspeed_kmh": "-1", "descent_overspeed_kmh": "0", "auto_hold_park_s": "0", "smooth": "1", "curves": "0", "curve_brake": "0", "descent": "1", "emergency_hazards": "1", "air_min_psi": "75", "limiter_kmh": "90", "acc_calm_cut_in": "1", "acc_cycle_up": "1", "step_tap_kmh": "5", "step_hold_kmh": "1", "retarder_off_on_set": "1", "hill_start": "1", "min_kmh": "30", "min_set_kmh": "0", "predictive": "0", "junctions": "0", "own_acc": "0", "auto_hold": "0", "stop_go": "0", "speed_limit": "0", "speed_limit_ahead": "0", "resume_to_limit": "0", "speed_limit_probe": "0", "trace": "1"}, "lane": {"mode": "0", "tone": "0", "min_kmh": "55", "keep_on": "0", "on_kmh": "55", "indicator_pause": "0", "lane_bias_m": "0", "lane_bend_out_m": "0"}, "creep": {"enabled": "0", "smooth_start": "0", "start_on": "0", "trace": "1"}}, "intro": {"core": "Logging. Level 0 keeps a short log and writes an incident file when something goes wrong; level 1 and 2 log more (2 adds csv traces, large).", "trueshift": "The gearbox: TrueShift picks the gears of the game's automatic.", "cruise": "Cruise control and ACC extras. The standard preset has the stable ones on, except the ones that look ahead (bends, climbs); beta and experimental ones (ACC, Stop & Go, Auto Hold, ISA, JunctionSense) are off.", "lane": "Lane centering. The standard preset leaves the game's own assist alone.", "creep": "Crawl / maneuver mode (slipping clutch in 1, 2 and R). Off in the standard preset."}, "standard_header": "standard preset (stable on, except the look-ahead ones; beta and experimental (ACC, Stop & Go, Auto Hold, ISA, JunctionSense, lane centering, crawl mode, smooth start) off).", "switches": {"trueshift": ["enabled", "eco_roll", "lookahead", "smooth_stop"], "creep": ["enabled", "smooth_start"], "cruise": ["smooth", "curves", "junctions", "predictive", "descent", "emergency_hazards", "aeb", "rollover_guard", "hill_start", "own_acc", "stop_go", "auto_hold", "speed_limit"], "lane": ["mode"]}, "howto": "One setting per line as name=value, with what it does in the lines above it. Lines that start with # are ignored. Restart the game after a change. A setting you delete gets its standard value. The defaults were tuned on real rides: change one thing at a time. Switches are 1 (on) or 0 (off).", "buttons": [], "groups": [{"id": "ts", "off_when": ["trueshift", "enabled", "0"], "title": "Gearbox (TrueShift)", "about": ["How TrueShift shifts."], "tuning": [{"name": "Standard", "desc": "Tuned in test drives", "over": {}}], "knobs": [{"kind": "choice", "label": "M mode", "help": "M is manual mode: you shift with + and −. This sets what the gearbox still does by itself there.", "key": ["trueshift", "m_style"], "options": [["0", "European: you shift everything, also at the rev limiter. A tone warns when the engine over-revs (Volvo, Mercedes)"], ["1", "Protected: like European, but it shifts up at the rev limiter and down before a stall (Eaton)"], ["2", "Assisted: like Protected, plus kickdown, a downshift when you brake to a stop, and one gear down when the engine lugs (like a VW DSG)"]]}, {"kind": "range", "label": "Gear stays in after + or −", "help": "How long a gear you picked stays in, in seconds. 0 = off.", "unit": "s", "min": 0, "max": 30, "step": 1, "key": ["trueshift", "hint_hold_s"]}, {"kind": "toggle", "label": "Show the mode on the dashboard", "help": "D, E, S or M instead of the game's A.", "keys": [["trueshift", "dash_letter", "1", "0"]]}, {"kind": "toggle", "label": "Tone when the mode changes", "help": "Eco low, Normal middle, Power rising, M two short.", "keys": [["trueshift", "tones", "1", "0"]]}], "scope": [["trueshift", "enabled", "b"], ["trueshift", "takeover", "b"], ["trueshift", "takeover_kmh", "n"], ["trueshift", "takeover_rpm", "n"], ["trueshift", "handback_kmh", "n"], ["trueshift", "eco_rev_ceiling_rpm", "n"], ["trueshift", "mode_character", "b"], ["trueshift", "hint_hold_s", "n"], ["trueshift", "min_gap_s", "n"], ["trueshift", "dwell_up_down_s", "n"], ["trueshift", "dwell_down_up_s", "n"], ["trueshift", "max_skip", "n"], ["trueshift", "skip_accel", "n"], ["trueshift", "launch_correct", "b"], ["trueshift", "load_down_from", "n"], ["trueshift", "skip_wait_over_rpm", "n"], ["trueshift", "kick_dwell_s", "n"], ["trueshift", "skip_wait_s", "n"], ["trueshift", "skip_relax_rpm", "n"], ["trueshift", "hysteresis_rpm", "n"], ["trueshift", "kickdown_pedal", "n"], ["trueshift", "kickdown_rate", "n"], ["trueshift", "power_from", "n"], ["trueshift", "power_full", "n"], ["trueshift", "cruise_rpm", "n"], ["trueshift", "reserve", "n"], ["trueshift", "learn_rpm", "n"], ["trueshift", "learn_reserve", "n"], ["trueshift", "learn_km", "n"], ["trueshift", "eco_rpm", "n"], ["trueshift", "power_rpm", "n"], ["trueshift", "eco_reserve", "n"], ["trueshift", "power_reserve", "n"], ["trueshift", "cruise_damp_s", "n"], ["trueshift", "ebrake_downshift", "n"], ["trueshift", "ebrake_skip", "b"], ["trueshift", "ebrake_light_rpm", "n"], ["trueshift", "m_style", "n"], ["trueshift", "m_lug_rpm", "n"], ["trueshift", "dash_letter", "b"], ["trueshift", "start_gear_fix", "b"], ["trueshift", "launch_max_kmh", "n"], ["trueshift", "launch_slip_s", "n"], ["trueshift", "launch_torque", "n"], ["trueshift", "launch_rpm", "n"], ["trueshift", "rolling_resistance", "n"], ["trueshift", "drag_area", "n"], ["trueshift", "efficiency", "n"], ["trueshift", "idle_rpm", "n"], ["trueshift", "lookahead", "b"], ["trueshift", "crest_band_kmh", "n"], ["trueshift", "eco_roll_under_kmh", "n"], ["trueshift", "eco_roll_under_eco_kmh", "n"], ["trueshift", "eco_roll_under_power_kmh", "n"], ["trueshift", "eco_roll_boost_kmh", "n"], ["trueshift", "low_calm_kmh", "n"], ["trueshift", "eco_roll_max_decel", "n"], ["trueshift", "eco_roll_max_decel_eco", "n"], ["trueshift", "eco_roll_min_kmh_eco", "n"], ["trueshift", "eco_roll", "b"], ["trueshift", "eco_roll_cruise", "b"], ["trueshift", "eco_roll_cruise_min_s", "n"], ["trueshift", "tones", "b"], ["trueshift", "retarder_downshift", "b"], ["trueshift", "air_charge_psi", "n"], ["trueshift", "air_charge_rpm", "n"], ["trueshift", "no_creep", "b"], ["trueshift", "smooth_stop", "b"]]}, {"id": "cc", "off_when": null, "title": "Cruise control and ACC", "about": ["How the cruise, ACC and emergency braking behave."], "tuning": [{"name": "Close", "desc": "Gaps 1.0 / 1.25 / 1.5 s, bends 3.125 m/s². Normal in game traffic.", "over": {}}, {"name": "Relaxed", "desc": "Gaps 1.5 / 2.0 / 2.5 s, bends 2.75 m/s². More room.", "over": {"cruise": {"acc_short_s": "1.5", "acc_middle_s": "2", "acc_long_s": "2.5", "curve_lat": "2.75"}}}, {"name": "Real truck", "desc": "Gaps 2.4 / 3.0 / 3.6 s like Detroit and Bendix, bends 2.4 m/s². Stop & Go drives off by itself only after a stop under 2 s.", "over": {"cruise": {"acc_short_s": "2.4", "acc_middle_s": "3", "acc_long_s": "3.6", "curve_lat": "2.4", "stop_go_auto_s": "2"}}}, {"name": "Dutch", "desc": "Gaps 0.9 / 1.15 / 1.4 s, bends 2.325 m/s². Right at the edge: 0.8 s is the lowest gap the standard allows.", "over": {"cruise": {"acc_short_s": "0.9", "acc_middle_s": "1.15", "acc_long_s": "1.4", "curve_lat": "2.325"}}}], "knobs": [{"kind": "range", "presets": true, "label": "ACC gap", "help": "Gap at the middle setting; short and long follow. Real trucks keep about 3 s; in the game 1.25 to 2 s feels normal.", "unit": "s", "min": 0.7, "max": 3.5, "step": 0.05, "key": ["cruise", "acc_middle_s"], "at": [1.25, 2, 3, 1.15], "follow": [[["cruise", "acc_short_s"], [1, 1.5, 2.4, 0.9], 0.05], [["cruise", "acc_long_s"], [1.5, 2.5, 3.6, 1.4], 0.05]]}, {"kind": "range", "presets": true, "label": "Speed through bends", "help": "Sideways force allowed in a bend (m/s²). Lower is slower and calmer.", "unit": "m/s²", "min": 2, "max": 3.5, "step": 0.025, "key": ["cruise", "curve_lat"], "at": [3.125, 2.75, 2.4, 2.325], "follow": []}, {"kind": "toggle", "label": "Stop & Go drives off by itself only after a short stop", "help": "Like real trucks. After a stop over 2 s, press Resume or the throttle.", "keys": [["cruise", "stop_go_auto_s", "2", "0"]]}, {"kind": "choice", "label": "Emergency braking warns", "help": "When the warning starts. With ACC on it warns at 2 s at the latest. Braking stays at 2 s (partial) and 1.2 s (full).", "key": ["cruise", "aeb_warn_s"], "options": [["3.5", "Early (3.5 s before a crash)"], ["3", "Normal (3 s)"], ["2.5", "Late (2.5 s)"]]}, {"kind": "range", "label": "Set speed above the limit by", "help": "With Follow speed limits (ISA) on.", "unit": "km/h", "min": 0, "max": 10, "step": 1, "key": ["cruise", "speed_limit_offset_kmh"]}, {"kind": "range", "label": "Never more than this over the limit", "help": "The cruise's own extra speed (descents, hills, coasting boost) stops here. 0 = no cap. Needs the limit to be known.", "unit": "km/h", "min": 0, "max": 10, "step": 1, "key": ["cruise", "overspeed_cap_kmh"]}, {"kind": "choice", "label": "A tap on cruise + / −", "help": "Changes the set speed by this much.", "key": ["cruise", "step_tap_kmh"], "options": [["0", "The game's own step"], ["1", "1 km/h"], ["2", "2 km/h"], ["5", "5 km/h"], ["10", "10 km/h"]]}, {"kind": "range", "label": "Speed limiter caps the set speed at", "help": "With the game's speed limiter on (0 = no cap).", "unit": "km/h", "min": 0, "max": 100, "step": 1, "key": ["cruise", "limiter_kmh"]}, {"kind": "toggle", "label": "Emergency braking also without cruise", "help": "AEB also works when you drive yourself. Needs the game's radar: an ACC distance, blind spot or emergency brake switched on in the game's options.", "keys": [["cruise", "aeb_without_cruise", "1", "0"]]}, {"kind": "toggle", "label": "Distance key goes off, close, middle, far", "help": "The game: far, middle, close.", "keys": [["cruise", "acc_cycle_up", "1", "0"]]}, {"kind": "toggle", "label": "Coast in neutral with cruise on", "help": "On gentle descents, with SteadyCruise, Cruise looks ahead, Gearbox looks ahead and a route. The cruise gives a little gas first, and only for a roll of 15 s or more. Works without Eco-roll.", "keys": [["trueshift", "eco_roll_cruise", "1", "0"]]}, {"kind": "toggle", "label": "Pressing Set turns the retarder off", "help": "The game refuses cruise while the retarder lever is on.", "keys": [["cruise", "retarder_off_on_set", "1", "0"]]}], "scope": [["cruise", "enabled", "b"], ["cruise", "acc_short_s", "n"], ["cruise", "acc_middle_s", "n"], ["cruise", "acc_long_s", "n"], ["cruise", "crest_heavy_factor", "n"], ["cruise", "eco_cruise_throttle_cap", "n"], ["cruise", "pedal_curve_eco", "n"], ["cruise", "pedal_curve_power", "n"], ["cruise", "pedal_curve_switch_travel", "n"], ["cruise", "pedal_curve_from_kmh", "n"], ["cruise", "rollover_guard", "n"], ["cruise", "rollover_bend", "n"], ["cruise", "overspeed_cap_kmh", "n"], ["cruise", "acc_fast_from_kmh", "n"], ["cruise", "acc_fast_full_kmh", "n"], ["cruise", "acc_fast_factor", "n"], ["cruise", "acc_min_m", "n"], ["cruise", "acc_max_m", "n"], ["cruise", "speed_limit", "n"], ["cruise", "speed_limit_hold_s", "n"], ["cruise", "speed_limit_offset_kmh", "n"], ["cruise", "auto_hold", "b"], ["cruise", "auto_hold_request", "n"], ["cruise", "auto_hold_gentle_s", "n"], ["cruise", "auto_hold_hard_s", "n"], ["cruise", "auto_hold_park_s", "n"], ["cruise", "auto_hold_max_s", "n"], ["cruise", "hill_start", "b"], ["cruise", "hill_start_pct", "n"], ["cruise", "hill_start_s", "n"], ["cruise", "stop_go", "b"], ["cruise", "stop_go_rearm_s", "n"], ["cruise", "stop_go_auto_s", "n"], ["cruise", "descent", "b"], ["cruise", "curves", "b"], ["cruise", "acc_cycle_up", "b"], ["cruise", "acc_calm_cut_in", "b"], ["cruise", "acc_letter", "n"], ["cruise", "emergency_hazards", "b"], ["cruise", "emergency_decel", "n"], ["cruise", "emergency_off_decel", "n"], ["cruise", "emergency_kmh", "n"], ["cruise", "air_min_psi", "n"], ["cruise", "curve_lat", "n"], ["cruise", "route_hermite", "b"], ["cruise", "junctions", "b"], ["cruise", "junction_lat", "n"], ["cruise", "junction_margin_kmh", "n"], ["cruise", "junction_coast_decel", "n"], ["cruise", "junction_approach_over_kmh", "n"], ["cruise", "junction_handover_kmh", "n"], ["cruise", "junction_handover_m", "n"], ["cruise", "speed_limiter_kmh", "n"], ["cruise", "junction_signal_deg", "n"], ["cruise", "junction_cancel_s", "n"], ["cruise", "junction_min_deg", "n"], ["cruise", "roundabout_kmh", "n"], ["cruise", "roundabout_ratio", "n"], ["cruise", "roundabout_curves", "n"], ["cruise", "descent_overspeed_kmh", "n"], ["cruise", "smart_overspeed_kmh", "n"], ["cruise", "acc_ignore_crossing", "n"], ["cruise", "junction_plan_decel", "n"], ["cruise", "curve_brake_decel", "n"], ["cruise", "curve_coast_decel", "n"], ["cruise", "curve_brake", "b"], ["cruise", "predictive", "b"], ["cruise", "band_up_kmh", "n"], ["cruise", "band_max_s", "n"], ["cruise", "min_kmh", "n"], ["cruise", "limiter_kmh", "n"], ["cruise", "min_set_kmh", "n"], ["cruise", "step_tap_kmh", "n"], ["cruise", "step_hold_kmh", "n"], ["cruise", "hold_s", "n"], ["cruise", "hold_rate", "n"], ["cruise", "retarder_off_on_set", "b"], ["cruise", "resume_to_limit", "b"], ["cruise", "speed_limit_ahead", "n"], ["cruise", "speed_limit_probe", "n"], ["cruise", "own_acc", "b"], ["cruise", "own_acc_gain", "n"], ["cruise", "own_acc_stop_m", "n"], ["cruise", "own_acc_plan_decel", "n"], ["cruise", "own_acc_brake", "n"], ["cruise", "own_acc_decel", "n"], ["cruise", "own_acc_accel", "n"], ["cruise", "aeb", "b"], ["cruise", "aeb_evade_steer", "n"], ["cruise", "aeb_without_cruise", "b"], ["cruise", "aeb_warn_s", "n"], ["cruise", "aeb_partial_s", "n"], ["cruise", "aeb_full_s", "n"], ["cruise", "aeb_partial_decel", "n"], ["cruise", "aeb_max_decel", "n"], ["cruise", "aeb_min_kmh", "n"], ["cruise", "approach_s", "n"], ["cruise", "smooth", "b"]]}, {"id": "lka", "off_when": ["lane", "mode", "0"], "title": "Lane centering", "about": ["How lane centering behaves."], "tuning": [{"name": "Standard", "desc": "Tones when it switches on, off or pauses", "over": {"lane": {"tone": "1"}}}, {"name": "Quiet", "desc": "No tones", "over": {"lane": {"tone": "0"}}}], "knobs": [{"kind": "toggle", "label": "Off at a roundabout", "help": "When the cruise cancels itself for a roundabout, lane centering goes off too, and back on at the next Resume.", "keys": [["lane", "roundabout_off", "1", "0"]]}, {"kind": "toggle", "label": "Tones when it switches on, off or pauses", "help": "Rising for on, falling for off.", "keys": [["lane", "tone", "1", "0"]]}], "scope": [["lane", "mode", "n"], ["lane", "offset_gain", "n"], ["lane", "heading_gain", "n"], ["lane", "assist_feedback", "n"], ["lane", "bend_assist", "n"], ["lane", "edge_boost", "n"], ["lane", "i_gain", "n"], ["lane", "i_max", "n"], ["lane", "wheel_gain_ref", "n"], ["lane", "bend_max_lat", "n"], ["lane", "bend_lead_s", "n"], ["lane", "bend_hold", "n"], ["lane", "unwind_s", "n"], ["lane", "soft_start", "n"], ["lane", "heading_ref_kmh", "n"], ["lane", "rate2", "n"], ["lane", "anti_sway", "n"], ["lane", "sway_cut", "n"], ["lane", "sway_recover_s", "n"], ["lane", "sway_amp", "n"], ["lane", "learn", "n"], ["lane", "learn_rate", "n"], ["lane", "learn_min", "n"], ["lane", "learn_max", "n"], ["lane", "learn_update_s", "n"], ["lane", "learn_save_s", "n"], ["lane", "assist_max", "n"], ["lane", "assist_leak", "n"], ["lane", "gain", "n"], ["lane", "dead_zone", "n"], ["lane", "u_max", "n"], ["lane", "driver_backoff", "n"], ["lane", "edge_from", "n"], ["lane", "edge_full", "n"], ["lane", "edge_look_s", "n"], ["lane", "driver_rate", "n"], ["lane", "driver_follow", "n"], ["lane", "driver_attack", "n"], ["lane", "driver_release", "n"], ["lane", "follow", "n"], ["lane", "lane_bias_m", "n"], ["lane", "runaway_guard", "n"], ["lane", "lane_bend_out_m", "n"], ["lane", "bend_blend", "n"], ["lane", "bend_blend_max", "n"], ["lane", "follow_pull", "n"], ["lane", "follow_act", "n"], ["lane", "follow_hold_s", "n"], ["lane", "follow_window_s", "n"], ["lane", "follow_max_m", "n"], ["lane", "follow_tau_s", "n"], ["lane", "return_tau_s", "n"], ["lane", "return_rate", "n"], ["lane", "follow_backoff", "n"], ["lane", "follow_bend_o3", "n"], ["lane", "driver_leak", "n"], ["lane", "min_kmh", "n"], ["lane", "slow_resume", "n"], ["lane", "keep_on", "b"], ["lane", "on_kmh", "n"], ["lane", "indicator_pause", "b"], ["lane", "indicator_off", "n"], ["lane", "needs_cruise", "b"], ["lane", "roundabout_off", "b"], ["lane", "indicator_resume", "n"], ["lane", "non_ffb_mode", "n"], ["lane", "tone", "b"]]}, {"id": "crawl", "off_when": ["creep", "enabled", "0"], "title": "Crawl mode", "about": ["How fast the truck creeps."], "tuning": [{"name": "Standard", "desc": "5 km/h", "over": {}}, {"name": "Slow", "desc": "3 km/h, for tight docks", "over": {"creep": {"creep_kmh": "3"}}}], "knobs": [{"kind": "range", "presets": true, "label": "Crawl speed", "help": "Speed with both pedals released. The brake slows it.", "unit": "km/h", "min": 2, "max": 7, "step": 0.5, "key": ["creep", "creep_kmh"], "at": [5, 3], "follow": []}, {"kind": "range", "label": "Top speed with throttle", "help": "How fast a little throttle can go while maneuvering.", "unit": "km/h", "min": 6, "max": 15, "step": 1, "key": ["creep", "manoeuvre_kmh"]}, {"kind": "toggle", "label": "Crawl on when the game starts", "help": "Otherwise hold the mode key at a standstill.", "keys": [["creep", "start_on", "1", "0"]]}, {"kind": "toggle", "label": "Mode key switches crawl", "help": "Hold the Adaptive Automatic Transmission Mode key at a standstill to turn crawl on or off.", "keys": [["creep", "toggle_mode_key", "1", "0"]]}], "scope": [["creep", "enabled", "b"], ["creep", "creep_kmh", "n"], ["creep", "manoeuvre_kmh", "n"], ["creep", "on_kmh", "n"], ["creep", "off_kmh", "n"], ["creep", "max_pedal", "n"], ["creep", "brake", "n"], ["creep", "from_rest", "b"], ["creep", "descent_kmh", "n"], ["creep", "descent_brake", "n"], ["creep", "start_on", "n"], ["creep", "toggle_mode_key", "b"], ["creep", "toggle_hold_s", "n"], ["creep", "arm_kmh", "n"], ["creep", "rest_delay_s", "n"], ["creep", "reverse", "b"], ["creep", "close_rate", "n"], ["creep", "open_rate", "n"], ["creep", "release_s", "n"], ["creep", "heavy_t", "n"], ["creep", "max_gear", "n"], ["creep", "heavy_gear", "n"], ["creep", "crawl_max_rpm", "n"], ["creep", "heavy_throttle", "n"], ["creep", "letter", "b"]]}, {"id": "smoothstart", "off_when": ["creep", "smooth_start", "0"], "title": "Smooth start", "about": ["How the clutch closes when you pull away."], "tuning": [{"name": "Standard", "desc": "Engine speed follows the pedal", "over": {}}], "knobs": [{"kind": "range", "label": "How firm the start is", "help": "Engine rpm with the pedal fully down while the clutch slips. Lower is gentler.", "unit": "rpm", "min": 900, "max": 1600, "step": 50, "key": ["creep", "smooth_start_rpm_full"], "at": [1000, 1200, 1500], "follow": [[["creep", "smooth_start_rpm_light"], [150, 200, 300], 10]]}], "scope": [["creep", "smooth_start", "b"], ["creep", "smooth_start_rpm_light", "n"], ["creep", "smooth_start_rpm_full", "n"], ["creep", "smooth_start_rpm_heavy", "n"], ["creep", "smooth_start_bite", "n"], ["creep", "smooth_start_gain", "n"], ["creep", "smooth_start_creep", "n"], ["creep", "smooth_start_final", "n"], ["creep", "smooth_start_max_rate", "n"], ["creep", "smooth_start_sync_rpm", "n"], ["creep", "smooth_start_max_s", "n"], ["creep", "smooth_start_end_kmh", "n"]]}, {"id": "log", "off_when": null, "title": "Logging", "about": ["Problems are saved in the incidents folder: the 20 s before and 15 s after. Attach it to a bug report. Bug hunt also writes csv files (a few MB each). It is the default in the betas, not in the first full release."], "tuning": [{"name": "Bug hunt", "desc": "Every shift in the log, plus csv files.", "over": {}}, {"name": "Quiet", "desc": "A short log. Problems still get an incident file.", "over": {"core": {"log_level": "0"}, "trueshift": {"trace": "0"}, "cruise": {"trace": "0"}, "creep": {"trace": "0"}}}], "knobs": [{"kind": "choice", "label": "How much goes into dazdrive.log", "help": "Incidents are saved separately at every level.", "key": ["core", "log_level"], "options": [["0", "Quiet"], ["1", "Also every shift"], ["2", "Also csv traces (large)"]]}, {"kind": "toggle", "label": "Write csv traces", "help": "trueshift.csv, cruise.csv, creep.csv; needs the log at its highest level.", "keys": [["trueshift", "trace", "1", "0"], ["cruise", "trace", "1", "0"], ["creep", "trace", "1", "0"]]}, {"kind": "range", "label": "Incidents folder size", "help": "0 = no incident files.", "unit": "MB", "min": 0, "max": 40, "step": 1, "key": ["core", "incident_mb"]}], "scope": [["core", "incident_mb", "n"], ["core", "log_level", "n"], ["core", "csv_max_mb", "n"], ["core", "log_max_mb", "n"], ["trueshift", "trace", "b"], ["cruise", "trace", "b"], ["creep", "trace", "b"]]}], "eras": [{"id": "1995", "name": "Classic", "year": "~1995", "base": "standard", "over": {"trueshift": {"eco_roll": "0", "lookahead": "0", "smooth_stop": "0", "mode_character": "0", "eco_rev_ceiling_rpm": "0"}, "cruise": {"curves": "0", "curve_brake": "0", "descent": "0", "emergency_hazards": "0", "acc_calm_cut_in": "0", "hill_start": "0", "predictive": "0", "aeb": "0", "rollover_guard": "0", "pedal_curve_eco": "1", "pedal_curve_power": "1", "eco_cruise_throttle_cap": "1"}}, "story": "First automated gearboxes (Scania 1995, ZF AS-Tronic about 1997) and a plain cruise control. Pick it if you only want the gearbox."}, {"id": "2000", "name": "Radar cruise", "year": "~2000", "base": "standard", "over": {"trueshift": {"eco_roll": "0", "lookahead": "0", "mode_character": "0", "eco_rev_ceiling_rpm": "0"}, "cruise": {"curves": "0", "curve_brake": "0", "emergency_hazards": "0", "predictive": "0", "aeb": "0", "rollover_guard": "0", "pedal_curve_eco": "1", "pedal_curve_power": "1", "eco_cruise_throttle_cap": "1"}}, "story": "Radar cruise (Mercedes Actros, about 2000). Retarders hold speed downhill. Trucks get hill hold and smoother stops. The game's own ACC works in every year."}, {"id": "2010", "name": "Modern", "year": "~2010", "base": "standard", "over": {}, "recommended": true, "shipped": true, "story": "Eco-roll (Volvo 2006, Mercedes 2008), emergency braking (Mercedes 2006, required in the EU from 2015) and hazard lights after hard braking. The ini in the zip uses this year."}, {"id": "2015", "name": "Looks ahead", "year": "~2015", "base": "standard", "over": {"trueshift": {"lookahead": "1"}, "cruise": {"predictive": "1", "curves": "0", "curve_brake": "0", "own_acc": "1", "auto_hold": "1", "stop_go": "1", "min_kmh": "5"}}, "story": "Gearbox and cruise read the road ahead (Scania, Mercedes, Volvo, 2012 to 2015), ACC keeps going in a jam, and Auto Hold. Here the road comes from your navigation route. Without a route, it acts like ~2010."}, {"id": "2020", "name": "Assisted", "year": "~2020", "base": "standard", "over": {"trueshift": {"lookahead": "1"}, "cruise": {"predictive": "1", "curves": "1", "curve_brake": "1", "own_acc": "1", "auto_hold": "1", "stop_go": "1", "min_kmh": "5", "junctions": "1"}, "creep": {"enabled": "1"}, "lane": {"mode": "2", "tone": "1", "min_kmh": "20", "keep_on": "1", "on_kmh": "39", "indicator_pause": "1"}}, "story": "Trucks slow for bends and roundabouts (Mercedes 2019) and steer in the lane (Mercedes Active Drive Assist, 2019). Crawl mode is older (Scania 2009) but sits here because it is experimental. Lane centering was only tested with one steering wheel."}, {"id": "2024", "name": "Current", "year": "2024", "base": "standard", "over": {"trueshift": {"lookahead": "1"}, "cruise": {"predictive": "1", "curves": "1", "curve_brake": "1", "own_acc": "1", "auto_hold": "1", "stop_go": "1", "min_kmh": "5", "junctions": "1", "speed_limit": "1", "resume_to_limit": "1"}, "creep": {"enabled": "1"}, "lane": {"mode": "2", "tone": "1", "min_kmh": "20", "keep_on": "1", "on_kmh": "39", "indicator_pause": "1"}}, "story": "Speed limit following (ISA), required on all new EU trucks since July 2024. Your cruise speed follows the signs, a little above them."}], "features": [{"id": "ts", "group": "Gearbox", "stage": "stable", "since": "1995", "label": "TrueShift gearbox", "desc": "Shifts like a real truck automatic", "info": "Replaces the game's gear choice. Picks gears from engine torque, weight, slope and the route ahead. Keeps revs low, skips gears when it can, and learns from upshifts that did not pull. Change modes (Eco, Normal, Power, M) with the game's Adaptive Automatic Transmission Mode key.", "keys": [["trueshift", "enabled", "1", "0"]]}, {"id": "roll", "group": "Gearbox", "stage": "stable", "since": "2006", "label": "Eco-roll", "desc": "Coasts in neutral on gentle descents to save fuel", "needs": ["ts"], "info": "On a gentle descent with the pedal released, the gearbox goes to neutral and the truck coasts. Never with the brake, engine brake or retarder. It shifts back in when you press the pedal or the speed drops too far.", "keys": [["trueshift", "eco_roll", "1", "0"]]}, {"id": "look", "group": "Gearbox", "stage": "stable", "since": "2012", "label": "Gearbox looks ahead", "desc": "Plans gears for climbs and hilltops on your route", "needs": ["ts"], "info": "Reads climbs, hilltops and junctions on your navigation route. Holds a gear before a climb instead of shifting halfway up, and rolls over hilltops. Without a route it shifts as normal. Real trucks call this predictive shifting.", "keys": [["trueshift", "lookahead", "1", "0"]]}, {"id": "stop", "group": "Gearbox", "stage": "stable", "since": "2000", "label": "Smooth stop", "desc": "No shaking when you stop", "needs": ["ts"], "info": "The clutch opens near idle as you brake to a stop, so the engine does not shake and the truck does not push against the brake. (The game keeps the clutch closed down to about 2 km/h.)", "keys": [["trueshift", "smooth_stop", "1", "0"]]}, {"id": "crawl", "group": "Gearbox", "stage": "experimental", "since": "2009", "label": "Crawl mode", "desc": "Creeps at walking pace for parking and docking", "info": "In gears 1, 2 and R the clutch slips and the truck creeps by itself, like a real automatic. The brake slows it, the throttle speeds it up a little. Hold the Adaptive Automatic Transmission Mode key at a standstill to turn it on or off.", "keys": [["creep", "enabled", "1", "0"]]}, {"id": "start", "group": "Gearbox", "stage": "experimental", "since": "2009", "label": "Smooth start", "desc": "Closes the clutch gently when you pull away", "info": "Replaces the game's quick, fixed clutch closing when you pull away. Engine speed follows the pedal, the clutch slips until the wheels catch up, then closes gently. A shift, lifting off, braking or about 14 km/h ends it. Lightly tested: turn it off if it feels wrong.", "keys": [["creep", "smooth_start", "1", "0"]]}, {"id": "cc", "group": "Cruise control", "stage": "stable", "since": "1990", "label": "SteadyCruise", "desc": "Calm cruise, no throttle bursts after shifts", "info": "Replaces the game's cruise throttle: no bursts after shifts, no speed swings around the set speed. Most cruise features build on it.", "keys": [["cruise", "smooth", "1", "0"]]}, {"id": "bend", "group": "Cruise control", "stage": "beta", "since": "2019", "label": "Slow for bends", "desc": "Eases off before sharp bends", "needs": ["cc"], "info": "Reads the route and eases off before a sharp bend. If easing off is not enough, it brakes gently (engine brake and retarder first). Needs a navigation route.", "keys": [["cruise", "curves", "1", "0"], ["cruise", "curve_brake", "1", "0"]]}, {"id": "junc", "group": "Cruise control", "stage": "experimental", "since": "2019", "label": "JunctionSense", "desc": "Slows for junctions and roundabouts", "needs": ["bend"], "info": "Slows to the turn speed plus 10 km/h for junctions and roundabouts on your route. About 5 seconds before, it cancels the cruise with a tone, and you do the rest. Press Resume to get your speed back. It reads the road layout and can be wrong, for example braking for a bend that needed nothing.", "keys": [["cruise", "junctions", "1", "0"]]}, {"id": "pcc", "group": "Cruise control", "stage": "stable", "since": "2012", "label": "Cruise looks ahead", "desc": "Carries speed into climbs, eases off before crests", "needs": ["cc"], "info": "Instead of one fixed speed, the cruise carries speed into a climb, may run a little over the set speed in a dip, and eases off before a hilltop. Needs a navigation route. Real trucks call this predictive cruise (Scania, Mercedes, Volvo).", "keys": [["cruise", "predictive", "1", "0"]]}, {"id": "desc", "group": "Cruise control", "stage": "stable", "since": "1996", "label": "Downhill speed control", "desc": "Holds the speed downhill", "info": "Holds the set speed on descents with engine brake and retarder, like Mercedes Bremsomat. The truck does not run away and the brakes stay cool.", "keys": [["cruise", "descent", "1", "0"]]}, {"id": "haz", "group": "Cruise control", "stage": "stable", "since": "2010", "label": "Emergency stop signal", "desc": "Hazard lights flash after hard braking", "info": "Hazard lights come on after hard braking and stay on at a full stop (an EU rule for real trucks).", "keys": [["cruise", "emergency_hazards", "1", "0"]]}, {"id": "aeb", "group": "Cruise control", "stage": "stable", "since": "2006", "label": "Emergency braking (AEB)", "desc": "Warns, then brakes when a crash is near", "needs": ["cc"], "info": "Warning tones, then partial braking, then full braking when a crash is near. It replaces the game's own emergency braking, which drained the brake air. Works without cruise too. Needs SteadyCruise; without it the game's own braking stays.", "keys": [["cruise", "aeb", "1", "0"]]}, {"id": "rsc", "group": "Cruise control", "stage": "beta", "since": "2005", "label": "Rollover protection", "desc": "Tone, then throttle off, then a brake when the truck starts to sway", "info": "Watches for a growing sideways swing, also when you drive by hand. A tone first, then no throttle, then a soft or firm brake when the swing keeps growing. It does not judge a single bend by a fixed limit: that limit depends on the physics mod (rollover_bend under Custom turns it on anyway). Real trucks have had roll stability control since about 2005 (required in the EU from 2014).", "needs": ["cc"], "keys": [["cruise", "rollover_guard", "3", "0"]]}, {"id": "hill", "group": "Cruise control", "stage": "stable", "since": "2000", "label": "Hill start assist", "desc": "Holds the brake 3 s on a slope", "info": "After stopping on a slope the brake holds for 3 s, so you can move your foot to the throttle without rolling back. Not used while Auto Hold is on.", "needs": ["cc"], "keys": [["cruise", "hill_start", "1", "0"]]}, {"id": "acc", "group": "Cruise control", "stage": "beta", "since": "2000", "label": "Adaptive cruise (ACC)", "desc": "DazDrive's own: follows the vehicle ahead, brakes early", "needs": ["cc"], "info": "DazDrive's own adaptive cruise, built on the game's radar. Follows smoothly, brakes early and gently, and stays calm when someone cuts in. The gap is in seconds, set with the game's distance key. With Slow for bends on, it also slows for junctions.", "keys": [["cruise", "own_acc", "1", "0"]]}, {"id": "sg", "group": "Cruise control", "stage": "beta", "since": "2011", "label": "Stop & Go", "desc": "ACC keeps going in a jam", "needs": ["cc", "acc"], "info": "ACC stops behind the vehicle ahead and drives off with it. With the Real truck preset (Fine-tuning) it drives off by itself only after a stop under 2 s; after a longer stop, press Resume or the throttle. It also lowers the lowest cruise speed to 5 km/h (game: 30).", "keys": [["cruise", "stop_go", "1", "0"], ["cruise", "min_kmh", "5", "30"]]}, {"id": "hold", "group": "Cruise control", "stage": "beta", "since": "2011", "label": "Auto Hold", "desc": "Keeps the brake on at a stop until you press the throttle", "needs": ["cc"], "info": "After a stop, the brake stays on until you press the throttle, like Auto Hold in a modern truck. No creeping at a light.", "keys": [["cruise", "auto_hold", "1", "0"]]}, {"id": "isa", "group": "Cruise control", "stage": "beta", "since": "2022", "label": "Follow speed limits (ISA)", "desc": "Cruise speed follows the signs (+3 km/h)", "info": "The set speed follows the signs plus an offset you choose (3 km/h by default). With this switched on it starts on; switched off it starts off but stays available: hold the distance key (Adaptive Cruise Control Mode) for about a second to turn it on or off. A short tone tells which.", "keys": [["cruise", "speed_limit", "1", "0"], ["cruise", "resume_to_limit", "1", "0"]]}, {"id": "lka", "group": "Steering", "stage": "experimental", "since": "2019", "label": "Lane centering", "desc": "Keeps the truck in its lane while the cruise control is on", "info": "Steers gently to keep the truck in its lane while the cruise control is on: switching the cruise on switches it on, like a travel assist. It learns how your wheel responds and damps sway, and pauses while you use the turn signal. Keep your hands near the wheel: it assists, it does not drive for you.", "keys": [["lane", "mode", "2", "0"], ["lane", "min_kmh", "20", "55"], ["lane", "keep_on", "1", "0"], ["lane", "on_kmh", "39", "55"], ["lane", "indicator_pause", "1", "0"]]}]};
+
+function eraOf(D, id) { for (var i = 0; i < D.eras.length; i++) if (D.eras[i].id === id) return D.eras[i]; return D.eras[0]; }
+function num(v) { return String(+v); }                 // "1.50" -> "1.5", so imported values compare with preset values
+function same(a, b) { return +a === +b; }
+function wrapc(text) {   // a comment at 96 columns, every line starting with "# " (same as gen_ini.py)
+  var lines = [], cur = "";
+  text.split(/\s+/).forEach(function (w) {
+    if (cur && (cur + " " + w).length > 94) { lines.push("# " + cur); cur = w; } else cur = cur ? cur + " " + w : w;
+  });
+  if (cur) lines.push("# " + cur);
+  return lines.length ? lines : ["#"];
+}
+function buildIni(D, era, vals) {
+  var e = eraOf(D, era), out = [];
+  out = out.concat(wrapc("dazdrive " + D.version + " settings: " + e.name + " (" + e.year + "), made with dazdrive-setup.html. Open this file in dazdrive-setup.html again to change the choices."));
+  out.push("#");
+  out = out.concat(wrapc(D.howto));
+  D.order.forEach(function (sec) {
+    out.push("");
+    if (D.intro[sec]) { out.push("# " + new Array(95).join("=")); out = out.concat(wrapc(D.intro[sec])); out.push("# " + new Array(95).join("=")); }
+    out.push("[" + sec + "]");
+    var sw = (D.switches && D.switches[sec]) || [], rows = D.tables[sec];
+    var first = rows.filter(function (r) { return sw.indexOf(r[0]) >= 0; }), rest = rows.filter(function (r) { return sw.indexOf(r[0]) < 0; });
+    [["Switches", first], ["Settings", rest]].forEach(function (g) {
+      if (!g[1].length) return;
+      if (first.length) { out.push(""); out.push("# --- " + g[0] + " ---"); }
+      g[1].forEach(function (row) {
+        out.push(""); out = out.concat(wrapc(row[2]));
+        out.push(row[0] + "=" + vals[sec][row[0]]);
+      });
+    });
+  });
+  return out.join("\n") + "\n";
+}
+function presetValues(D, era) {
+  var e = eraOf(D, era), v = {};
+  D.order.forEach(function (sec) {
+    v[sec] = {};
+    D.tables[sec].forEach(function (row) {
+      var k = row[0], o = row[1];
+      if (e.base === "standard" && D.standard[sec] && (k in D.standard[sec])) o = D.standard[sec][k];
+      if (e.over[sec] && (k in e.over[sec])) o = e.over[sec][k];
+      v[sec][k] = o;
+    });
+  });
+  return v;
+}
+function featureState(f, vals) {
+  var on = 0;
+  f.keys.forEach(function (k) { if (same(vals[k[0]][k[1]], k[2])) on++; });
+  // the first key is the feature itself; the others refine it
+  if (!same(vals[f.keys[0][0]][f.keys[0][1]], f.keys[0][2])) return "false";
+  return on === f.keys.length ? "true" : "mixed";
+}
+// fine-tuning has three layers per module: Presets (the chips), Advanced (the knobs: one control can set several keys) and
+// Custom (every raw key the module owns). Keys a feature tile sets belong to step 2 and never decide the layer.
+var FEATKEY = null;
+function featKeys(D) {
+  if (!FEATKEY) { FEATKEY = {}; D.features.forEach(function (f) { f.keys.forEach(function (k) { FEATKEY[k[0] + "." + k[1]] = 1; }); }); }
+  return FEATKEY;
+}
+function knobKeys(kb) {
+  if (kb.kind === "toggle") return kb.keys.map(function (k) { return k[0] + "." + k[1]; });
+  return [kb.key[0] + "." + kb.key[1]].concat((kb.follow || []).map(function (f) { return f[0][0] + "." + f[0][1]; }));
+}
+function roundTo(x, r) { return +(Math.round(x / r) * r).toFixed(6); }
+// a follow key at slider position x: piecewise linear through the knob's points, the end stretches extended (gen_ini knob_at)
+function knobFollow(kb, x, i) {
+  var f = kb.follow[i], pts = kb.at.map(function (a, j) { return [+a, +f[1][j]]; }).sort(function (a, b) { return a[0] - b[0]; }), j = 0;
+  while (j < pts.length - 2 && x > pts[j + 1][0]) j++;
+  var p = pts[j], q = pts[j + 1];
+  return roundTo(p[1] + (q[1] - p[1]) * (x - p[0]) / (q[0] - p[0]), f[2]);
+}
+// x: the slider value (range), true/false (toggle) or the option value (choice)
+function setKnob(kb, x, vals) {
+  if (kb.kind === "toggle") { kb.keys.forEach(function (k) { vals[k[0]][k[1]] = x ? k[2] : k[3]; }); return; }
+  vals[kb.key[0]][kb.key[1]] = num(x);
+  if (kb.kind === "range") (kb.follow || []).forEach(function (f, i) { vals[f[0][0]][f[0][1]] = num(knobFollow(kb, +x, i)); });
+}
+// can the knob show these values: a toggle all on or all off, a choice one of its options, a range in reach with its followers in place
+function knobFits(kb, vals) {
+  if (kb.kind === "toggle") return [2, 3].some(function (w) { return kb.keys.every(function (k) { return same(vals[k[0]][k[1]], k[w]); }); });
+  var v = vals[kb.key[0]][kb.key[1]];
+  if (!isNum(v)) return false;
+  if (kb.kind === "choice") return kb.options.some(function (o) { return same(o[0], v); });
+  return +v >= kb.min && +v <= kb.max && (kb.follow || []).every(function (f, i) { return same(vals[f[0][0]][f[0][1]], knobFollow(kb, +v, i)); });
+}
+function presetOf(t, base, s, k) { return t.over[s] && (k in t.over[s]) ? t.over[s][k] : base[s][k]; }
+function ownKeys(D, g) { var fk = featKeys(D); return g.scope.filter(function (sk) { return !fk[sk[0] + "." + sk[1]]; }); }
+// a preset puts every key of the module back (on top of the era), except the feature switches
+function applyPreset(D, g, t, base, vals) {
+  ownKeys(D, g).forEach(function (sk) { vals[sk[0]][sk[1]] = presetOf(t, base, sk[0], sk[1]); });
+}
+// {layer: "preset", i} when the values are exactly a preset, "advanced" when only the knobs moved, else "custom"
+function detectLayer(D, g, base, vals) {
+  var own = ownKeys(D, g), kk = {};
+  for (var i = 0; i < g.tuning.length; i++) {
+    var t = g.tuning[i];
+    if (own.every(function (sk) { return same(vals[sk[0]][sk[1]], presetOf(t, base, sk[0], sk[1])); })) return { layer: "preset", i: i };
+  }
+  g.knobs.forEach(function (kb) { knobKeys(kb).forEach(function (id) { kk[id] = 1; }); });
+  if (g.knobs.length && own.every(function (sk) { return kk[sk[0] + "." + sk[1]] || same(vals[sk[0]][sk[1]], base[sk[0]][sk[1]]); })
+      && g.knobs.every(function (kb) { return knobFits(kb, vals); })) return { layer: "advanced" };
+  return { layer: "custom" };
+}
+var STAGES = ["stable", "beta", "experimental"];
+function eraStage(D, era) {
+  var v = presetValues(D, era), worst = 0;
+  D.features.forEach(function (f) { if (featureState(f, v) !== "false") worst = Math.max(worst, STAGES.indexOf(f.stage || "stable")); });
+  return STAGES[worst];
+}
+function isNum(s) { return /^\s*-?(\d+\.?\d*|\.\d+)\s*$/.test(s); }
+// an ini file -> {section: {key: value}}; comments and unknown lines are skipped
+function whenText(iso) {   // "today at 22:43" when it is from today, else the date
+  var d = new Date(iso), n = new Date();
+  if (d.toDateString() === n.toDateString()) return "today at " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  return d.toLocaleDateString();
+}
+function parseIni(text) {
+  var sec = null, out = {};
+  String(text).split(/\r?\n/).forEach(function (l) {
+    l = l.trim();
+    if (!l || l[0] === "#" || l[0] === ";") return;
+    var m = l.match(/^\[([A-Za-z0-9_]+)\]$/);
+    if (m) { sec = m[1]; return; }
+    var kv = l.match(/^([A-Za-z0-9_]+)\s*=\s*(.*)$/);
+    if (kv && sec) { out[sec] = out[sec] || {}; out[sec][kv[1]] = kv[2].trim(); }
+  });
+  if (out.lane && /^\s*1\s*$/.test(out.lane.mode || "")) out.lane.mode = "2";   // the plugin treats lane mode 1 as 2
+  return out;
+}
+// put the known numeric values of a parsed ini into vals; returns how many were taken
+function applyIni(D, parsed, vals) {
+  var n = 0;
+  D.order.forEach(function (sec) { D.tables[sec].forEach(function (row) {
+    var k = row[0];
+    if (parsed[sec] && (k in parsed[sec]) && isNum(parsed[sec][k])) { vals[sec][k] = num(parsed[sec][k]); n++; }
+  }); });
+  return n;
+}
+// which era the values are closest to [era id, number of keys that differ]
+function nearestEra(D, vals) {
+  var best = null;
+  D.eras.forEach(function (e) {
+    var p = presetValues(D, e.id), d = 0;
+    D.order.forEach(function (sec) { D.tables[sec].forEach(function (row) {
+      if (!same(p[sec][row[0]], vals[sec][row[0]])) d++;
+    }); });
+    if (!best || d < best[1]) best = [e.id, d];
+  });
+  return best;
+}
+if (typeof module !== "undefined") module.exports = { buildIni: buildIni, presetValues: presetValues, featureState: featureState, setKnob: setKnob, knobFits: knobFits, applyPreset: applyPreset, detectLayer: detectLayer, parseIni: parseIni, applyIni: applyIni, nearestEra: nearestEra, DATA: DATA };
+
+if (typeof document !== "undefined") (function () {
+  var D = DATA, era = D.eras[0].id, vals, inputs = {}, tiles = [], mods = [], STORE = "dazdrive.setup";
+  var shipped = null;
+  D.eras.forEach(function (e) { if (e.recommended) era = e.id; if (e.shipped) shipped = e; });
+  var recommended = era;
+  vals = presetValues(D, era);
+  var help = {};
+  D.order.forEach(function (s) { D.tables[s].forEach(function (r) { help[s + "." + r[0]] = r[2]; }); });
+  document.getElementById("ver").textContent = D.version;
+  var canPick = typeof window.showSaveFilePicker === "function";
+
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function $(id) { return document.getElementById(id); }
+  function changes() {
+    var base = presetValues(D, era), n = 0;
+    D.order.forEach(function (sec) { D.tables[sec].forEach(function (row) {
+      if (!same(base[sec][row[0]], vals[sec][row[0]])) n++;
+    }); });
+    return n;
+  }
+  // every value equal to the era's preset
+  function isPreset(e) {
+    var p = presetValues(D, e.id), ok = true;
+    D.order.forEach(function (sec) { D.tables[sec].forEach(function (row) { if (!same(p[sec][row[0]], vals[sec][row[0]])) ok = false; }); });
+    return ok;
+  }
+  var badList = [];   // the fields that are not a number right now: [input record]
+  function markBad(i, bad, text) {
+    i.el.classList.toggle("bad", bad);
+    if (bad) i.el.setAttribute("aria-invalid", "true"); else i.el.removeAttribute("aria-invalid");
+    if (i.err) i.err.textContent = bad ? text : "";
+    if (bad) badList.push(i);
+  }
+  function badText(n) { return n + (n === 1 ? " field needs" : " fields need") + " a number (marked red)."; }
+  function refresh() {
+    badList = [];
+    Object.keys(inputs).forEach(function (id) {
+      var i = inputs[id], v = vals[i.sec][i.key];
+      if (i.type === "b") i.el.checked = same(v, 1);
+      else if (i.type === "c") { i.el.value = v; if (i.el.value !== v) { i.el.value = num(v); } }
+      else if (i.type === "btn") { if (document.activeElement !== i.el) i.el.value = same(v, 0) ? "" : v; markBad(i, !(isNum(v) && +v >= 0 && +v <= 128 && +v === Math.floor(+v)), "Use a whole number from 1 to 128, or leave it empty."); }
+      else { if (document.activeElement !== i.el) i.el.value = v; markBad(i, !isNum(v), "Not a number. Use digits, like 1.5."); }
+    });
+    var bad = badList.length;
+    var n = 0;
+    tiles.forEach(function (t) {
+      var s = featureState(t.f, vals); t.el.setAttribute("aria-pressed", s); t.sw.setAttribute("aria-checked", s === "false" ? "false" : "true"); if (s !== "false") n++;
+      var miss = needsOff(t.f);
+      t.need.textContent = miss.length ? "Needs " + miss.join(" and ") + (s !== "false" ? " (off)" : "") : "";
+      t.el.classList.toggle("waits", miss.length > 0 && s === "false");
+    });
+    $("count").textContent = n + " / " + tiles.length + " on";
+    var e = eraOf(D, era);
+    document.querySelectorAll("#eras input").forEach(function (r) { r.checked = r.value === era; });
+    $("eras").style.setProperty("--p", (D.eras.indexOf(e) / (D.eras.length - 1) * 100) + "%");
+    // what a year adds to the year before (the first year: what it includes); the story and "keeps" are the extra info
+    var ev = presetValues(D, era), pi = D.eras.indexOf(e) - 1, pv = pi >= 0 ? presetValues(D, D.eras[pi].id) : null, added = [];
+    D.features.forEach(function (f) {
+      if (featureState(f, ev) !== "false" && (!pv || featureState(f, pv) === "false")) added.push(/^[A-Z][a-z-]+( [a-z]+)*( \([A-Z]+\))?$/.test(f.label) ? f.label.charAt(0).toLowerCase() + f.label.slice(1) : f.label);
+    });
+    var eb = $("erablurb"); eb.textContent = "";
+    eb.appendChild(el("b", null, e.name + " (" + e.year + ")"));
+    eb.appendChild(el("span", "mute", (pv ? "Adds " : "Includes ") + (added.length > 1 ? added.slice(0, -1).join(", ") + " and " + added[added.length - 1] : added.join("")) + "."));
+    $("erastory").textContent = (e.story || "") + (pv ? " Keeps everything from " + D.eras[pi].year + "." : "");
+    var base = presetValues(D, era), off = [];
+    mods.forEach(function (m) {
+      var det = detectLayer(D, m.g, base, vals), pre = det.layer === "preset";
+      m.chips.forEach(function (c, i) { c.setAttribute("aria-pressed", String(pre && i === det.i)); });
+      m.desc.textContent = pre ? "" : "Your own values (" + (det.layer === "advanced" ? "Adjusted" : "Raw") + "). A preset resets this module.";
+      m.cur.textContent = pre ? m.g.tuning[det.i].name : det.layer === "advanced" ? "Adjusted" : "Raw";
+      m.knobs.forEach(function (r) { r.show(); });
+      var ow = m.g.off_when;
+      m.off = !!(ow && same(vals[ow[0]][ow[1]], ow[2])) && !m.force;  // switched off in step 2: nothing to tune
+      m.side.hidden = m.off;
+      if (m.off) off.push(m.g.title);
+    });
+    if (!selMod || selMod.off) { selMod = null; mods.forEach(function (m) { if (!selMod && !m.off) selMod = m; }); }
+    mods.forEach(function (m) { m.side.setAttribute("aria-pressed", String(m === selMod)); m.panel.hidden = m !== selMod; });
+    $("offnote").textContent = off.length ? "Not listed because they are off: " + off.join(", ") + ". Turn them on under Features." : "";
+    $("preview").textContent = buildIni(D, era, vals);
+    // Save and Copy stay clickable: with a bad field a click says why and jumps to it (a disabled button says nothing)
+    ["save", "copy", "save2", "copy2"].forEach(function (id) { $(id).classList.toggle("blocked", bad > 0); });
+    $("msg").textContent = bad ? badText(bad) : "";
+    var c = changes(), st = $("status"); st.textContent = "";
+    st.appendChild(el("span", null, e.year + " " + e.name));
+    if (bad) st.appendChild(el("span", "badn", " · " + bad + (bad === 1 ? " field needs" : " fields need") + " a number"));
+    else if (shipped && e === shipped && isPreset(e)) st.appendChild(el("span", "ok", " · Standard (as shipped)"));
+    else if (c) st.appendChild(el("span", "chg", " · " + c + " change" + (c > 1 ? "s" : "")));
+    else st.appendChild(el("span", "ok", " · as preset"));
+    $("savestatus").innerHTML = st.innerHTML;   // the Save step shows the same status
+  }
+  function bind(sec, key, type, node, err, label) {
+    inputs[sec + "." + key] = { sec: sec, key: key, type: type, el: node, err: err, label: label };
+    node.addEventListener(type === "n" || type === "btn" ? "input" : "change", function () {
+      var v = type === "b" ? (node.checked ? "1" : "0") : node.value.trim();
+      if (type === "n") v = v.replace(",", ".");   // a decimal comma ("1,5") is a number too; the ini needs a dot
+      if (type === "btn" && v === "") v = "0";
+      vals[sec][key] = v;
+      refresh();
+    });
+  }
+  function item(sec, key, kind, label, exp, opts) {
+    var row = el("div", "row"), id = "f_" + sec + "_" + key, ctl;
+    if (kind === "b") { ctl = el("input"); ctl.type = "checkbox"; }
+    else if (kind === "c") { ctl = el("select"); opts.forEach(function (o) { var op = el("option", null, o[1]); op.value = o[0]; ctl.appendChild(op); }); }
+    else { ctl = el("input"); ctl.type = "text"; ctl.inputMode = "decimal"; }
+    ctl.id = id;
+    var lab = el("label", "name"), err = null; lab.htmlFor = id;
+    lab.appendChild(el("span", "key", label));
+    if (exp) { lab.appendChild(document.createTextNode(" ")); lab.appendChild(el("span", "tag", exp === "beta" ? "beta" : "experimental")); }
+    lab.appendChild(el("small", null, help[sec + "." + key] || ""));
+    if (kind === "n") {   // the error text sits with the field, not only its red border
+      err = el("small", "err"); err.id = id + "_err"; err.setAttribute("aria-live", "polite");
+      ctl.setAttribute("aria-describedby", err.id); lab.appendChild(err);
+    }
+    if (kind === "b") { row.appendChild(ctl); row.appendChild(lab); } else { row.appendChild(lab); row.appendChild(ctl); }
+    bind(sec, key, kind, ctl, err, label);
+    return row;
+  }
+  function setEra(id) {
+    era = id; vals = presetValues(D, era);
+    mods.forEach(function (m) { m.tab = null; });
+  }
+  // load an ini text: values in, era = the nearest one, custom tuning shows as Custom
+  function loadIni(text) {
+    var parsed = parseIni(text), fresh = presetValues(D, recommended), n = applyIni(D, parsed, fresh);
+    if (!n) return 0;
+    vals = fresh;
+    era = nearestEra(D, vals)[0];
+    mods.forEach(function (m) { m.tab = null; });
+    refresh();
+    return n;
+  }
+  function remember(text) {
+    try { localStorage.setItem(STORE, JSON.stringify({ ini: text, when: new Date().toISOString(), version: D.version })); } catch (e) {}
+  }
+
+  // 1. era timeline
+  var eh = $("eras");
+  eh.style.setProperty("--n", D.eras.length);
+  D.eras.forEach(function (e, i) {
+    var lab = el("label", "stop"), r = el("input");
+    r.type = "radio"; r.name = "era"; r.value = e.id; r.checked = e.id === era;
+    lab.appendChild(r);
+    lab.appendChild(el("span", "dot", ""));
+    lab.appendChild(el("span", "yr", e.year));
+    lab.appendChild(el("b", null, e.name));
+    var stg = eraStage(D, e.id); lab.appendChild(el("span", "stage " + stg, stg));
+    r.addEventListener("change", function () { if (!r.checked) return; setEra(e.id); refresh(); });
+    eh.appendChild(lab);
+  });
+
+  // 2. feature switches, grouped as the data says; the name opens the explanation, the switch toggles
+  var th = $("tiles"), byId = {}, order = [];
+  D.features.forEach(function (f) { byId[f.id] = f; if (order.indexOf(f.group) < 0) order.push(f.group); });
+  // turning a feature on turns on what it needs; turning one off turns off what needs it (the list says what moved)
+  function setFeature(f, on) {
+    var also = [];
+    f.keys.forEach(function (k) { vals[k[0]][k[1]] = on ? k[2] : k[3]; });
+    if (on) (f.needs || []).forEach(function (id) {
+      var n = byId[id]; if (n && featureState(n, vals) === "false") { also = also.concat([n.label], setFeature(n, true)); }
+    });
+    else D.features.forEach(function (d) {
+      if ((d.needs || []).indexOf(f.id) >= 0 && featureState(d, vals) !== "false") { also = also.concat([d.label], setFeature(d, false)); }
+    });
+    return also;
+  }
+  function saidAlso(on, also) { if (also.length) flash((on ? "Also turned on: " : "Also turned off: ") + also.join(", ")); }
+  function needsOff(f) { return (f.needs || []).filter(function (id) { return byId[id] && featureState(byId[id], vals) === "false"; }).map(function (id) { return byId[id].label; }); }
+  var dlg = $("info"), dlgF = null;
+  function fillDialog(also) {
+    var f = dlgF, on = featureState(f, vals) !== "false";
+    $("i_title").textContent = f.label;
+    $("i_stage").textContent = f.stage || "stable"; $("i_stage").className = "stage " + (f.stage || "stable");
+    $("i_since").textContent = f.since ? "Real trucks: since ~" + f.since + " · DazDrive: " + ({stable: "tested a lot", beta: "light testing", experimental: "not proven"})[f.stage || "stable"] : "";
+    $("i_text").textContent = f.info || f.desc;
+    var nd = $("i_needs"); nd.textContent = "";
+    if (f.needs && f.needs.length) {
+      nd.appendChild(document.createTextNode("Needs: "));
+      f.needs.forEach(function (id, i) { var n = byId[id], ok = featureState(n, vals) !== "false"; if (i) nd.appendChild(document.createTextNode(", ")); nd.appendChild(el("span", ok ? "" : "off", n.label + (ok ? "" : " (off)"))); });
+    }
+    $("i_also").textContent = also && also.length ? "Also turned on: " + also.join(", ") : "";
+    $("i_toggle").textContent = on ? "Turn off" : "Turn on";
+  }
+  function openInfo(f) { dlgF = f; fillDialog([]); if (dlg.showModal) dlg.showModal(); else dlg.setAttribute("open", ""); }
+  $("i_close").addEventListener("click", function () { dlg.close ? dlg.close() : dlg.removeAttribute("open"); });
+  $("i_toggle").addEventListener("click", function () { var on = featureState(dlgF, vals) === "false", also = setFeature(dlgF, on); refresh(); fillDialog(on ? also : []); saidAlso(on, on ? [] : also); });
+  dlg.addEventListener("click", function (ev) { if (ev.target === dlg) $("i_close").click(); });
+  order.forEach(function (gname) {
+    th.appendChild(el("h3", null, gname));
+    var grid = el("div", "tiles");
+    D.features.forEach(function (f) {
+      if (f.group !== gname) return;
+      var t = el("div", "tile"), body = el("button", "body"), sw = el("button", "sw");
+      body.type = "button"; sw.type = "button"; sw.setAttribute("role", "switch"); sw.setAttribute("aria-label", f.label);
+      body.appendChild(el("b", null, f.label));
+      body.appendChild(el("small", null, f.desc));
+      if (f.info) body.appendChild(el("span", "x xinfo", f.info + (f.since ? " Real trucks: since ~" + f.since + "." : "")));
+      if (f.stage && f.stage !== "stable") body.appendChild(el("span", "stage " + f.stage, f.stage));
+      var need = el("div", "need", ""); body.appendChild(need);
+      body.addEventListener("click", function () { if (!document.body.classList.contains("explain")) openInfo(f); });
+      sw.addEventListener("click", function () { var on = featureState(f, vals) !== "true"; saidAlso(on, setFeature(f, on)); refresh(); });
+      t.appendChild(body); t.appendChild(sw);
+      tiles.push({ f: f, el: t, sw: sw, need: need });
+      grid.appendChild(t);
+    });
+    th.appendChild(grid);
+  });
+
+  // 3. fine-tuning: the modules on the left, the chosen one on the right: Preset (big buttons), Adjust (big controls), All raw settings
+  var kid = 0, selMod = null;
+  function fmtVal(v, unit) { return num(v) + (unit ? " " + unit : ""); }
+  function optParts(t) { var i = t.indexOf(": "); return i > 0 ? [t.slice(0, i), t.slice(i + 2)] : [t, ""]; }
+  function knobRow(kb, m) {
+    var row = el("div", "ctl"), top = el("div", "top"), out = el("span", "val"), odd = el("small", "odd", ""), ctl, mk = null, opts = null;
+    if (kb.kind === "toggle") {
+      row.className = "ctl tg2";
+      var txt = el("span"); txt.appendChild(el("b", null, kb.label)); txt.appendChild(el("small", "x", kb.help)); txt.appendChild(odd);
+      ctl = el("button", "sw"); ctl.type = "button"; ctl.setAttribute("role", "switch"); ctl.setAttribute("aria-label", kb.label);
+      ctl.addEventListener("click", function () { setKnob(kb, ctl.getAttribute("aria-checked") !== "true", vals); refresh(); });
+      row.appendChild(txt); row.appendChild(ctl);
+    } else {
+      top.appendChild(el("b", null, kb.label)); if (kb.kind === "range") top.appendChild(out);
+      row.appendChild(top); row.appendChild(el("small", "x", kb.help));
+      if (kb.kind === "choice") {
+        var bx = el("div", "opts"), ul = el("ul", "optlist x"); opts = [];
+        kb.options.forEach(function (o) {
+          var pr = optParts(o[1]), b = el("button", "opt2", pr[0]); b.type = "button";
+          b.addEventListener("click", function () { setKnob(kb, o[0], vals); refresh(); });
+          bx.appendChild(b); opts.push(b);
+          if (pr[1]) { var li = el("li"); li.appendChild(el("b", null, pr[0] + ": ")); li.appendChild(document.createTextNode(pr[1])); ul.appendChild(li); }
+        });
+        row.appendChild(bx); if (ul.children.length) row.appendChild(ul);
+      } else {
+        ctl = el("input"); ctl.type = "range"; ctl.min = kb.min; ctl.max = kb.max; ctl.step = kb.step;
+        ctl.addEventListener("input", function () { setKnob(kb, ctl.value, vals); refresh(); });
+        row.appendChild(ctl);
+        if (kb.presets) {   // the presets as marks under the slider: they are points on it
+          var marks = el("div", "marks"); mk = [];
+          kb.at.forEach(function (x, i) {
+            var b = el("button", null, m.g.tuning[i].name); b.type = "button";
+            b.style.left = ((x - kb.min) / (kb.max - kb.min) * 100) + "%";
+            b.addEventListener("click", function () { setKnob(kb, x, vals); refresh(); });
+            marks.appendChild(b); mk.push(b);
+          });
+          row.appendChild(marks);
+        }
+      }
+      row.appendChild(odd);
+    }
+    m.knobs.push({ show: function () {
+      var fits = knobFits(kb, vals);
+      if (kb.kind === "toggle") ctl.setAttribute("aria-checked", String(kb.keys.every(function (k) { return same(vals[k[0]][k[1]], k[2]); })));
+      else {
+        var v = vals[kb.key[0]][kb.key[1]];
+        if (kb.kind === "choice") opts.forEach(function (b, i) { b.setAttribute("aria-pressed", String(same(kb.options[i][0], num(v)) || same(kb.options[i][0], v))); });
+        else {
+          if (document.activeElement !== ctl) ctl.value = v;
+          out.textContent = fmtVal(v, kb.unit);
+          if (mk) mk.forEach(function (b, i) { b.classList.toggle("on", same(v, kb.at[i])); });
+        }
+      }
+      odd.textContent = fits ? "" : "Set under Custom. Moving this resets it.";
+    } });
+    return row;
+  }
+  D.groups.forEach(function (g) {
+    var m = { g: g, chips: [], cur: el("small", "mute", ""), panels: {}, knobs: [], off: false };
+    m.side = el("button", "big2"); m.side.type = "button";
+    m.side.appendChild(el("b", null, g.title)); m.side.appendChild(m.cur);
+    m.side.addEventListener("click", function () { selMod = m; refresh(); });
+    $("modside").appendChild(m.side);
+    var pn = el("div", "pn");
+    pn.appendChild(el("h2", null, g.title));
+    pn.appendChild(el("p", "mute x", g.about[0]));
+    pn.appendChild(el("div", "h3b", "Preset"));
+    var grid = el("div", "grid2");
+    m.chips = g.tuning.map(function (t) {
+      var c = el("button", "big2"); c.type = "button";
+      c.appendChild(el("b", null, t.name)); if (t.desc) c.appendChild(el("small", "mute", t.desc));
+      c.addEventListener("click", function () { applyPreset(D, g, t, presetValues(D, era), vals); refresh(); });
+      grid.appendChild(c);
+      return c;
+    });
+    pn.appendChild(grid); m.panels.preset = grid;
+    m.desc = el("p", "note2"); pn.appendChild(m.desc);
+    if (g.knobs.length) {
+      pn.appendChild(el("div", "h3b", "Adjust"));
+      var ap = el("div");
+      g.knobs.forEach(function (kb) { ap.appendChild(knobRow(kb, m)); });
+      pn.appendChild(ap); m.panels.advanced = ap;
+    }
+    var rb = el("button", "raw", "All raw settings"); rb.type = "button";
+    var cp = el("div", "rawbox"); cp.hidden = true;
+    rb.addEventListener("click", function () { cp.hidden = !cp.hidden; rb.textContent = cp.hidden ? "All raw settings" : "Hide raw settings"; });
+    cp.appendChild(el("p", "rawnote x", "The raw settings of dazdrive.ini, each with the plugin's own one-line help. No safety net: the page only checks that a value is a number."));
+    ownKeys(D, g).forEach(function (sk) { cp.appendChild(item(sk[0], sk[1], sk[2], sk[1], false)); });
+    pn.appendChild(rb); pn.appendChild(cp); m.panels.custom = cp; m.rawBtn = rb;
+    m.panel = pn;
+    mods.push(m);
+    $("modpanels").appendChild(pn);
+  });
+
+  // 5. save: straight into the folder where the browser allows it (Chrome, Edge), otherwise via Downloads
+  var steps = $("savesteps");
+  function li(html) { var l = el("li"); l.innerHTML = html; steps.appendChild(l); }
+  var folder = "<code>&lt;ETS2&gt;\\bin\\win_x64\\plugins\\dazdrive\\</code><br><small>Windows: <code>C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2\\bin\\win_x64\\plugins\\dazdrive\\</code><br>Linux / Proton: <code>~/.local/share/Steam/steamapps/common/Euro Truck Simulator 2/bin/win_x64/plugins/dazdrive/</code></small>";
+  if (canPick) {
+    li("Save over dazdrive.ini in the folder of this page: " + folder);
+  } else {
+    li("Move it next to this page and <b>overwrite</b> the old one: " + folder);
+  }
+  li("(Re)start the game");
+  function text() { return buildIni(D, era, vals); }
+  // the answer to Save / Copy: in the Save card, and as a toast in the fixed bar (the card is below the fold)
+  var toastT = 0;
+  function flash(msg, isBad) {
+    var t = $("toast"); t.textContent = msg; t.className = "toast" + (isBad ? " bad" : ""); t.hidden = false;
+    clearTimeout(toastT); toastT = setTimeout(function () { t.hidden = true; }, isBad ? 9000 : 7000);
+  }
+  $("toast").addEventListener("click", function () { this.hidden = true; });
+  function say(msg, isBad) { $("msg").textContent = msg; flash(msg, isBad); }
+  function done(how) { $("msg").textContent = how + " This page remembers them until you save again."; flash(how); remember(text()); }
+  // a field that is not a number blocks Save and Copy: say which one, open it and put the cursor in it
+  function blocked() {
+    if (!badList.length) return false;
+    var i = badList[0], steps = document.querySelectorAll("[data-step]");
+    mods.forEach(function (m) { if (m.panels.custom.contains(i.el)) { selMod = m; m.force = true; m.panels.custom.hidden = false; m.rawBtn.textContent = "Hide raw settings"; } });
+    refresh();
+    for (var p = i.el.parentNode; p; p = p.parentNode) if (p.tagName === "DETAILS") p.open = true;
+    if (document.body.classList.contains("wiz")) for (var j = 0; j < steps.length; j++) if (steps[j].contains(i.el)) wshow(j);
+    say(badText(badList.length) + " First: " + i.label + ".", true);
+    if (i.el.offsetParent) { i.el.scrollIntoView({ block: "center" }); i.el.focus(); }
+    return true;
+  }
+  function download() {
+    var blob = new Blob([text()], { type: "text/plain" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = "dazdrive.ini";
+    document.body.appendChild(a); a.click(); a.remove();
+    done("Saved in Downloads. Move it to plugins\\dazdrive\\, overwrite the old one, and restart the game.");
+  }
+  function doSave() {
+    if (blocked()) return;
+    if (!canPick) return download();
+    window.showSaveFilePicker({ suggestedName: "dazdrive.ini", types: [{ description: "DazDrive settings", accept: { "text/plain": [".ini"] } }] })
+      .then(function (h) { return h.createWritable().then(function (w) { return w.write(text()).then(function () { return w.close(); }); }); })
+      .then(function () { done("Saved. Restart the game."); },
+            function (err) { if (err && err.name === "AbortError") { say("Not saved."); return; } download(); });
+  }
+  function doCopy() {
+    if (blocked()) return;
+    function fallback() {
+      var t = document.createElement("textarea"); t.value = text(); document.body.appendChild(t); t.select();
+      var ok = false; try { ok = document.execCommand("copy"); } catch (e) {}
+      t.remove(); if (ok) done("Copied. Paste it into a new file named dazdrive.ini."); else say("Copy blocked. Select the preview text and copy it yourself.", true);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text()).then(function () { done("Copied. Paste it into a new file named dazdrive.ini."); }, fallback);
+    else fallback();
+  }
+  $("save").addEventListener("click", doSave);
+  $("copy").addEventListener("click", doCopy);
+
+  // start (the wizard's first question): open your ini, continue with what was saved here, or start fresh.
+  // Nothing is loaded behind the player's back: the saved settings only come back when they pick "Continue".
+  function wiz() { return document.body.classList.contains("wiz"); }
+  function afterStart() { if (wiz()) wshow(1); }
+  function took(n) {
+    var e = eraOf(D, era), c = changes();
+    return "Read " + n + " settings. Closest year: " + e.year + " " + e.name + (c ? ", with " + c + " change" + (c > 1 ? "s" : "") : "") + ". Continue keeps them; another year starts over. ";
+  }
+  function openFile(f) {
+    var rd = new FileReader();
+    rd.onload = function () {
+      var n = loadIni(rd.result);
+      if (!n) { setNotice("No DazDrive settings in that file. Pick another, or start fresh.", false); return; }
+      setNotice("Opened " + f.name + ": " + took(n), true);
+      afterStart();
+    };
+    rd.readAsText(f);
+  }
+  $("open").addEventListener("change", function () {
+    var f = this.files && this.files[0]; if (f) openFile(f);
+    this.value = "";
+  });
+  // drop a file on the Open button (only there; a drop anywhere else is ignored so the browser does not leave the page)
+  var dz = $("open").parentNode;
+  ["dragenter", "dragover"].forEach(function (n) { dz.addEventListener(n, function (ev) { ev.preventDefault(); dz.classList.add("drop"); }); });
+  ["dragleave", "drop"].forEach(function (n) { dz.addEventListener(n, function (ev) { ev.preventDefault(); dz.classList.remove("drop"); }); });
+  dz.addEventListener("drop", function (ev) { var f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0]; if (f) openFile(f); });
+  ["dragover", "drop"].forEach(function (n) { window.addEventListener(n, function (ev) { ev.preventDefault(); }); });
+  // the notice sits in the Start card and, for the wizard (which shows one step at a time), at the top of step 1
+  function setNotice(text, withFresh) {
+    ["restore", "restore2"].forEach(function (id) {
+      var r = $(id); r.hidden = false; r.textContent = text;
+      if (withFresh) { var b = el("button", "link", "Start fresh instead"); b.type = "button"; b.addEventListener("click", startFresh); r.appendChild(b); }
+    });
+  }
+  function startFresh() {
+    setEra(recommended); $("restore").hidden = true; $("restore2").hidden = true; refresh();
+  }
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(STORE) || "null"); } catch (e) {}
+  if (saved && saved.ini && parseIni(saved.ini)) {
+    $("resume").hidden = false;
+    $("resumewhen").textContent = "Saved with this page " + (whenText(saved.when).indexOf("today") === 0 ? "" : "on ") + whenText(saved.when) + (saved.version !== D.version ? " (version " + saved.version + ")" : "") + ".";
+  }
+  $("resume").addEventListener("click", function () {
+    var n = loadIni(saved.ini); if (!n) return;
+    setNotice("Continued with what you saved here " + (whenText(saved.when).indexOf("today") === 0 ? "" : "on ") + whenText(saved.when) + ": " + took(n), true);
+    afterStart();
+  });
+  $("fresh").addEventListener("click", function () { startFresh(); afterStart(); });
+
+  // wizard (the default): the same sections, one at a time, with the steps as buttons on top
+  var wsteps = Array.prototype.slice.call(document.querySelectorAll("[data-step]")), wi = 0, seen = 0;
+  var wbtns = wsteps.map(function (sec, j) {
+    var b = el("button", "wst", sec.getAttribute("data-title")); b.type = "button";
+    b.addEventListener("click", function () { wshow(j); });
+    $("wsteplist").appendChild(b);
+    return b;
+  });
+  function wshow(i) {
+    wi = Math.max(0, Math.min(wsteps.length - 1, i)); seen = Math.max(seen, wi);
+    wsteps.forEach(function (s, j) { s.classList.toggle("cur", j === wi); });
+    wbtns.forEach(function (b, j) { if (j === wi) b.setAttribute("aria-current", "step"); else b.removeAttribute("aria-current"); b.classList.toggle("done", j <= seen && j !== wi); });
+    window.scrollTo(0, 0);
+  }
+  // Extra info: the extra text (what a feature does, the story of a year, what a control is for) shows when it is on; off = scannable. Remembered.
+  var xb = $("explain"), XKEY = "dazdrive-explain";
+  try { xb.checked = localStorage.getItem(XKEY) === "1"; } catch (e) {}
+  if (/[?&]explain/.test(location.search)) xb.checked = true;
+  function xset() { document.body.classList.toggle("explain", xb.checked); document.querySelectorAll(".tile .body").forEach(function (b) { b.disabled = xb.checked; }); try { localStorage.setItem(XKEY, xb.checked ? "1" : "0"); } catch (e) {} }
+  xb.addEventListener("change", xset); xset();
+  // the choices at the end of a step: each goes to a step by id
+  document.querySelectorAll("[data-go]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var id = b.getAttribute("data-go");
+      for (var j = 0; j < wsteps.length; j++) if (wsteps[j].id === id) wshow(j);
+    });
+  });
+  $("save2").addEventListener("click", doSave);
+  $("copy2").addEventListener("click", doCopy);
+  $("save2sub").textContent = canPick ? "A file dialog opens" : "It lands in Downloads";
+
+  refresh();
+  if (!/[?&]all/.test(location.search)) { document.body.classList.add("wiz"); wshow(0); }  // ?all = everything on one page
+
+  // ?selftest: checks the logic headlessly (tools/check_setup.py reads the <pre id="selftest">)
+  if (/[?&]selftest/.test(location.search)) (function () {
+    var out = { fails: [] }, keep = JSON.parse(JSON.stringify(vals)), keepEra = era;
+    function check(name, ok) { if (!ok) out.fails.push(name); }
+    check("wizard opens on the import question", wiz() && wi === 0 && wsteps[0].id === "s-start");
+    setEra(recommended, false); out.rec = recommended; out.iniRec = buildIni(D, recommended, vals);
+    D.eras.forEach(function (e) {
+      setEra(e.id, false);
+      var v = presetValues(D, e.id), p = parseIni(buildIni(D, e.id, v)), w = presetValues(D, recommended);
+      check("parse-roundtrip " + e.id, applyIni(D, p, w) > 100 && JSON.stringify(w) === JSON.stringify(v));
+      check("nearest " + e.id, nearestEra(D, v)[0] === e.id && nearestEra(D, v)[1] === 0);
+    });
+    setEra("2020", false);
+    var f = D.features[0]; check("feature on", featureState(f, vals) === "true");
+    f.keys.forEach(function (k) { vals[k[0]][k[1]] = k[3]; }); check("feature off", featureState(f, vals) === "false");
+    check("changes after one feature", changes() >= 1);
+    // the three layers: every preset is found back as itself and fits every knob; a knob moved off the presets is
+    // Advanced, also after a round trip through an ini; a raw key no knob covers makes it Custom
+    var base = presetValues(D, recommended), kk = {};
+    D.groups.forEach(function (g) {
+      g.tuning.forEach(function (t, i) {
+        var v = presetValues(D, recommended); applyPreset(D, g, t, base, v);
+        var d = detectLayer(D, g, base, v); check("preset " + g.id + "/" + t.name, d.layer === "preset" && d.i === i);
+        g.knobs.forEach(function (kb) { check("preset on knob " + g.id + "/" + t.name + "/" + kb.label, knobFits(kb, v)); });
+      });
+      g.knobs.forEach(function (kb) {
+        knobKeys(kb).forEach(function (id) { kk[id] = 1; });
+        var v = presetValues(D, recommended);
+        if (kb.kind === "range") setKnob(kb, +kb.max - kb.step, v);
+        else if (kb.kind === "toggle") setKnob(kb, !kb.keys.every(function (k) { return same(v[k[0]][k[1]], k[2]); }), v);
+        else setKnob(kb, kb.options.filter(function (o) { return !same(o[0], v[kb.key[0]][kb.key[1]]); })[0][0], v);
+        var d = detectLayer(D, g, base, v), w = presetValues(D, recommended);
+        // a knob can land on a preset (Bug hunt is log_level 2 + traces): then preset is the right answer too
+        check("knob " + g.id + "/" + kb.label, d.layer === "advanced" || d.layer === "preset");
+        applyIni(D, parseIni(buildIni(D, recommended, v)), w);
+        check("knob via ini " + g.id + "/" + kb.label, detectLayer(D, g, base, w).layer === d.layer);
+      });
+      var raw = ownKeys(D, g).filter(function (sk) { return !kk[sk[0] + "." + sk[1]]; })[0];
+      if (raw) { var v = presetValues(D, recommended); v[raw[0]][raw[1]] = num(+v[raw[0]][raw[1]] + 1); check("raw " + g.id, detectLayer(D, g, base, v).layer === "custom"); }
+    });
+    // the page: an opened ini with the following distance moved shows Cruise under Advanced
+    var ccm = null; mods.forEach(function (m) { if (m.g.id === "cc") ccm = m; });
+    var v2 = presetValues(D, recommended); setKnob(ccm.g.knobs[0], 1.6, v2);
+    loadIni(buildIni(D, recommended, v2));
+    check("opened ini shows Advanced", ccm.cur.textContent === "Adjusted" && vals.cruise.acc_short_s === "1.25" && vals.cruise.acc_long_s === "1.95");
+    // the page's own controls: the slider, a mark under it and a preset chip
+    var gap = ccm.panels.advanced.querySelector("input[type=range]");
+    gap.value = "1.6"; gap.dispatchEvent(new Event("input"));
+    check("slider sets Advanced", ccm.cur.textContent === "Adjusted" && vals.cruise.acc_short_s === "1.25" && /1\.6 s/.test(ccm.panels.advanced.textContent));
+    ccm.panels.advanced.querySelectorAll(".marks button")[1].click();
+    check("mark sets the Relaxed gaps", vals.cruise.acc_short_s === "1.5" && vals.cruise.acc_middle_s === "2" && vals.cruise.acc_long_s === "2.5");
+    ccm.chips[0].click();
+    check("chip sets Close", ccm.cur.textContent === "Close" && ccm.chips[0].getAttribute("aria-pressed") === "true");
+    // decimal comma, error text with the field, Save blocked with a reason, the "as shipped" label, tiles that set more keys
+    setEra(recommended, false); refresh();
+    check("shipped label", $("status").textContent.indexOf("Standard (as shipped)") > 0);
+    var hh = inputs["trueshift.hint_hold_s"];
+    hh.el.value = "1,5"; hh.el.dispatchEvent(new Event("input"));
+    check("decimal comma", vals.trueshift.hint_hold_s === "1.5" && !hh.el.classList.contains("bad") && hh.err.textContent === "" && badList.length === 0);
+    check("changes label", $("status").textContent.indexOf("1 change") > 0 && $("status").textContent.indexOf("as shipped") < 0);
+    hh.el.value = "abc"; hh.el.dispatchEvent(new Event("input"));
+    check("error text", hh.el.classList.contains("bad") && hh.err.textContent !== "" && badList.length === 1 && $("status").textContent.indexOf("needs a number") > 0);
+    check("blocked", blocked() === true && $("toast").hidden === false && $("msg").textContent.indexOf("needs a number") > 0);
+    hh.el.value = "10"; hh.el.dispatchEvent(new Event("input"));
+    check("fixed", !hh.el.classList.contains("bad") && badList.length === 0 && blocked() === false);
+    setFeature(byId.sg, true); check("stop&go sets min_kmh 5", vals.cruise.min_kmh === "5" && featureState(byId.sg, vals) === "true");
+    setFeature(byId.sg, false); check("stop&go off: min_kmh 30", vals.cruise.min_kmh === "30");
+    setFeature(byId.cc, false); setFeature(byId.aeb, true); check("AEB needs SteadyCruise", featureState(byId.cc, vals) === "true");
+    $("toast").hidden = true;
+    vals = keep; era = keepEra; mods.forEach(function (m) { m.tab = null; }); refresh();
+    var pre = el("pre"); pre.id = "selftest"; pre.textContent = JSON.stringify(out); document.body.appendChild(pre);
+  })();
+})();
+</script>
+</body>
+</html>
