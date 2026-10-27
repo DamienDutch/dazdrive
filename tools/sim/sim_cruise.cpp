@@ -447,7 +447,17 @@ static void keys_test()
         bad |= !(m0 == 0 && m1 == 1 && m2 >= 2 && w2 > 0.1f);
         printf("rollover guard: growing sway level %d, soft brake from %.1f s (brake %.2f), lane changes level %d, roundabout level %.0f\n", lm, l2, bm, lmb, lvl_normal);
         bad |= !(sway_ok && calm_ok && lvl_normal == 0);
-        T.yaw = 0; T.speed = 0; rsc_step(1 / 60.0f);   // under 40 km/h the guard resets itself: level 0, no brake wish, no throttle cap
+        // the speed falling under 40 km/h in level 3 (the guard's brake 0.35, the cap 0): they let go at their own pace (brake 0.6/s, cap 1/s), no step in one frame
+        s_brake = 0.35f; s_cap = 0; T.paused = 0; T.gear = 1; T.yaw = 0; T.speed = 39.9f / 3.6f;
+        rsc_step(1 / 60.0f);
+        float b1 = act_wishes()[ACT_RSC].brake, c1 = act_wishes()[ACT_RSC].cap;
+        for (int k = 0; k < 66; k++) rsc_step(1 / 60.0f);
+        float b2 = act_wishes()[ACT_RSC].brake, c2 = act_wishes()[ACT_RSC].cap;
+        printf("rollover guard under 40 km/h at level 3: after one frame brake %.3f cap %.3f (was 0 and 1), after 1.1 s brake %.2f cap %.2f\n", b1, c1, b2, c2);
+        bad |= !(b1 > 0.33f && c1 < 0.05f && b2 == 0 && c2 == 1);
+        T.paused = 1; rsc_step(1 / 60.0f); T.paused = 0;   // paused (or reverse, a hitch, the guard off) resets at once: level 0, no brake wish, no throttle cap
+        T.yaw = 0; T.speed = 0;
+        bad |= act_wishes()[ACT_RSC].brake != 0 || act_wishes()[ACT_RSC].cap != 1;
     }
     T.speed_limit = 0;
     printf("keys test: %s\n", bad ? "FAIL" : "ok");

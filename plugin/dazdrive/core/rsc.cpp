@@ -40,8 +40,12 @@ void rsc_step(float dt)
     // not forward (reverse), paused, a hitch, too slow: nothing to watch. Neutral counts (an eco-roll at 85 km/h can sway like any gear)
     if (g_rsc_mode < 0.5f || T.paused || !(dt > 0 && dt < 0.5f) || T.gear < 0 || kmh < 40) {
         level = 0; cur = prev = prev2 = lobe(); lp = lps = 0; calm_since = high_since = warn_since = 0;
-        g_rsc_level = 0; s_brake = 0; s_cap = 1;
-        act_brake(ACT_RSC, 0); act_thr_cap(ACT_RSC, 1);
+        g_rsc_level = 0;
+        if (g_rsc_mode >= 0.5f && !T.paused && dt > 0 && dt < 0.5f && T.gear >= 0) {   // only the speed fell under 40: the brake and the cap let go at their own pace,
+            s_brake = fmaxf(0.0f, s_brake - 0.6f * dt);                                // not in one frame (27-10: 0.35 -> 0 and the cap 0 -> 1 at 40.0 km/h)
+            s_cap = fminf(1.0f, s_cap + 1.0f * dt);
+        } else { s_brake = 0; s_cap = 1; }
+        act_brake(ACT_RSC, s_brake); act_thr_cap(ACT_RSC, s_cap);
         return;
     }
     float a = v * T.yaw * 6.2831853f;
