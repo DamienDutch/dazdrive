@@ -8,9 +8,9 @@
 //                usable window: from idle + 60 % (coasting 30 %) of the way up to the torque plateau (V.plateau), to the top of the power range
 //                (V.eng.range[R_POWER]) or 93 % of the limit, whichever is lower. A gear must also
 //                be floor over the start of the plateau where the demanded acceleration takes the speed in 3 horizons: a steady
-//                load does not sit under it, a truck that accelerates may land lower. With floor_tq the floor is instead the lowest rpm
-//                where the engine still gives that share of its peak torque (from its curve), and a gear up must also stand on it at the
-//                speed right after the shift (and at the speed of now), not only 3 horizons on. v_cap caps the speeds the demand is
+//                load does not sit under it, a truck that accelerates may land lower. With floor_pw the floor is instead the lowest rpm
+//                where the engine still gives that share of its peak power (torque x rpm, from its curve), and a gear up must also stand on it
+//                at the speed right after the shift (and at the speed of now), not only 3 horizons on. v_cap caps the speeds the demand is
 //                followed to (the route announces a slowdown: no gear up that only fits a speed the truck will not reach). An upshift must land hyst above the lower edge,
 //                a downshift hyst below the upper one (the hysteresis); the current gear may sit anywhere inside the window.
 //   feasibility  share(g) = needed force / vehicle_force_at(g, v, 1): the throttle that gear needs for the demanded
@@ -63,7 +63,7 @@ struct gs_cfg {
     int time_obj;      // 1 = an upshift goes to the gear that gains speed soonest (see above), 0 = to the best score
     float a_min;       // time_obj: m/s2 a gear that is short of the demand must still give at full throttle (only when at least this much is asked)
     float k_shift;     // time_obj: a second in a shift counts this many seconds of driving
-    float floor_tq;    // > 0: the floor is the lowest rpm with this share of the peak torque (gs_torque_rpm) instead of plateau + floor, also checked right after an upshift (0 where floor is 0)
+    float floor_pw;    // > 0: the floor is the lowest rpm with this share of the peak power (gs_power_rpm) instead of plateau + floor, also checked right after an upshift (0 where floor is 0)
     float v_cap;       // > 0: m/s the route allows ahead; the speeds the demand is followed to (later shifts, the floor's look ahead for a gear up) stop there
 };
 
@@ -99,15 +99,15 @@ static inline float gs_peak_force(float v)
     return f;
 }
 
-// The lowest rpm (from idle up) where the engine gives at least share of its peak torque; a share over what the curve reaches counts as
-// its highest point (the rpm of the peak torque)
-static inline float gs_torque_rpm(float share, float idle)
+// The lowest rpm (from idle up) where the engine gives at least share of its peak power (torque x rpm: the curve's factor times the rpm;
+// the peak is V.peak_pw, found once per engine read); a share over 1 counts as the peak itself
+static inline float gs_power_rpm(float share, float idle)
 {
     const float lim = V.eng.rpm_limit;
-    float fmax = 0;
-    for (float r = idle; r <= lim; r += 5) fmax = fmaxf(fmax, curve_factor(&V.eng, r));
-    float want = fminf(share, fmax) - 1e-4f;
-    for (float r = idle; r <= lim; r += 5) if (curve_factor(&V.eng, r) >= want) return r;
+    float pk = V.peak_pw;
+    if (!(pk > 0)) for (float r = idle; r <= lim; r += 5) pk = fmaxf(pk, curve_factor(&V.eng, r) * r);
+    float want = fminf(share, 1.0f) * pk - 1e-3f;
+    for (float r = idle; r <= lim; r += 5) if (curve_factor(&V.eng, r) * r >= want) return r;
     return idle;
 }
 
@@ -169,11 +169,13 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
     // speed hardly rises) must stand there now; a truck that accelerates may land lower, the speed carries it up. A shorter look
     // ahead takes the skips away from a pull-away, a gear that lands right on the floor is knocked off it by the demand falling after the
     // shift (hence the hysteresis too). The caller sets floor 0 where the window must stay low (coasting for a while, engine brake).
-    // (floor_tq: the lowest rpm with that share of the peak torque instead; a gear up must stand on it right after the shift as well, and
+    // (floor_pw: the lowest rpm with that share of the peak power instead; a gear up must stand on it right after the shift as well, and
     // the route's cap holds the look ahead of a gear up, so a skip does not rest on a speed the route says the truck will not reach)
-    float r_min = c.floor_tq > 0 ? gs_torque_rpm(c.floor_tq, idle) : c.floor > 0 ? plateau + c.floor : 0, v_floor = v + a_d * 3 * c.horizon;
+    float r_min = c.floor_pw > 0 ? gs_power_rpm(c.floor_pw, idle) : c.floor > 0 ? plateau + c.floor : 0, v_floor = v + a_d * 3 * c.horizon;
     float v_floor_up = c.v_cap > 0 ? fminf(v_floor, fmaxf(c.v_cap, 0.5f)) : v_floor;
-    const bool now_up = r_min > 0 && c.floor_tq > 0;          // a gear up is checked at the speed of now and right after the shift too
+    // (the hysteresis a gear up must stand above the floor: the plateau floor has it; the power floor is the driver's own number, a gear lands on it as it is)
+    const float f_hyst = c.floor_pw > 0 ? 0.0f : c.hyst;
+    const bool now_up = r_min > 0 && c.floor_pw > 0;          // a gear up is checked at the speed of now and right after the shift too
     float u = fpeak > 1 ? fminf(1, need / fpeak) : 1;         // demanded power over the power available at this speed
     // a gear that is held for a long time (the speed hardly changes) pays its revs for longer than one the speed runs away from: up to 4 times
     float hold = 1 + 3 * (1 - gs_smooth(0.02f, 0.3f, a_d));
@@ -189,7 +191,7 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
         float fn = need * (g > cur ? 1 + c.learn_res : 1);
         t->share = f1 > 1 ? fn / f1 : 9;
         bool in = t->rpm >= o->lo + (g > cur ? c.hyst : 0) && t->rpm <= o->hi_g[g] - (g < cur ? c.hyst : 0) &&
-                  (g == cur && !c.floor_cur ? true : t->rpm * ((g > cur ? v_floor_up : v_floor) / vg) >= r_min + (g > cur ? c.hyst : 0)) &&
+                  (g == cur && !c.floor_cur ? true : t->rpm * ((g > cur ? v_floor_up : v_floor) / vg) >= r_min + (g > cur ? f_hyst : 0)) &&
                   (g <= cur || !now_up || (t->rpm >= r_min && vehicle_rpm_at(g, v) >= r_min));
         t->in = in;
         // time_obj: when at least a_min is asked, the gear we are in and a gear up may also be short if at full throttle they still give a_min:
@@ -235,7 +237,7 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
                 float va = fmaxf(0.5f, vs - loss), r = vehicle_rpm_at(g, va), f1 = vehicle_force_at(g, va, 1.0f) / (1 + c.learn_res);
                 float vp = vs + a_d * 3 * c.horizon;
                 if (c.v_cap > 0) vp = fminf(vp, fmaxf(c.v_cap, 0.5f));
-                if (r >= o->lo + c.hyst && r * (vp / va) >= r_min + c.hyst && (!now_up || r >= r_min) && (fminf(need, f1) - f_res) / m >= fminf(c.a_min, a_d)) {
+                if (r >= o->lo + c.hyst && r * (vp / va) >= r_min + f_hyst && (!now_up || r >= r_min) && (fminf(need, f1) - f_res) / m >= fminf(c.a_min, a_d)) {
                     v_s[g] = vs; v_t = fmaxf(v_t, vs + 5 / 3.6f);
                     break;
                 }

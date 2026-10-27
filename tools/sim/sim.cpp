@@ -290,6 +290,7 @@ static int shifts, ups, hunts, last_dir; static double last_shift_t;
 static double up_rpm_sum; static int up_n;
 static double up_rpm_min, rpm_all_sum, rpm_all_t, skip_rpm_min, skip_pull_min; static int skips_up, hunts_ts, shifts_ts;   // RELAX study: landing rpm, mean rpm below 50 km/h, skips, and shifts/hunting above the takeover speed
 static double rpm_sum, rpm_t;   // time-weighted rpm in the second half
+static struct { int on, on60; double kj, rs, rt, pk, kj60, t60; } EN;   // the energy table: engine energy (kJ, torque x rpm x time), rpm in gear, over a window a controller opens and closes
 static double g_sh_t, g_rpm_s, g_rpm_t; static int g_dskips;   // SCORES table: seconds in shifts, rpm in gear over the whole run, downward skips; g_quiet = run() prints nothing
 
 // A session reset as core/telemetry.cpp session_reset does it: the vehicle model first, then the module.
@@ -365,6 +366,13 @@ static void tick(double dt, int stats)
     if (M.ret && thr < 0.05f) F -= M.ret / 5.0f * 25000 * fminf(1, M.v / 10);
     float s = sinf(atanf(M.grade_pct / 100));
     float Fres = M.mass * 9.81f * (s + 0.006f) + 0.5f * 1.2f * CDA * M.v * M.v + (M.brake + M.brake_unseen) * M.mass * 4;
+    if ((EN.on || EN.on60) && M.gear > 0 && !M.state) {
+        engine_info e; gb_engine(0, &e); float r = rpm_now();
+        double kj = TORQUE * curve_factor(&e, r < idle ? idle : r) * thr * r * 0.10472f * dt / 1000;
+        if (EN.on) { EN.kj += kj; EN.rs += r * dt; EN.rt += dt; EN.pk = fmax(EN.pk, r); }
+        if (EN.on60) EN.kj60 += kj;
+    }
+    if (EN.on60) { EN.t60 += dt; if (EN.t60 >= 60) EN.on60 = 0; }
     M.v += (F - Fres) / M.mass * dt;
     if (M.v < 0) M.v = 0;
     M.s += M.v * dt;
@@ -597,10 +605,12 @@ static void sc_show(const char *title, const gs_out &o, int cur)
 static int run_scores_table();
 static int run_scores_part4();
 static int run_scores_cruise();
+static int run_scores_approach();
 static int run_scores()
 {
     printf("\n=== SCORES part 1: the score function on the vehicle model (Renault ATO 12 speeds, diff 3.08) ===\n");
     use_ato();
+    if (getenv("SC_PART6")) return run_scores_approach();   // (only part 6; SC_VERBOSE=1 with -v prints the module log)
     if (getenv("SC_PART4")) return run_scores_part4();   // (only part 4, for a quick look; its numbers may differ a little from the full run)
     gs_out o; gs_out o2;
     // 17 t at 45 km/h in 8, pedal 0.5: the demand of a pull
@@ -690,6 +700,7 @@ static int run_scores()
     sc_check(short_skip > 0 && t_near == 0 && t_far > 0, "time objective: a skip can win under load, Eco skips farther than Power, never less");
     r |= run_scores_part4();
     r |= run_scores_cruise();   // (last: its runs move the clock too)
+    r |= run_scores_approach();
     return r | g_sc_failed;
 }
 
@@ -769,8 +780,11 @@ static void c_cruise3(double t)
 // engine's throttle is the wish pedal's (a power wish, the throttle that delivers it in this gear, as modules/pedal.cpp does it in Normal,
 // in gear above 12 km/h), the driver's pedal stays where it is, and TrueShift reads the wish (pedal_wish_force below)
 static float g_pl_ped = 0.7f; static int g_pl_wish; static double g_pl_t0, g_pl_t50, g_pl_t70, g_pl_sh70;
+static int g_pl_full;   // test only: the wish is the pedal's share of the power the truck can deliver at this speed in the best gear (ref_now), no blend to the plain pedal
+static float cf_full(float v);
 static float sim_wish_force(float v)   // the wish pedal's force at v for the pedal g_pl_ped (exponent 1, no rise limit)
 {
+    if (g_pl_full) return g_pl_ped * cf_full(v);
     engine_info e; gb_engine(0, &e);
     float pref = 0;
     for (float r = 100; r <= LIMIT; r += 50) pref = fmaxf(pref, TORQUE * curve_factor(&e, r) * r * 0.10472f);
@@ -783,14 +797,14 @@ static float cf_wish_force(float v);
 float cruise_wish_force(float v) { return cf_wish_force(v); }   // [cruise] force_mode 1 (part 4's cruise model; -1 elsewhere)
 static void c_pull(double t)
 {
-    if (t <= 0) { g_pl_t0 = t_now; g_pl_t50 = g_pl_t70 = -1; g_pl_sh70 = -1; g_rec_n = 0; }
+    if (t <= 0) { g_pl_t0 = t_now; g_pl_t50 = g_pl_t70 = -1; g_pl_sh70 = -1; g_rec_n = 0; EN = {}; EN.on = EN.on60 = 1; }
     M.pedal = g_pl_ped; M.wish_on = 0;
     if (g_pl_wish && M.gear > 0 && !M.state && M.v * 3.6f > 12) {   // the driver's pedal stays g_pl_ped (T.in_thr), the engine gets the wish's throttle
         float fg = vehicle_force_at(M.gear, M.v, 1.0f);
         if (fg > 0) { M.wish_on = 1; M.wish_thr = fminf(1, sim_wish_force(M.v) / fg); }
     }
     if (g_pl_t50 < 0 && M.v * 3.6f >= 50) g_pl_t50 = t;
-    if (g_pl_t70 < 0 && M.v * 3.6f >= 70) { g_pl_t70 = t; g_pl_sh70 = g_sh_t; }
+    if (g_pl_t70 < 0 && M.v * 3.6f >= 70) { g_pl_t70 = t; g_pl_sh70 = g_sh_t; EN.on = 0; }
 }
 struct pl_res { int shifts, skips; double shift_s, t50, t70, gap; int gap_ok; };
 static pl_res pl_stats(float ts)   // from the recorder: until 70 km/h (or the end of the run)
@@ -1018,7 +1032,7 @@ static int run_scores_table()
     return g_sc_failed;
 }
 
-// ---- part 4: the torque-reserve floor, our own brake request, the route's cap and the upshift on a lift
+// ---- part 4: the power-reserve floor, our own brake request, the route's cap and the upshift on a lift
 // the ride's hunt (33.1 t ATO, 1.0 s box, 0.7 %, a junction ahead; 166.8 s: 8->7->9->7 in 8.1 s at 33 km/h): in 8 at 45 km/h the pedal off and
 // the engine brake at 0.25, then the deceleration assist brakes (its request does not show in the telemetry) to 33 km/h, the driver pulls at
 // 0.45, then lifts (2.5 s after an upshift landed, else after 7 s) with the engine brake at 0.25 and the assist braking a little
@@ -1073,16 +1087,25 @@ static float g_fv_amp; static void c_floorped(double t)
 }
 static int run_scores_part4()
 {
-    printf("\n=== SCORES part 4: the torque-reserve floor, our own brake request, the route's cap, the upshift on a lift (ATO) ===\n");
+    printf("\n=== SCORES part 4: the power-reserve floor, our own brake request, the route's cap, the upshift on a lift (ATO) ===\n");
     use_ato();
-    const char *keys[6] = { "choice_floor_torque_eco", "choice_floor_torque", "choice_floor_torque_power", "choice_own_brake", "choice_route_cap", "lift_upshift" };
+    const char *keys[6] = { "choice_floor_power_eco", "choice_floor_power", "choice_floor_power_power", "choice_own_brake", "choice_route_cap", "lift_upshift" };
     float def[6];
     for (int i = 0; i < 6; i++) for (int j = 0; j < m_trueshift.n_params; j++) if (!strcmp(m_trueshift.params[j].key, keys[i])) def[i] = m_trueshift.params[j].def;
+    {   // the floor rpm per mode: the lowest rpm where the engine still gives that share of its peak power (the sim's curve, 2700 Nm)
+        float id = ts_idle_rpm(), vd = 0.025f;
+        for (int j = 0; j < m_trueshift.n_params; j++) if (!strcmp(m_trueshift.params[j].key, "choice_floor_power_varied")) vd = m_trueshift.params[j].def;
+        printf("\n  the power-reserve floor (peak power %.0f kW; share of it -> lowest rpm, + choice_floor_power_varied -> while the pedal varies):\n", V.eng.torque * V.peak_pw * 0.10472f / 1000);
+        for (int i = 0; i < 3; i++)
+            printf("    %-7s %.3f -> %4.0f rpm   (varied %.3f -> %4.0f rpm)\n", i == 0 ? "Eco" : i == 1 ? "Normal" : "Power", def[i], gs_power_rpm(def[i], id), def[i] + vd, gs_power_rpm(def[i] + vd, id));
+        printf("    (for comparison, the shares 0.725 / 0.775 / 0.825 on this engine: %.0f / %.0f / %.0f rpm)\n", gs_power_rpm(0.725f, id), gs_power_rpm(0.775f, id), gs_power_rpm(0.825f, id));
+        sc_check(gs_power_rpm(def[0], id) < gs_power_rpm(def[1], id) && gs_power_rpm(def[1], id) < gs_power_rpm(def[2], id) && gs_power_rpm(def[1] + vd, id) > gs_power_rpm(def[1], id), "the floor rises from Eco to Normal to Power, and while the pedal varies");
+    }
     // 1. the hunt of the ride, with the new keys off (as before) and at their defaults
     printf("\n  the ride's hunt: 33.1 t, 0.7 %%, a turn 130 m ahead (5 km/h); in 8 at 45 km/h the engine brake 0.25, an assist brake the telemetry\n"
            "  does not show to 33 km/h, pedal 0.45, then a lift with the engine brake 0.25 (2.5 s after an upshift, else after 7 s; then 10 s)\n");
     int hunt_new = -1, hunt_old = -1, inc_new = -1, up_before = 0;
-    const char *rows[6] = { "new keys off (as before)", "only choice_floor_torque*", "only choice_own_brake", "only choice_route_cap", "only lift_upshift", "new keys at their defaults" };
+    const char *rows[6] = { "new keys off (as before)", "only choice_floor_power*", "only choice_own_brake", "only choice_route_cap", "only lift_upshift", "new keys at their defaults" };
     for (int kk = 0; kk < 12; kk++) {
         int k = kk % 6; g_hn_hold = kk < 6 ? 7 : 10;
         if (k == 0) printf("  pedal up to %.0f s:\n", g_hn_hold);
@@ -1108,8 +1131,8 @@ static int run_scores_part4()
            "  of the lift takes it back: one pair, no hunt)\n");
     sc_check(hunt_new == 0 && inc_new == 0 && up_before == 0, "new keys at their defaults: no hunting pair (pedal 7 s), no hunt (three reversals in 10 s) and no upshift before the turn (7 s and 10 s)");
     // 2. the floor at 45 km/h, 17 t: a steady foot against one wavering 0.30-0.54 every 5 s
-    printf("\n  the floor from 45 km/h, 17 t, Normal on 0.6 %% (choice_floor_torque %.2f, + %.2f while the pedal varies): a steady pedal 0.15 against one wavering 0.05-0.25\n", def[1], 0.03f);
-    float fl_st = gs_torque_rpm(def[1], ts_idle_rpm()), fl_var = 0; double rpm_st = 0, rpm_var = 0; int sh_st = 0, sh_var = 0, var_seen = 0;
+    printf("\n  the floor from 45 km/h, 17 t, Normal on 0.6 %% (choice_floor_power %.3f, + %.3f while the pedal varies): a steady pedal 0.15 against one wavering 0.05-0.25\n", def[1], 0.025f);
+    float fl_st = gs_power_rpm(def[1], ts_idle_rpm()), fl_var = 0; double rpm_st = 0, rpm_var = 0; int sh_st = 0, sh_var = 0, var_seen = 0;
     {
         g_cf_rpm = -1; g_cf_varied = 0;
         g_fv_amp = 0;
@@ -1120,8 +1143,8 @@ static int run_scores_part4()
         sc_do("floor varied", {17000, 45, sc_gear_for(45, 1100), 40}, c_floorped, 1);
         g_fv_amp = 0;
         rpm_var = g_rpm_t > 0 ? g_rpm_s / g_rpm_t : 0; sh_var = shifts; var_seen = g_cf_varied; fl_var = g_cf_rpm;
-        printf("  steady pedal:  floor %4.0f rpm (%.2f of the peak torque), mean rpm %4.0f, %d shifts, end %.0f km/h%s\n", fl_st, def[1], rpm_st, sh_st, v_st, st_var ? " (seen as varying!)" : "");
-        printf("  varying pedal: floor %4.0f rpm (%.2f of the peak torque), mean rpm %4.0f, %d shifts, end %.0f km/h\n", fl_var, g_cf_share, rpm_var, sh_var, M.v * 3.6f);
+        printf("  steady pedal:  floor %4.0f rpm (%.3f of the peak power), mean rpm %4.0f, %d shifts, end %.0f km/h%s\n", fl_st, def[1], rpm_st, sh_st, v_st, st_var ? " (seen as varying!)" : "");
+        printf("  varying pedal: floor %4.0f rpm (%.3f of the peak power), mean rpm %4.0f, %d shifts, end %.0f km/h\n", fl_var, g_cf_share, rpm_var, sh_var, M.v * 3.6f);
         sc_check(!st_var && var_seen && fl_var > fl_st, "the varying foot is seen as varying, the steady one not, and its floor is higher");
     }
     // 3. the upshift on a lift: a driver whose lifts are short first (median 0.8 s: under the shift time + 0.5 s), then one who lifts for 3 s
@@ -1142,7 +1165,8 @@ static int run_scores_part4()
         for (int j = 0; j < g_rec_n; j++) {
             double tr = g_rec[j].t - g_pl_t0;
             tr -= M.shift_time;   // (recorded when the gear is in: the shift started a shift time earlier)
-            if (tr >= g_lf_at && tr < g_lf_at + g_lf_dur + 0.1) { n_off++; if (first < 0) first = tr - g_lf_at; }
+            if (tr >= g_lf_at && tr < g_lf_at + g_lf_dur - 0.05f) { n_off++;   // (a shift that starts as the pedal comes back is an ordinary one, not a lift's)
+                if (first < 0) first = tr - g_lf_at; }
             if (!strcmp(g_rec[j].why, "up on lift")) n_lift++;
         }
         char seq[160]; sc_seq(seq, sizeof seq);
@@ -1176,6 +1200,22 @@ static float cf_full(float v)   // pedal.cpp's wish_ref: ref_now power (the best
 }
 static float cf_wish_force(float v) { return CF.on && CF.fm && CF.at >= 0 && t_now - CF.at <= 0.3 ? CF.u * cf_full(v) : -1; }
 static float g_cf_set = 83;
+// [cruise] approach_by_mode as modules/cruise.cpp has it (g_cf_app 1; 2 = a test-only variant that asks all the pull to spare in every mode):
+// the throttle the approach may use is the force that holds the speed plus the mode's share of what a full wish has to spare, over what the
+// gear gives; the share is the wish pedal's rise rate over Power's (1.5 / 3 / 8). More when the truck gains under 0.05 m/s2 while 1 km/h under.
+static int g_cf_app = 0; static float g_cf_ex = 0, g_cf_ceil = 1;
+static float cf_ceiling(int md, float e, float acc_kmhs, float dt, int shifting)
+{
+    bool slow = acc_kmhs < 0.18f && e > 1.0f;
+    g_cf_ex = slow ? fminf(1.0f, g_cf_ex + 0.5f * dt) : fmaxf(0.0f, g_cf_ex - 0.5f * dt);
+    if (shifting) return g_cf_ceil;
+    float v = M.v, full = cf_full(v), fg = M.gear > 0 ? vehicle_force_at(M.gear, v, 1.0f) : 0;
+    if (!(full > 0) || !(fg > 0)) return g_cf_ceil = 1;
+    float fh = fmaxf(0.0f, vehicle_resist(v)), share = g_cf_app == 2 ? 1.0f : md == MODE_ECO ? 1.5f / 8 : md == MODE_POWER ? 1.0f : 3.0f / 8;
+    if (full - fh < 0.25f * full) return g_cf_ceil = 1;
+    share += (1 - share) * g_cf_ex;
+    return g_cf_ceil = fminf(1.0f, fmaxf(0.0f, (fh + share * fmaxf(0.0f, full - fh)) / fg));
+}
 static void c_cforce(double t)
 {
     const float dt = 1 / 60.0f;
@@ -1184,8 +1224,10 @@ static void c_cforce(double t)
     float a = t <= 0 ? 0 : (M.v - CF.v_prev) / dt * 3.6f; CF.v_prev = M.v;
     if (t <= 0) { CF.on = 0; CF.at = -1; CF.acc_f = 0; }
     CF.acc_f += (a - CF.acc_f) * fminf(1.0f, dt / 0.5f);
-    float ep = CF.acc_f > 0 ? e - 2.5f * CF.acc_f : e;
+    int md = mode_of(M.cvar);   // (Eco / Power: the gains and the rate as cruise_body has them)
+    float ep = CF.acc_f > 0 ? e - 2.5f * (md == MODE_ECO ? 1.2f : md == MODE_POWER ? 0.6f : 1.0f) * CF.acc_f : e;
     float kp = 0.25f, ki = 0.08f, rate = 0.6f, k = 1;
+    if (md == MODE_ECO) { kp = 0.18f; ki = 0.05f; rate = 0.4f; } else if (md == MODE_POWER) { kp = 0.35f; ki = 0.12f; rate = 1.0f; }
     int shifting = M.state != 0;
     if (CF.fm) {
         float full = cf_full(M.v), fg = M.gear > 0 ? vehicle_force_at(M.gear, M.v, 1.0f) : 0;
@@ -1195,6 +1237,7 @@ static void c_cforce(double t)
     if (!CF.on) { CF.on = 1; CF.u = M.cc / k; CF.i = CF.u - kp * ep; }
     if (g_rolling) { CF.u = 0; CF.i = -kp * e; M.cc = 0; CF.at = -1; return; }
     float u_raw = kp * ep + CF.i, u_cap = CF.fm ? fmaxf(1.0f, 1 / k) : 1.0f;
+    if (g_cf_app && e > 2.5f) u_cap = fminf(u_cap, cf_ceiling(md, e, CF.acc_f, dt, shifting) / (CF.fm ? k : 1.0f)); else g_cf_ex = 0;
     float u = u_raw < 0 ? 0 : fminf(u_raw, u_cap), step = shifting ? 0 : rate * dt;
     if (u > CF.u + step) u = CF.u + step;
     if (u < CF.u - 2 * step) u = CF.u - 2 * step;
@@ -1239,6 +1282,139 @@ static int run_scores_cruise()
     }
     CF.fm = 0; CF.on = 0; CF.at = -1;
     sc_check(!bad, "force_mode 1: the cruise holds 83 on the flat and loses no more than 1 km/h more on the 3 % climb than force_mode 0");
+    return g_sc_failed;
+}
+
+// ---- part 6: the cruise control's approach to the set speed and its hold, with choice 1 (ride 7: 33 t, 70 -> 83 km/h, 11 held 22 s before the 12th)
+// The own cruise controller of part 5 in each mode (g_cruise_smooth on: TrueShift knows the throttle is the cruise's). Flat road, route on.
+// A minute at 70 km/h first (the model of the resistance learns while the speed is steady), then the set speed goes to 83: the times are
+// from that moment. Reports the approach (throttle at full for how long, the highest throttle, the time to the set speed) and when each gear came
+static const double AP_PRE = 60;
+static double g_ap_set_t, g_ap_wot, g_ap_thr_max, g_ap_t82; static int g_ap_g0; static float g_ap_cut_from = 1e9f, g_ap_cut_s = 0, g_ap_v0 = 70, g_ap_v1 = 83;
+static void c_capp(double t)
+{
+    const double dt = 1 / 60.0;
+    if (t <= 0) { g_ap_set_t = -1; g_ap_wot = 0; g_ap_thr_max = 0; g_rec_n = 0; g_pl_t0 = t_now; }
+    g_cf_set = t < AP_PRE ? g_ap_v0 : g_ap_v1;
+    c_cforce(t);
+    float kmh = M.v * 3.6f;
+    // a cut of the cruise throttle (a bend, a junction or a limit ahead): from g_ap_cut_from (s after the approach started) for g_ap_cut_s seconds the throttle is 0
+    if (t >= AP_PRE + g_ap_cut_from && t < AP_PRE + g_ap_cut_from + g_ap_cut_s) { M.cc = 0; CF.at = -1; }
+    if (t < AP_PRE) return;
+    if (t - AP_PRE < dt) { EN = {}; EN.on = EN.on60 = 1; g_ap_t82 = -1; g_ap_g0 = M.gear; }
+    if (EN.on && g_ap_t82 < 0 && kmh >= 82) { g_ap_t82 = t - AP_PRE; EN.on = 0; }
+    if (g_ap_set_t < 0 && kmh >= g_cf_set - 0.5f) g_ap_set_t = t - AP_PRE;
+    if (g_ap_set_t < 0) { if (M.cc > 0.98f) g_ap_wot += dt; g_ap_thr_max = fmax(g_ap_thr_max, M.cc); }
+}
+static float g_ap_gr; static float r_ap_gr(double) { return g_ap_gr; }   // a constant grade for the comparison table
+static float r_ap_cut(double s) { return s < 1300 ? 2.0f : 0.0f; }   // 2 % up to 1.3 km (the pre-roll), then flat
+static int sc_first_to(int gear)   // index of the first recorded shift into this gear, -1 = none
+{
+    for (int i = 0; i < g_rec_n; i++) if (g_rec[i].b == gear) return i;
+    return -1;
+}
+static int run_scores_approach()
+{
+    printf("\n=== SCORES part 6: the cruise control's approach to 83 km/h and its hold with choice 1, 33 t, flat, ATO (own controller per mode) ===\n");
+    use_ato();
+    g_cruise_smooth = 1;
+    int bad = 0;
+    g_cf_set = 83;
+    printf("  from 70 km/h in 10 (1371 rpm):   mode    to 83   at full thr  highest thr   gears (s after the set speed was reached)\n");
+    struct Md { const char *name; float cvar; } mds[3] = { { "Eco", 10 }, { "Normal", 3 }, { "Power", 1.6667f } };
+    double t12[3] = { 1e9, 1e9, 1e9 };   // (1e9 = the 12th never came)
+    double thr5[3] = { 0, 0, 0 };
+    g_cf_app = 1;   // approach_by_mode at its default
+    for (int i = 0; i < 3; i++) {
+        CF.fm = 0;
+        g_rec_on = 1;
+        sc_do(mds[i].name, {33000, 70, 10, AP_PRE + 70, mds[i].cvar, 0.5f, 0, -1, -1, NULL, 1}, c_capp, 1);
+        g_rec_on = 0;
+        char gs[200] = ""; int k = 0;
+        for (int j = 0; j < g_rec_n && k < 170; j++) if (g_rec[j].t - g_pl_t0 >= AP_PRE) k += snprintf(gs + k, sizeof gs - k, "%s%d@%.1f", k ? ", " : "", g_rec[j].b, g_rec[j].t - g_pl_t0 - AP_PRE - g_ap_set_t);
+        int j12 = sc_first_to(12);
+        if (j12 >= 0) t12[i] = g_rec[j12].t - g_pl_t0 - AP_PRE - g_ap_set_t;
+        printf("                                   %-7s %5.1f s %6.1f s      %5.2f      %s\n", mds[i].name, g_ap_set_t, g_ap_wot, g_ap_thr_max, gs);
+    }
+    // a deficit of 5 km/h only (70 -> 75): the highest throttle and the seconds at full throttle, by mode
+    printf("  a deficit of 5 km/h (70 -> 75), approach_by_mode 1:  mode    to 75   at full thr  highest thr\n");
+    for (int i = 0; i < 3; i++) {
+        CF.fm = 0; g_ap_v1 = 75;
+        sc_do(mds[i].name, {33000, 70, 10, AP_PRE + 60, mds[i].cvar, 0.5f, 0, -1, -1, NULL, 1}, c_capp, 1);
+        thr5[i] = g_ap_thr_max;
+        printf("                                                    %-7s %5.1f s %6.1f s      %5.2f\n", mds[i].name, g_ap_set_t, g_ap_wot, g_ap_thr_max);
+    }
+    g_ap_v1 = 83; g_cf_app = 0;
+    sc_check(thr5[0] < 0.99 && thr5[1] < 0.99 && thr5[2] > 0.99, "approach_by_mode 1: a 5 km/h deficit never gives full throttle in Eco or Normal, in Power it does");
+    // ride 7: the 12th within a few seconds of arriving at the set speed (it took 22 s)
+    sc_check(t12[1] <= 6, "ride 7, Normal: the 12th is in within 6 s of reaching the set speed");
+    sc_check(t12[0] <= 8, "ride 7, Eco: the 12th is in within 8 s of reaching the set speed");
+    // ---- the comparison table for the driver's choice: the cruise's approach and the driver's full pedal, energy as a fuel indication
+    printf("\n  THE CHOICE (comparison only, nothing here changes a default). ATO, choice 1, energy = the integral of the engine's torque x rpm over the window (kJ).\n"
+           "  (1) cruise approach 70 -> 83 km/h (window: until 82 km/h)\n");
+    printf("      %-30s %-12s %10s %7s %6s %6s %6s %7s  %s\n", "variant", "load", "to 82 km/h", "shifts", "rpm pk", "rpm av", "kJ", "kJ 60 s", "gears");
+    struct Va { const char *name; float cvar; int app; } vas[5] = { { "today (approach_by_mode 0)", 3, 0 }, { "approach_by_mode 1, Eco", 10, 1 }, { "approach_by_mode 1, Normal", 3, 1 },
+                                                                     { "approach_by_mode 1, Power", 1.6667f, 1 }, { "full power (test only: force_mode 1, all of it)", 3, 2 } };
+    for (int ld = 0; ld < 4; ld++) {
+        float mass = ld < 2 ? 33000.0f : 17000.0f; float gr = ld % 2 ? 2.0f : 0.0f;
+        char lb[24]; snprintf(lb, sizeof lb, "%.0f t %s", mass / 1000, gr > 0 ? "2 %" : "flat");
+        for (int vi = 0; vi < 5; vi++) {
+            CF.fm = vi == 4; g_ap_v0 = 70; g_ap_v1 = 83; g_ap_cut_from = 1e9f; g_cf_app = vi == 4 ? 0 : vas[vi].app; g_cf_ex = 0; g_cf_ceil = 1;
+            g_ap_gr = gr;
+            g_rec_on = 1;
+            sc_do(vas[vi].name, {mass, 70, 10, AP_PRE + 90, vas[vi].cvar, 0.5f, 0, -1, -1, r_ap_gr, 1}, c_capp, 1);
+            g_rec_on = 0; g_cf_app = 0; CF.fm = 0;
+            char gs[160] = ""; int k = 0, n = 0;
+            k += snprintf(gs, sizeof gs, "%d", g_ap_g0);
+            for (int j = 0; j < g_rec_n && k < 140; j++) {
+                double tr = g_rec[j].t - g_pl_t0 - AP_PRE;
+                if (tr >= 0 && tr <= g_ap_t82 + 0.5) { k += snprintf(gs + k, sizeof gs - k, ">%d@%.0f", g_rec[j].b, tr); n++; }
+            }
+            char t82[12]; if (g_ap_t82 >= 0) snprintf(t82, sizeof t82, "%.1f s", g_ap_t82); else snprintf(t82, sizeof t82, "never");
+            printf("      %-30s %-12s %10s %7d %6.0f %6.0f %6.0f %7.0f  %s\n", vas[vi].name, lb, t82, n, EN.pk, EN.rt > 0 ? EN.rs / EN.rt : 0, EN.kj, EN.kj60, gs);
+        }
+    }
+    g_ap_gr = 0;
+    printf("  (2) the driver's full pedal from 30 to 70 km/h (window: until 70 km/h)\n");
+    printf("      %-46s %-12s %10s %7s %6s %6s %6s %7s  %s\n", "variant", "load", "to 70 km/h", "shifts", "rpm pk", "rpm av", "kJ", "kJ 60 s", "gears");
+    for (int ld = 0; ld < 2; ld++) {
+        float mass = ld ? 17000.0f : 33000.0f; char lb[24]; snprintf(lb, sizeof lb, "%.0f t flat", mass / 1000);
+        for (int vi = 0; vi < 2; vi++) {
+            g_pl_ped = 1.0f; g_pl_wish = vi; g_pl_full = vi;
+            g_rec_on = 1;
+            sc_do("full pedal", {mass, 30, sc_gear_for(30, 1100), 60}, c_pull, 1);
+            g_rec_on = 0; g_pl_wish = 0; g_pl_full = 0; g_pl_ped = 0.7f;
+            char gs[160] = ""; int k = 0, n = 0;
+            k += snprintf(gs, sizeof gs, "%d", sc_gear_for(30, 1100));
+            for (int j = 0; j < g_rec_n && k < 140; j++) if (g_pl_t70 >= 0 && g_rec[j].t - g_pl_t0 <= g_pl_t70 + 0.5) { k += snprintf(gs + k, sizeof gs - k, ">%d@%.0f", g_rec[j].b, g_rec[j].t - g_pl_t0); n++; }
+            char t70[12]; if (g_pl_t70 >= 0) snprintf(t70, sizeof t70, "%.1f s", g_pl_t70); else snprintf(t70, sizeof t70, "never");
+            printf("      %-46s %-12s %10s %7d %6.0f %6.0f %6.0f %7.0f  %s\n", vi ? "full pedal = 100 % power at this speed (test only)" : "today: full pedal = full throttle in this gear", lb, t70, n, EN.pk, EN.rt > 0 ? EN.rs / EN.rt : 0, EN.kj, EN.kj60, gs);
+        }
+    }
+    g_cf_app = 0;
+    // a cut of the cruise throttle for a bend (not the driver's lift): 72 km/h on 2 % in 10 (the road flattens as the cut begins), the throttle 0 for 8 s,
+    // the cruise back after it. The upshift the scores want (a flat road, no pull asked) must not wait for the cut to end
+    {
+        printf("\n  a cut of the cruise throttle for a bend (not the driver's lift): 72 km/h on 2 %% in 10, flat from the cut on, the throttle 0 for 8 s\n");
+        CF.fm = 0; g_ap_v0 = g_ap_v1 = 72; g_ap_cut_from = 1.0f; g_ap_cut_s = 8;
+        double up_s[2] = { -1, -1 };
+        for (int i = 0; i < 2; i++) {   // Normal, Eco
+            g_rec_on = 1;
+            sc_do(i ? "cut Eco" : "cut Normal", {33000, 72, 10, AP_PRE + 20, i ? 10.0f : 3.0f, 0.5f, 0, -1, -1, r_ap_cut, 1}, c_capp, 1);
+            g_rec_on = 0;
+            char gs[120] = ""; int k = 0, up = -1;
+            for (int j = 0; j < g_rec_n; j++) if (g_rec[j].t - g_pl_t0 >= AP_PRE) {
+                if (up < 0 && g_rec[j].b > g_rec[j].a) up = j;
+                k += snprintf(gs + k, sizeof gs - k, "%s%d>%d@%.1f", k ? ", " : "", g_rec[j].a, g_rec[j].b, g_rec[j].t - g_pl_t0 - AP_PRE - 1.0);
+            }
+            if (up >= 0) up_s[i] = g_rec[up].t - g_pl_t0 - AP_PRE - 1.0 - M.shift_time;
+            char fs[16] = "-"; if (up >= 0) snprintf(fs, sizeof fs, "%.1f", up_s[i]);
+            printf("    %-7s first upshift %s s after the cut began   %s\n", i ? "Eco" : "Normal", fs, gs);
+        }
+        sc_check(up_s[0] >= 0 && up_s[0] <= 4, "a cut of the cruise throttle: the upshift comes at once (within 4 s), not when the cut is over (Normal)");
+        g_ap_cut_from = 1e9f; g_ap_v0 = 70; g_ap_v1 = 83;
+    }
+    g_cruise_smooth = 0;
     return g_sc_failed;
 }
 
