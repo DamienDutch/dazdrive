@@ -669,6 +669,7 @@ static ahres ah_run(const char *name, float grade_pct, int hard, int gate, float
 // req_after / hold_after: the highest request, and Auto Hold's own, 1-4 s after the stop (the assist brakes a roll back by itself).
 // drop: the most the request fell under its peak from 0.5 km/h on until the gas (the hand-over from the assist to the hold).
 struct lvres { double t_stop; float held_min, roll_m, req_end, t_move, req_after, hold_after, drop; };
+static double g_lv_prime = 0;   // > 0: [core] brake_learn on, the vehicle model's estimate primed to this share of the lever plant's gain
 static lvres lever_run(const char *name, float grade_pct, float mass_t, int ah, int lever_key, int engine_only, int owner_late, float gain = 4)
 {
     memset(GA, 0, sizeof GA);
@@ -684,6 +685,8 @@ static lvres lever_run(const char *name, float grade_pct, float mass_t, int ah, 
     g_sim_eng.torque = 2400; g_sim_eng.n_curve = 0; g_sim_eng.rpm_limit = 2200;
     const float m = mass_t * 1000, ratio = 12.0f, diff = 2.64f, R = 0.5f;
     g_sim_mass = m;
+    g_brake_learn = g_lv_prime > 0 ? 1.0f : 0.0f;
+    if (g_lv_prime > 0) vehicle_brake_prime(0, (float)(g_lv_prime * gain * m), 0.02f, 8);
     memset(T.ratio, 0, sizeof T.ratio); T.ratio[0] = ratio; T.diff = diff; T.fwd_gears = 12; T.wheels = 1;
     T.engine_on = 1; T.parking_brake = 0; T.paused = 0; T.dgear = 0; T.gear = 3; T.eff_thr = 0; T.eff_clutch = 0; T.rpm = 900; T.cruise = 0;
     T.air_warning = 0; T.in_brake = 0; T.in_thr = 0;
@@ -751,7 +754,7 @@ static lvres lever_run(const char *name, float grade_pct, float mass_t, int ah, 
         if (verbose && k % 3 == 0 && (t_stop < 0 ? v * 3.6 < 1.5 : t < t_stop + 0.6))
             printf("   t=%6.2f v %6.3f km/h  decel %.3f  hold %.3f  req %.3f  brake %.3f\n", t, v * 3.6, dc::D.u, s_want_hold, req, y);
     }
-    s_hooked = hooked; s_low_on = 0; s_low_stopped = 0; p_ah = 1; p_ah_lever = 1;
+    s_hooked = hooked; s_low_on = 0; s_low_stopped = 0; p_ah = 1; p_ah_lever = 1; g_brake_learn = 0;
     r.t_stop = t_stop;
     r.roll_m = t_stop < 0 ? 99 : fmaxf(x_stop - xmin, xmax - x_stop);
     r.req_end = *(float *)(GA + GA_BRAKE_REQ);
@@ -1403,6 +1406,22 @@ int main(int argc, char **argv)
         r = lever_run("lever stop 36 t -10%, weak brake (2.5 m/s2 at 1.0)", -10, 36, 1, 1, 0, 0, 2.5f); bad |= r.held_min < 0.3f || r.drop > 0.1f || r.roll_m > 0.05f || r.req_end != 0 || r.t_move < 0;
         r = lever_run("lever stop 36 t +6%, engine brake alone", 6, 36, 1, 1, 1, 0); bad |= r.held_min < 0.3f || r.drop > 0.1f || r.roll_m > 0.05f || r.req_end != 0 || r.t_move < 0;
         r = lever_run("lever stop 36 t +6%, owner's standstill 0.15 s late", 6, 36, 1, 1, 0, 1); bad |= r.held_min < 0.3f || r.drop > 0.1f || r.roll_m > 0.05f || r.req_end != 0 || r.t_move < 0;
+        // [core] brake_learn: the hold sized from the learned gain for the grade (twice the slope's pull + 0.8 m/s2, 0.2-1) in place of the ini's 0.6.
+        // The estimate exact, and 25 % too high (the margin has to carry it). Asserted: it stops and holds (moved <= 0.05 m), no request left after the
+        // gas, the truck moves off; printed: the lowest request while standing (the ini's is 0.6; a flat stop holds with 0.2).
+        lever_run("(for comparison, brake_learn 0) lever stop 36 t +12%, ini 0.6", 12, 36, 1, 1, 0, 0, 4);
+        lever_run("(for comparison, brake_learn 0) lever stop 36 t -10%, ini 0.6, 2.5 m/s2", -10, 36, 1, 1, 0, 0, 2.5f);
+        printf("--- Auto Hold with the learned brake gain (brake_learn 1): the hold sized for the grade\n");
+        for (double lp : { 1.0, 1.25 })
+            for (float m : ms)
+                for (float gn : { 4.0f, 2.5f })
+                    for (float g : { 0.0f, 6.0f, -6.0f, 12.0f, -10.0f }) {
+                        char nm[110]; snprintf(nm, sizeof nm, "learned x%.2f: lever stop %2.0f t %+3.0f%% brake %.1f m/s2", lp, m, g, gn);
+                        g_lv_prime = lp;
+                        lvres rl = lever_run(nm, g, m, 1, 1, 0, 0, gn);
+                        g_lv_prime = 0;
+                        bad |= rl.t_stop < 0 || rl.held_min < 0.19f || rl.roll_m > 0.05f || rl.req_end != 0 || rl.t_move < 0;
+                    }
         printf("--- the same with auto_hold 0 and with auto_hold_lever 0: no Auto Hold, the truck rolls back (as before)\n");
         for (float m : ms)
             for (int k = 0; k < 2; k++) {

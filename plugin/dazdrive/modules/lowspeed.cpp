@@ -49,9 +49,17 @@ static const float LS_STOP_MARGIN = 150;    // the clutch opens when the start g
 static const float LS_ASSIST_REQ = 0.15f;   // the brake request of the stop assist, a placeholder until it is measured (request unit 0..1)
 static const float LS_HOLD_REQ = 0.6f;      // the brake request of a hold when Auto Hold does not say (its own default)
 static const float LS_SG_HOLD_REQ = 0.2f;   // the brake request of the hold behind a lead with the cruise on (the ACC's own standing hold)
+static const float LS_ASSIST_DECEL = 1.5f;  // m/s2 the stop assist asks of the brakes with [core] brake_learn: what LS_ASSIST_REQ gives at the 10 m/s2 per request of the AEB's fit
 static const float LS_ARM_RPM = 100;        // Stop&Go's hold is set when the driveline is this near the stop threshold (rpm), before the box can go to neutral
 static const float LS_R_BRAKE = 0.01f;      // the game puts R in on a brake above this at a standstill (its own rule)
 static const float LS_GAP_KMH = 1.0f;       // owner=1: gear 0 above the open point + this is a shift's gap (TrueShift's braking downshift), not the box's own stop
+
+// [core] brake_learn: the requests sized from the vehicle model's learned brake gain once it is confident (core/vehicle.cpp); the constants above
+// otherwise. Like Auto Hold's, a hold is sized for the grade (0.2-1); the one behind a lead never goes under its constant (the ACC's standing
+// hold); the stop assist asks LS_ASSIST_DECEL.
+static float ls_hold_req(float grade, float fallback) { return g_brake_learn > 0 ? vehicle_brake_hold_req(grade, fallback) : fallback; }
+static float ls_sg_hold_req(float grade) { return g_brake_learn > 0 ? fmaxf(LS_SG_HOLD_REQ, vehicle_brake_hold_req(grade, LS_SG_HOLD_REQ)) : LS_SG_HOLD_REQ; }
+static float ls_assist_req() { return g_brake_learn > 0 ? vehicle_brake_req(LS_ASSIST_DECEL, LS_ASSIST_REQ) : LS_ASSIST_REQ; }
 
 // What one frame sees: telemetry, the vehicle model and the other modules' states, gathered in one place (the sim sets the same
 // fields through the real accessors).
@@ -64,6 +72,7 @@ struct low_in {
     creep_info cr;
     cruise_info cu;
     float act_req;           // the brake request the actuator holds
+    float grade;             // the road grade (%) from the placement's pitch, for the size of a hold
     const char *game_why;    // NULL = the owner can work; else why it stands aside (state GAME)
 };
 
@@ -227,6 +236,7 @@ static void gather(low_in *in, float dt)
     creep_info_get(&in->cr);
     cruise_info_get(&in->cu);
     in->act_req = act_request();
+    in->grade = V.pitch_pct;
     in->start_gear = ts_start_gear(fmaxf(T.in_thr, 0.3f));
     // the top of the owner's world: where the start gear reaches the end of the game's low-gear shift window
     float up = V.eng.range[R_LOW][1];
@@ -282,7 +292,7 @@ static void low_command(const low_in &in)
         if (g_assist == 1 && (in.thr >= LS_PEDAL_FREE || in.brake >= LS_BRAKE_ON || in.cruise)) g_assist = 2;
         g_low.would_gear = g_latch ? g_pre_gear : in.gear;
         g_low.would_clutch = g_latch ? 1.0f : 0.0f;
-        g_low.would_brake = g_assist == 1 ? LS_ASSIST_REQ : 0;
+        g_low.would_brake = g_assist == 1 ? ls_assist_req() : 0;
         g_low.would_thr = 0;
         break;
     }
@@ -295,7 +305,7 @@ static void low_command(const low_in &in)
         if (!was_rest) g_pre_gear = in.start_gear;   // the gear preselected at rest is the start gear at the moment of the stop
         g_low.would_gear = g_pre_gear;
         g_low.would_clutch = 1;
-        g_low.would_brake = st == LOW_STOPPED_HELD && by_us ? (in.cu.hold == 1 ? (in.cu.hold_req > 0 ? in.cu.hold_req : LS_HOLD_REQ) : in.cu.sg_hold ? LS_SG_HOLD_REQ : LS_HOLD_REQ) : 0;
+        g_low.would_brake = st == LOW_STOPPED_HELD && by_us ? (in.cu.hold == 1 ? (in.cu.hold_req > 0 ? in.cu.hold_req : ls_hold_req(in.grade, LS_HOLD_REQ)) : in.cu.sg_hold ? ls_sg_hold_req(in.grade) : ls_hold_req(in.grade, LS_HOLD_REQ)) : 0;
         g_low.would_thr = 0;
         break;
     }
@@ -395,7 +405,7 @@ static void low_publish(const low_in &in)
     g_o_holding = pre != 0;
     g_o_pre = g_tail_ok ? pre : 0;
     // the hold behind a lead
-    g_o_hold_wish = g_o_on && st == LOW_STOPPED_HELD && in.cu.sg_hold && in.cu.hold != 1 ? LS_SG_HOLD_REQ : 0;
+    g_o_hold_wish = g_o_on && st == LOW_STOPPED_HELD && in.cu.sg_hold && in.cu.hold != 1 ? ls_sg_hold_req(in.grade) : 0;
     if (p_owner > 0) act_brake(ACT_LOW, g_o_hold_wish);
 }
 

@@ -355,7 +355,10 @@ static void auto_hold(char *g, float dt)
 {
     s_want_hill = 0;
     s_want_hold = 0;
-    float h = p_ah_req < 0.1f ? 0.1f : p_ah_req > 1 ? 1 : p_ah_req;
+    float h0 = p_ah_req < 0.1f ? 0.1f : p_ah_req > 1 ? 1 : p_ah_req;
+    // [core] brake_learn: the hold sized from the learned brake gain for the grade (twice the slope's pull plus 0.8 m/s2, 0.2-1), in place of the ini's
+    // request, once the gain is confident; a roll back still grabs with at least the ini's request (h0). Not confident: the ini's.
+    float h = g_brake_learn > 0 ? vehicle_brake_hold_req(pitch_grade(), h0) : h0;
     double now = wall_s();
     if (!(dt > 0 && dt < 0.5f)) { s_want_hold = AH.r; return; }  // paused / hitch: keep what is set
     float kmh = fabsf(T.speed) * 3.6f;
@@ -424,7 +427,7 @@ static void auto_hold(char *g, float dt)
         if (AH.launch_t > p_ah_max) rate = fmaxf(rate * 2, h / p_ah_hard);      // never fight the pedal for long (moving off keeps the pedal's pace: a quick drop is a lurch)
         if (T.speed < -0.08f && grade > 0.5f) {                               // rolling back uphill: grab again, trust the estimate less
             if (now > AH.grab_until) { s_ah_k = fmaxf(0.3f, s_ah_k * 0.7f); logv(2, "Auto Hold: rolling back (%.2f km/h): grabbing again, drive estimate x%.2f", -T.speed * 3.6f, s_ah_k); }
-            AH.r = fminf(h, AH.r + 4 * dt);
+            AH.r = fminf(fmaxf(h, h0), AH.r + 4 * dt);
             AH.grab_until = now + 0.5;
         } else if (now > AH.grab_until) AH.r = fminf(AH.r, fmaxf(target, AH.r - rate * dt));
         if (T.speed < 0) AH.roll_m += -T.speed * dt;
@@ -1264,7 +1267,7 @@ static void own_acc(char *g, float dt)
                 b = fmaxf(b, bs);
             }
         }
-        if (p_own_brake > 0 && v <= 0.05f && lv < 0.5f && lead < gmin + 3 && !(low_owner_on() && g_sg_hold)) b = fmaxf(b, 0.2f);  // standing: hold (the low-speed owner's while Stop&Go holds)
+        if (p_own_brake > 0 && v <= 0.05f && lv < 0.5f && lead < gmin + 3 && !(low_owner_on() && g_sg_hold)) b = fmaxf(b, g_brake_learn > 0 ? fmaxf(0.2f, vehicle_brake_hold_req(pitch_grade(), 0.2f)) : 0.2f);  // standing: hold (the low-speed owner's while Stop&Go holds); [core] brake_learn: sized for the grade from the learned gain, never under 0.2
         s_want_acc = crossing ? 0 : b;
     }
     if (want < OA.t) OA.t = fmaxf(want, OA.t - dn * dt);
