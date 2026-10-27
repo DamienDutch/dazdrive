@@ -117,11 +117,11 @@ static void pm_print(const char *what, float share, const pm_res &r)
 
 static int pm_main()
 {
-    use_ato();
+    if (getenv("PM_VOLVO")) use_volvo(); else use_ato();   // PM_VOLVO=1: the Volvo (2400 Nm, plateau 900-1230) instead of the Renault ATO
     int failed = 0;
     auto check = [&](bool ok, const char *what) { printf("  %-4s %s\n", ok ? "ok" : "FAIL", what); if (!ok) failed = 1; };
     const float shares[4] = { 0, 0.5f, 0.75f, 1 };
-    printf("\n=== pedalmix: [pedal] torque_share on the wish pedal, Renault ATO 12 speeds, Normal, choice 1, steady pedal from 20 km/h (150 s or 80 km/h) ===\n");
+    printf("\n=== pedalmix: [pedal] torque_share on the wish pedal, %s, Normal, choice 1, steady pedal from 20 km/h (150 s or 80 km/h) ===\n", getenv("PM_VOLVO") ? "Volvo FH 2400 Nm 12 speeds" : "Renault ATO 12 speeds");
     printf("  gear segments: from landing (+0.3 s) to the next upshift; median change of the wheel torque and of the engine power over such a segment\n");
     printf("  %-26s %5s  %6s  %6s  %5s   %6s %6s  %4s   %s\n", "row", "share", "30-70s", "shifts", "u-d4s", "torque", "power", "segs", "throttle");
     static pm_res R[2][2][3][4];   // mass, grade, pedal, share
