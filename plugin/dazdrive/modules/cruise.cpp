@@ -808,7 +808,8 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
         // the grade the truck coasts on is the road up to the bend, not the road under it now: plan with the mean grade over 8, 16 and 32 s of
         // road and take the lowest speed (a climb that ends before the bend does not count, a descent that goes on does)
         float vb = NAN;
-        for (float sec : { 8.0f, 16.0f, 32.0f }) {
+        static const float k_horizons[] = { 8.0f, 16.0f, 32.0f };
+        for (float sec : k_horizons) {
             float ca = coast_over(p_cv_coast, v_ms * sec, 0.1f, 1.0f), vi = route_bend_speed(a_lat, ca);
             if (vi == vi && (vb != vb || vi < vb)) { vb = vi; coast_b = ca; }
         }
