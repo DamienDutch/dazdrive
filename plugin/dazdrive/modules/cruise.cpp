@@ -941,7 +941,10 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
             float jn_coast = coast_over(p_jn_coast, ji.dist_m, 0.05f, 0.8f);
             float v_env = sqrtf(ji.limit_ms * ji.limit_ms + 2 * jn_coast * fmaxf(ji.dist_m - (ji.roundabout ? 15 : 8), 0.0f));
             float v_ok = fminf(ahead_cap(v_ms, v_env, jn_coast) * 3.6f, ji.limit_ms * 3.6f + p_jn_over);
-            target = fminf(target, kmh >= v_ok - 2 ? kmh : v_ok);
+            // (the last 2 km/h under v_ok are not chased: the target is v_ok - 2 there and the truck's own speed from it up. It was
+            // `kmh >= v_ok - 2 ? kmh : v_ok`: a jump of 2 km/h in the error (0.5 throttle) at the edge, which tipped a climb run from 3 to 4 s at
+            // full throttle on a 0.001 change of ahead_accel)
+            target = fminf(target, fmaxf(kmh, v_ok - 2));
         }
     }
     // The ACC's own target (vehicle ahead) always wins, also 0 = stop behind it. But someone cutting in or a
