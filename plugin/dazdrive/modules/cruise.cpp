@@ -28,7 +28,7 @@
 #include <string.h>
 
 static float p_herm, p_bind_a;
-static float p_sg_rearm, p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_own_bias, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_lever, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade, p_aeb_mode, p_aeb_margin, p_aeb_warn_dec, p_aeb_full_frac;
+static float p_sg_rearm, p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_own_bias, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_lever, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade, p_aeb_mode, p_aeb_margin, p_aeb_warn_dec, p_aeb_full_frac, p_aeb_rise, p_aeb_jerk;
 static float p_rb_curves;  // roundabout_curves
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
 static float p_app_mode, p_app_sh_eco, p_app_sh, p_app_sh_pw;  // approach_by_mode and the share of the pull to spare each mode asks
@@ -136,6 +136,8 @@ static param g_params[] = {
     { "aeb_mode", &p_aeb_mode, 0, "AEB: 0 = stages by time to collision (aeb_warn_s ... aeb_full_s). 1 = by the deceleration it would take to stop short of the lead: leaves the driver in charge until late (a US-style system), then brakes firmly to stop about aeb_margin_m behind the lead" },
     { "aeb_margin_m", &p_aeb_margin, 0.5f, "AEB, mode 1: the gap it aims to stop at behind the lead (m)" },
     { "aeb_warn_decel", &p_aeb_warn_dec, 2.5f, "AEB, mode 1: warning tones when stopping behind the lead takes at least this deceleration (m/s2)" },
+    { "aeb_rising", &p_aeb_rise, 1, "AEB, mode 1: 1 = full braking rises during the event instead of settling: it starts at the level the room to spare allows (softer when there is room, at once at full when the stop takes nearly all the brakes can do) and gets harder at aeb_rise_rate, so the truck is put down firmly just before the lead. Planned again every tick from the gap and the speed, the stop still lands aeb_margin_m behind the lead. 0 = the deceleration the stop takes now (falls off as the truck slows down)" },
+    { "aeb_rise_rate", &p_aeb_jerk, 2.0f, "AEB, mode 1, aeb_rising: how fast the planned deceleration rises (m/s2 per second). Higher = a shorter, harder rise" },
     { "aeb_full_frac", &p_aeb_full_frac, 0.85f, "AEB, mode 1: full braking when stopping takes this share of aeb_max_decel; it then brakes with exactly the deceleration the stop takes (never above aeb_max_decel)" },
     { "trace", &p_trace, 1, "1 = write cruise.csv (10 per second while cruise is on or Auto Hold holds) for analysis" },
     { "approach_s", &p_approach_s, 2.5f, "own cruise throttle: the throttle eases off when the truck would reach the set speed within about this many seconds at the speed it is gaining now (also on a descent), so it arrives without overshooting. Eco 1.2x, Power 0.6x. 0 = off" },
@@ -617,7 +619,7 @@ enum { AEB_OFF, AEB_WARN, AEB_PARTIAL, AEB_FULL, AEB_HOLD };
 static struct {
     int st;                                     // AEB_*
     float vl, gap_prev, rate, a_l, vl_prev, req, i, a_cmd, ttc, a_need, thr_at_brake;
-    double age_t0, calm_since, lock_until, beep_at, lost_at, thr_since, st_at, close_since; int close_warned;
+    double age_t0, calm_since, lock_until, beep_at, lost_at, thr_since, st_at, close_since; int close_warned, no_soft;
     // the event (for the summary line)
     double ev_t0; float ev_kmh, ev_min_gap, ev_min_ttc, ev_psi0, ev_psi_min, ev_max_dec; int ev_max, air_low; const char *ev_cap;
     // evasive lane change: steering / yaw before the warning (a bend is no evasion), since when it looks like one, until when
@@ -739,6 +741,22 @@ static float ahead_cap(float v, float env, float a_c)
 {
     if (!(env == env) || p_bind_a <= 0 || env <= v || !(a_c > 0)) return env;
     return sqrtf((a_c * v * v + p_bind_a * env * env) / (p_bind_a + a_c));
+}
+
+// aeb_rising: the deceleration to ask now. The plan rises as a(t) = min(a_top, a0 + jerk t) and stops the truck (speed v) exactly after `room` meters;
+// a0 is found by bisection (the stopping distance falls as a0 rises). Where even a_top held from now does not stop in time: a_top at once.
+// With room to spare a0 is low and the rise does the work; with little room the plan runs into a_top and holds it.
+static float aeb_rise_decel(float v, float room, float a_top, float jerk)
+{
+    auto dist = [&](float a0) {
+        float x = 0, u = v, t = 0; const float h = 0.02f;
+        while (u > 0 && t < 20) { float a = fminf(a_top, a0 + jerk * t); x += u * h - 0.5f * a * h * h; u -= a * h; t += h; }
+        return x;
+    };
+    if (!(v > 0.1f) || !(room > 0.05f) || dist(a_top) > room) return a_top;
+    float lo = 0, hi = a_top;
+    for (int i = 0; i < 14; i++) { float m = 0.5f * (lo + hi); if (dist(m) > room) lo = m; else hi = m; }
+    return hi;
 }
 
 static float cruise_body(void *ga, float dt, float pedal, float stock)
@@ -1630,7 +1648,7 @@ static void aeb_stage(int st, float gap, float kmh)
         logline("AEB: over after %.1f s: highest %s, %.0f -> %.0f km/h, min gap %.1f m, min time to collision %.1f s, peak decel %.1f m/s2, air %.0f -> %.0f psi%s%s",
                 now - AE.ev_t0, aeb_name[AE.ev_max], AE.ev_kmh, kmh, AE.ev_min_gap < 1e8f ? AE.ev_min_gap : 0.0f,
                 AE.ev_min_ttc < 1e8f ? AE.ev_min_ttc : 0.0f, AE.ev_max_dec, AE.ev_psi0, AE.ev_psi_min, AE.ev_cap ? ", held back by: " : "", AE.ev_cap ? AE.ev_cap : "");
-    if (st != AE.st) AE.st_at = now;
+    if (st != AE.st) { AE.st_at = now; if (st != AEB_FULL) AE.no_soft = 0; }
     AE.st = st;
 }
 
@@ -1739,7 +1757,7 @@ static void aeb(char *g, float dt)
         if (!AE.lost_at) AE.lost_at = now;
     }
     // the threat: time to collision and the deceleration it takes to stop 3 m behind the lead (also if the lead brakes to a stop)
-    float vc = 0, ttc = INFINITY, a_need = 0;
+    float vc = 0, ttc = INFINITY, a_need = 0, pl_v = 0, pl_room = 0;   // (pl_*: the stop aeb_rising plans: the closing speed and the room to the margin, or our speed and the room plus the braking lead's own stop)
     int cap_st = AEB_FULL, crossing = 0;
     const char *cap = NULL;
     float p_s = p_aeb_part_s * hs, f_s = p_aeb_full_s * hs;
@@ -1765,7 +1783,11 @@ static void aeb(char *g, float dt)
         if (p_aeb_mode > 0) {
             float room1 = fmaxf(0.2f, gap - p_aeb_margin);
             a_need = vc > 0 ? vc * vc / (2 * room1) : 0;
-            if (AE.vl >= 0.5f && b > 0.3f && v > 0) a_need = fmaxf(a_need, v * v / (2 * (room1 + AE.vl * AE.vl / (2 * b))));
+            pl_v = vc > 0 ? vc : 0; pl_room = fmaxf(0.2f, room1 - 0.3f);   // (0.3 m: the soft start spends a little room, the reserve gives it back)
+            if (AE.vl >= 0.5f && b > 0.3f && v > 0) {
+                float an2 = v * v / (2 * (room1 + AE.vl * AE.vl / (2 * b)));
+                if (an2 > a_need) { a_need = an2; pl_v = 0; }   // (a lead that brakes: its own stop is an estimate, no soft start)
+            }
         }
         ttc = vc > 0.3f ? gap / vc : INFINITY;
         if (la > 0 && vc > 0.3f) { float d = vc * vc - 2 * la * gap; ttc = d < 0 ? INFINITY : (vc - sqrtf(d)) / la; }  // gap = vc t - la t^2 / 2
@@ -1899,7 +1921,19 @@ static void aeb(char *g, float dt)
     // the closing speed, so following a braking lead at a steady gap does not flip between two requests
     float fl = fminf(1, fmaxf(0, vc));
     if (st == AEB_PARTIAL) a_cmd = fminf(fmaxf(1.15f * a_need, fl * 0.7f * p_aeb_part_dec), 1.15f * p_aeb_part_dec);
-    else if (st == AEB_FULL && p_aeb_mode > 0) a_cmd = fminf(fmaxf(a_need, fl * 1.0f), a_top);  // what the stop takes, nothing more
+    else if (st == AEB_FULL && p_aeb_mode > 0) {
+        a_cmd = fminf(fmaxf(a_need, fl * 1.0f), a_top);  // what the stop takes, nothing more
+        if (p_aeb_rise > 0 && fresh && pl_v > 0.3f) {
+            // rising (aeb_rising): the plan that stops at the margin with a deceleration that grows by aeb_rise_rate per second; the level of now
+            // is lower than the constant one while there is room and the end is harder. Close to what the brakes can do (a_need 0.6 to 0.9 of a_top, fully
+            // from there) the soft start fades: at least that share of the constant deceleration the stop takes, a_top at the limit
+            float ar = aeb_rise_decel(pl_v, pl_room, a_top, p_aeb_jerk), k = fminf(1.0f, fmaxf(0.0f, (a_need / a_top - 0.6f) / 0.3f));
+            // brakes that do not deliver what was asked (a lighter or worn plant than the estimate, 0.45 s after the start: the build-up): no soft part for the rest of the event
+            if (now - AE.st_at > 0.45 && -T.accel < 0.85f * AE.a_cmd) AE.no_soft = 1;
+            if (AE.no_soft) k = 1;
+            a_cmd = fminf(fmaxf(fmaxf(ar, k * a_need), fl * 1.0f), a_top);
+        }
+    }
     else if (st == AEB_FULL) a_cmd = ttc < 0.8f * hs ? p_aeb_max_dec : fminf(fmaxf(1.4f * a_need, fl * p_aeb_part_dec), p_aeb_max_dec);
     if ((st == AEB_PARTIAL || st == AEB_FULL) && !fresh) a_cmd = fmaxf(a_cmd, AE.a_cmd);
     AE.a_cmd = a_cmd;

@@ -966,7 +966,7 @@ static accres acc_run(const char *name, int own, int scen)
 // Brakes: the game slews +0x17c at 5/s; request r gives 0.4 + 10 r / (mass / 30 t) m/s2 (ts4* logs, 26-30 t); the driver's
 // brake pedal 8 m/s2 at 1.0; throttle 20 kN at 1.0 (zeroed while the request is > 0). Air: every rise of the applied brake
 // costs 60 psi per unit, the compressor gives 4 psi/s (rough; only for "one ramp vs pulses").
-struct aebres { float min_gap, peak_dec, end_kmh, warn_lead_s, psi_drop, max_req, after_kd; int max_st, flips, hit; float warn_gap, brake_gap, final_gap, hit_kmh; };
+struct aebres { float min_gap, peak_dec, end_kmh, warn_lead_s, psi_drop, max_req, after_kd; int max_st, flips, hit; float warn_gap, brake_gap, final_gap, hit_kmh, dec_early, dec_end; };   // dec_early: the plant's deceleration 0.8 s after the request began, dec_end: when the speed first drops under 2 m/s
 static double g_aeb_v0 = 80;   // our start speed (km/h)
 static double g_plant_k = 1;   // the plant's brakes against the AEB's fit (1 = the fit: 10 m/s2 per request at 30 t and less)
 static double g_prime_k = 0;   // > 0: [core] brake_learn on, the vehicle model's estimate primed to this plant's gain (the learned gain is then x this of the plant's: 1 = exact)
@@ -988,7 +988,7 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
     if (scen == 2) v = 60 / 3.6;
     if (scen == 3) v = 40 / 3.6;
     if (scen == 17) v = 30 / 3.6;
-    float prev_req = 0;
+    float prev_req = 0; double t_b0 = -1; int got_end = 0;
     for (; t_now - t0 < 40; t_now += 1 / 60.0) {
         double t = t_now - t0, dt = 1 / 60.0;
         switch (scen) {
@@ -1068,6 +1068,9 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
         x += v * dt;
         a_f += (a - a_f) * fmin(1, dt / 0.15);
         r.peak_dec = fmaxf(r.peak_dec, (float)-a);
+        if (t_b0 < 0 && req > 0.02f && lead_on) t_b0 = t;
+        if (t_b0 >= 0 && r.dec_early == 0 && t >= t_b0 + 0.8) r.dec_early = (float)-a;
+        if (t_b0 >= 0 && !got_end && v < 2.0 && v > 0.01) { got_end = 1; r.dec_end = (float)-a; }
         if (lead_on && t > 0.5) r.min_gap = fminf(r.min_gap, (float)(lx - x));
         r.max_st = AE.st > r.max_st && AE.st <= AEB_FULL ? AE.st : r.max_st;
         if (AE.st == AEB_WARN && t_warn < 0) t_warn = t;
@@ -1079,8 +1082,8 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
     r.final_gap = lead_on ? (float)(lx - x) : -1;
     r.warn_lead_s = t_warn >= 0 && t_part >= 0 ? (float)(t_part - t_warn) : -1;
     if (r.min_gap > 1e8f) r.min_gap = 0;
-    printf("%-50s max %-15s min gap %5.1f m, peak decel %.1f, max request %.2f, warning %.1f s before braking, air -%.0f psi, request reversals %d, end %.0f km/h%s\n",
-           name, aeb_name[r.max_st], r.min_gap, r.peak_dec, r.max_req, r.warn_lead_s, r.psi_drop, r.flips, r.end_kmh, r.hit ? "  <-- HIT" : "");
+    printf("%-50s max %-15s min gap %5.1f m, peak decel %.1f, max request %.2f, warning %.1f s before braking, air -%.0f psi, request reversals %d, end %.0f km/h, final gap %.2f m, decel %.1f at 0.8 s -> %.1f at the end%s\n",
+           name, aeb_name[r.max_st], r.min_gap, r.peak_dec, r.max_req, r.warn_lead_s, r.psi_drop, r.flips, r.end_kmh, r.final_gap, r.dec_early, r.dec_end, r.hit ? "  <-- HIT" : "");
     s_aeb_owns = 0; g_sim_mass = 26000; T.in_steer = 0; T.yaw = 0; GA[0x1d0] = 0;
     g_brake_learn = 0;
     return r;
@@ -1501,6 +1504,16 @@ int main(int argc, char **argv)
         for (int i = 0; i < 3; i++)
             printf("   %-8.0f %5.1f / %5.1f / %5.2f           %5.1f / %5.1f / %5.2f\n", sp[i], t[0][i].warn_gap, t[0][i].brake_gap, t[0][i].final_gap,
                    t[1][i].warn_gap, t[1][i].brake_gap, t[1][i].final_gap);
+        // aeb_rising (27-10): the deceleration rises during the event instead of falling off as the truck slows down. 0 = as before.
+        printf("   aeb_rising 0 against 1 (mode 1, standing lead, 26 t): deceleration 0.8 s into the braking -> when the speed drops under 2 m/s, final gap\n");
+        for (int i = 0; i < 3; i++) {
+            aebres r01[2];
+            for (int rs = 0; rs < 2; rs++) { p_aeb_rise = (float)rs; p_aeb_mode = 1; g_aeb_v0 = sp[i]; r01[rs] = aeb_run("rise", 14, 26000, 140); }
+            p_aeb_rise = 1;
+            printf("   %2.0f km/h   rising 0: %.1f -> %.1f, %.2f m     rising 1: %.1f -> %.1f, %.2f m\n", sp[i], r01[0].dec_early, r01[0].dec_end, r01[0].final_gap, r01[1].dec_early, r01[1].dec_end, r01[1].final_gap);
+            bad |= r01[1].hit || r01[1].dec_end < r01[1].dec_early - 0.1f || r01[1].dec_end < r01[0].dec_end + (i ? 0.3f : 0.0f);   // it ends at least as hard as it began, and harder than the constant plan (not at 30 km/h: little to gain)
+            bad |= r01[1].final_gap < r01[0].final_gap - 0.02f || r01[1].min_gap < r01[0].min_gap - 0.02f;                        // never closer than the constant plan
+        }
         g_aeb_v0 = 80; p_aeb_mode = 1;
         a = aeb_run("mode 1: standing lead at 80 km/h, 60 t", 14, 60000, 140); bad |= a.hit || a.final_gap < 0.2f || a.final_gap > 1.5f;
         g_aeb_v0 = 50; a = aeb_run("mode 1: following 30 m at 50, the lead brakes 5 m/s2 to 0", 12, 26000, 140); bad |= a.hit || a.flips > 6;
