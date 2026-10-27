@@ -76,7 +76,6 @@ void *game_gearbox() { return (void *)&g_sim_eng; }
 int gb_engine(void *, engine_info *e) { *e = g_sim_eng; return 1; }
 float curve_factor(const engine_info *e, float rpm) { return rpm < 1000 ? 0.8f + 0.2f * rpm / 1000 : rpm < 1500 ? 1.0f : 1.0f - (rpm - 1500) / 3000; }
 float wheel_radius() { return 0.5f; }
-float pedal_approach_share(int md) { return md == MODE_ECO ? 1.5f / 8 : md == MODE_POWER ? 1.0f : 3.0f / 8; }   // modules/pedal.cpp at its defaults
 int pedal_wish(float p, float, int, float *out) { *out = p; return 0; }   // the wish pedal (modules/pedal.cpp) is off here: the old pedal curves
 static char GA[0x20000];
 char *game_actor_safe() { return GA; }

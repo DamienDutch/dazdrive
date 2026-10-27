@@ -1202,8 +1202,9 @@ static float cf_wish_force(float v) { return CF.on && CF.fm && CF.at >= 0 && t_n
 static float g_cf_set = 83;
 // [cruise] approach_by_mode as modules/cruise.cpp has it (g_cf_app 1; 2 = a test-only variant that asks all the pull to spare in every mode):
 // the throttle the approach may use is the force that holds the speed plus the mode's share of what a full wish has to spare, over what the
-// gear gives; the share is the wish pedal's rise rate over Power's (1.5 / 3 / 8). More when the truck gains under 0.05 m/s2 while 1 km/h under.
+// gear gives; the share is the mode's own key (approach_share_eco / approach_share / approach_share_power). More when the truck gains under 0.05 m/s2 while 1 km/h under.
 static int g_cf_app = 0; static float g_cf_ex = 0, g_cf_ceil = 1;
+static float g_cf_sh[3] = { 0.36f, 0.6f, 1.0f };   // approach_share_eco / approach_share / approach_share_power at their defaults (SC_SHARES=a,b,c overrides, for tuning)
 static float cf_ceiling(int md, float e, float acc_kmhs, float dt, int shifting)
 {
     bool slow = acc_kmhs < 0.18f && e > 1.0f;
@@ -1211,7 +1212,7 @@ static float cf_ceiling(int md, float e, float acc_kmhs, float dt, int shifting)
     if (shifting) return g_cf_ceil;
     float v = M.v, full = cf_full(v), fg = M.gear > 0 ? vehicle_force_at(M.gear, v, 1.0f) : 0;
     if (!(full > 0) || !(fg > 0)) return g_cf_ceil = 1;
-    float fh = fmaxf(0.0f, vehicle_resist(v)), share = g_cf_app == 2 ? 1.0f : md == MODE_ECO ? 1.5f / 8 : md == MODE_POWER ? 1.0f : 3.0f / 8;
+    float fh = fmaxf(0.0f, vehicle_resist(v)), share = g_cf_app == 2 ? 1.0f : g_cf_sh[md == MODE_ECO ? 0 : md == MODE_POWER ? 2 : 1];
     if (full - fh < 0.25f * full) return g_cf_ceil = 1;
     share += (1 - share) * g_cf_ex;
     return g_cf_ceil = fminf(1.0f, fmaxf(0.0f, (fh + share * fmaxf(0.0f, full - fh)) / fg));
@@ -1320,6 +1321,7 @@ static int run_scores_approach()
     g_cruise_smooth = 1;
     int bad = 0;
     g_cf_set = 83;
+    if (const char *sh = getenv("SC_SHARES")) sscanf(sh, "%f,%f,%f", &g_cf_sh[0], &g_cf_sh[1], &g_cf_sh[2]);
     printf("  from 70 km/h in 10 (1371 rpm):   mode    to 83   at full thr  highest thr   gears (s after the set speed was reached)\n");
     struct Md { const char *name; float cvar; } mds[3] = { { "Eco", 10 }, { "Normal", 3 }, { "Power", 1.6667f } };
     double t12[3] = { 1e9, 1e9, 1e9 };   // (1e9 = the 12th never came)

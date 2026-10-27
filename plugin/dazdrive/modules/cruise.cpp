@@ -31,7 +31,7 @@ static float p_herm;
 static float p_sg_rearm, p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_own_bias, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_lever, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade, p_aeb_mode, p_aeb_margin, p_aeb_warn_dec, p_aeb_full_frac;
 static float p_rb_curves;  // roundabout_curves
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
-static float p_app_mode;  // approach_by_mode
+static float p_app_mode, p_app_sh_eco, p_app_sh, p_app_sh_pw;  // approach_by_mode and the share of the pull to spare each mode asks
 static float p_force_mode;  // own cruise throttle: the controller asks a force at the wheels, not a throttle
 
 static param g_params[] = {
@@ -140,7 +140,10 @@ static param g_params[] = {
     { "trace", &p_trace, 1, "1 = write cruise.csv (10 per second while cruise is on or Auto Hold holds) for analysis" },
     { "approach_s", &p_approach_s, 2.5f, "own cruise throttle: the throttle eases off when the truck would reach the set speed within about this many seconds at the speed it is gaining now (also on a descent), so it arrives without overshooting. Eco 1.2x, Power 0.6x. 0 = off" },
     { "smooth", &p_smooth, 1, "1 = own smooth cruise throttle (no bursts after shifts; Eco gentle, Power keen), 0 = the game's" },
-    { "approach_by_mode", &p_app_mode, 1, "own cruise throttle: 1 = the approach to the set speed (more than 2.5 km/h under it) asks only a share of the pull the truck has to spare at this speed (what a full wish could give over what holding the speed takes), the share the mode has on the wish pedal: Eco soft, Normal medium, Power all of it. A truck that does not gain speed is given more, and a climb is held at whatever it takes. So a small deficit no longer means full throttle outside Power. 0 = the throttle follows the deficit up to full, as before. Not with a vehicle ahead (ACC)" },
+    { "approach_by_mode", &p_app_mode, 1, "own cruise throttle: 1 = the approach to the set speed (more than 2.5 km/h under it) asks only a share of the pull the truck has to spare at this speed (what a full wish could give over what holding the speed takes), the share the mode has (approach_share_eco, approach_share, approach_share_power): Eco soft, Normal medium, Power all of it. A truck that does not gain speed is given more, and a climb is held at whatever it takes. So a small deficit no longer means full throttle outside Power. 0 = the throttle follows the deficit up to full, as before. Not with a vehicle ahead (ACC)" },
+    { "approach_share_eco", &p_app_sh_eco, 0.36f, "approach_by_mode, Eco: the share (0-1) of the pull to spare that the approach to the set speed asks. Lower = a slower, softer approach" },
+    { "approach_share", &p_app_sh, 0.6f, "approach_by_mode, Normal: the share (0-1) of the pull to spare that the approach to the set speed asks" },
+    { "approach_share_power", &p_app_sh_pw, 1.0f, "approach_by_mode, Power: the share (0-1) of the pull to spare that the approach to the set speed asks. 1 = all of it" },
     { "force_mode", &p_force_mode, 0, "own cruise throttle: 1 = the controller asks a force at the wheels (a share of what the truck can give at this speed, the wish pedal's reference) and the throttle is what gives that force in the gear the truck is in, so a shift does not change the pull it asks; TrueShift's score-based gear choice reads that force as the demand. The throttle caps stay throttle caps. 0 = the controller asks a throttle, as before" },
 };
 // Junction / roundabout slowing: always with the own ACC (friend 11-10: own ACC without it entered roundabouts at
@@ -702,7 +705,7 @@ static float approach_ceiling(int md, float e, float acc_kmhs, float dt, int shi
     if (shifting) return s_app_ceil;
     float v = fabsf(T.speed), full = pedal_wish_full(v), fg = T.gear > 0 && V.eng_ok && !V.electric ? vehicle_force_at(T.gear, v, 1.0f) : 0;
     if (!(full > 0) || !(fg > 0)) return s_app_ceil = 1;
-    float fh = fmaxf(0.0f, vehicle_resist(v)), share = pedal_approach_share(md);
+    float fh = fmaxf(0.0f, vehicle_resist(v)), share = fminf(1.0f, fmaxf(0.0f, md == MODE_ECO ? p_app_sh_eco : md == MODE_POWER ? p_app_sh_pw : p_app_sh));
     if (full - fh < 0.25f * full) return s_app_ceil = 1;   // little to spare (a climb that takes nearly all the pull): the whole throttle, as a driver would
     share += (1 - share) * s_app_ex;
     return s_app_ceil = fminf(1.0f, fmaxf(0.0f, (fh + share * fmaxf(0.0f, full - fh)) / fg));
