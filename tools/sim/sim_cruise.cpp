@@ -874,14 +874,16 @@ static sa2res sa_run(const char *name, int mode, float grade_pct, float mass_t, 
 static float g_fake_radar[5];
 static float *fake_radar(void *, float *) { return g_fake_radar; }
 struct accres { float min_gap, peak_dec, max_jerk, emerg_s, min_kmh, end_kmh, mean_gap_err; int same; };
+static int g_acc_flips;   // the brake request starting or ending (over 0.02) during an acc_run: pumping shows here
 static accres acc_run(const char *name, int own, int scen)
 {
+    g_acc_flips = 0; float req_prev = 0;
     memset(GA, 0, sizeof GA); memset(&C, 0, sizeof C); memset(&OA, 0, sizeof OA); memset(&s_radar, 0, sizeof s_radar);
     p_smooth = 1; p_own_acc = own; g_radar_ok = 1; o_radar = fake_radar; g_low_ok = 1; g_level = 1; g_sg_ok = 0; p_ah = 0; p_hill = 0;
     o_cruise = stock_cruise; stock_thr = 0;
     T.engine_on = 1; T.gear = 8; T.eff_clutch = 0; T.parking_brake = 0;
     const float m = 26000, set = 90;
-    double t0 = t_now, x = 0, v = scen == 6 ? 40 / 3.6 : scen == 7 ? 90 / 3.6 : 80 / 3.6, lx = 0, lv = 0, jerk_prev_a = 0, a_prev = 0;
+    double t0 = t_now, x = 0, v = scen == 6 ? 40 / 3.6 : scen == 7 ? 90 / 3.6 : scen == 8 ? 50 / 3.6 : 80 / 3.6, lx = 0, lv = 0, jerk_prev_a = 0, a_prev = 0;
     float set_kmh = scen == 6 ? 40 : set;
     *(unsigned char *)(GA + GA_ON) = 1; *(float *)(GA + GA_SET) = set_kmh;
     accres r = { 1e9f, 0, 0, 0, 1e9f, 0, 0, 0 };
@@ -906,6 +908,7 @@ static accres acc_run(const char *name, int own, int scen)
             if (!lead_on && t >= 10) { lead_on = 1; lx = x + 92; lv = 49 / 3.6; }
             if (lead_on && t >= 11.5 && lv > 33 / 3.6) lv = fmax(33 / 3.6, lv - 1.1 * dt);
         }
+        else if (scen == 8) { if (!lead_on) { lead_on = 1; lx = x + 90; lv = 0; } }                                // a stopped lead 90 m ahead (a queue): the stop behind it
         else if (scen == 6) {                                                                                       // a car crossing 45 m ahead (roundabout): 25 km/h across, gone after 3 s
             if (t >= 10 && t < 12 && !lead_on) { lead_on = 1; lx = x + 40; lv = 0; }
             if (t >= 12) lead_on = 0;
@@ -936,6 +939,8 @@ static accres acc_run(const char *name, int own, int scen)
         *(float *)(GA + GA_BRAKE_REQ) = 0;
         vehicle_frame();
         float u = act_stub(GA, (float)dt, 0);
+        if (scen == 8 && getenv("TRACE8") && fmod(t, 0.5) < dt) printf("      t %5.1f gap %5.1f v %5.1f km/h req %.3f want_acc %.3f\n", t, gap, v * 3.6, act_request(), s_want_acc);
+        { float rq = act_request(); g_acc_flips += (rq > 0.02f) != (req_prev > 0.02f); req_prev = rq; }
         float T_used = *(float *)(GA + GA_ACC_TARGET);
         // brakes (pedal fn): overspeed vs the target the game now reads (+0x1a0), skipped while the driver throttle is on
         float kmh = (float)v * 3.6f, Aov = T_used + 0.25f;
@@ -968,8 +973,8 @@ static accres acc_run(const char *name, int own, int scen)
     }
     r.end_kmh = (float)(v * 3.6);
     r.mean_gap_err = nerr ? (float)(sum_err / nerr) : 0;
-    printf("%-52s %s min gap %5.1f m, peak decel %.2f m/s2, jerk %.2f m/s3, emergency %.1f s, min %.0f / end %.0f km/h, |gap-D|/D %.2f\n", name, own ? "ours" : "game", r.min_gap, r.peak_dec, r.max_jerk, r.emerg_s,
-           r.min_kmh, r.end_kmh, r.mean_gap_err);
+    printf("%-52s %s min gap %5.1f m, peak decel %.2f m/s2, jerk %.2f m/s3, emergency %.1f s, min %.0f / end %.0f km/h, |gap-D|/D %.2f, brake request on/off x%d\n", name, own ? "ours" : "game", r.min_gap, r.peak_dec, r.max_jerk, r.emerg_s,
+           r.min_kmh, r.end_kmh, r.mean_gap_err, g_acc_flips);
     return r;
 }
 
@@ -1190,10 +1195,13 @@ static float jn_climb_road0(double s) { return s < 50 ? 0.0f : s < 90 ? 6.0f * (
 static float jn_climb_road(double s) { return g_climb_k * jn_climb_road0(s); }
 static float jn_late_road(double s) { return s < 150 ? 5.5f - 3.0f * (float)s / 150 : 2.5f; }
 static float jn_flat_road(double) { return 0; }
+static float g_jn_bk = 4.0f;   // the plant's brake: m/s2 per unit of request (4: a weak one; the game's service brake gives ~10 at a request of 1 on top of the retarder)
+static int g_jn_flips;         // the curve / junction brake wish starting or ending (over 0.05) in a jn_climb_run: pumping shows here
 static int g_jn_print, g_jn_quiet, g_jn_nokick;   // (nokick: the plant keeps its gear: no downshift at rpm < 950 or after 3 s at full throttle, thresholds of the plant, not of the cruise)
 static jnres jn_climb_run(const char *name, float (*road)(double), float mass, float v0, float dist0, float set_kmh)
 {
     jnres r = { 0, -1, 999, 0, 0, 0, 0 };
+    g_jn_flips = 0;
     memset(GA, 0, sizeof GA); memset(&T, 0, sizeof T); memset(&C, 0, sizeof C); memset(&AH, 0, sizeof AH);
     for (int o = 0; o < ACT_N; o++) act_brake(o, 0);
     act_reset(RESET_HARD, "sim"); cr_reset(RESET_HARD, "sim");
@@ -1228,11 +1236,12 @@ static jnres jn_climb_run(const char *name, float (*road)(double), float mass, f
         T.gear = T.dgear = gear; T.rpm = vehicle_rpm_at(gear, v); T.eff_clutch = shifting ? 1 : 0;
         vehicle_frame();
         u = act_stub(GA, 1 / 60.0f, 0);
+        { static float wc_prev; g_jn_flips += (s_want_curve > 0.05f) != (wc_prev > 0.05f); wc_prev = s_want_curve; }
         T.eff_thr = u;
         float brake = *(float *)(GA + GA_BRAKE_REQ);
         if (u < 0.99f || shifting) full_since = -1; else if (full_since < 0) full_since = t_now;
         float F = shifting ? 0 : u * vehicle_force_at(gear, v, 1.0f);
-        float res = mass * 9.81f * (sinf(atanf(grade / 100)) + 0.006f) + 0.5f * 1.2f * 6 * v * v + brake * mass * 4.0f;
+        float res = mass * 9.81f * (sinf(atanf(grade / 100)) + 0.006f) + 0.5f * 1.2f * 6 * v * v + brake * mass * g_jn_bk;
         T.accel = (F - res) / mass;
         if (t > 1) {   // (not the first second: the bumpless start takes the game's throttle)
             if (u < 0.02f && !shifting) lifted = 1;
@@ -1316,6 +1325,148 @@ static int junction_climb_test()
     bad |= c.t_full > 7.0f || c2.t_full > 1.0f || f.t_full > 0;                          // before: 10.3 s / 4.4 s / 0 s at full throttle
     printf("junction climb test: %s\n", bad ? "FAIL" : "ok");
     bad |= ahead_sweep_test();
+    return bad;
+}
+
+// ======================================================================= knife edges (27-10)
+// A frozen-state probe: the cruise runs n ticks at constant inputs (per(i) may move the lead, the junction), and what it decided on the
+// last tick is read: the target (before the PI), the brake wishes, the throttle. A sweep of one input across a threshold must move the
+// outputs by no more than a small step between neighbors: a jump there is a knife edge (the v_ok one of 27-10 flipped a climb run on a 0.001 change).
+struct kpo { float target, wc, wa, u, ci, req; };
+static void kp_init(float set_kmh)
+{
+    memset(GA, 0, sizeof GA); memset(&C, 0, sizeof C); memset(&AH, 0, sizeof AH);
+    for (int o = 0; o < ACT_N; o++) act_brake(o, 0);
+    act_reset(RESET_HARD, "sim"); cr_reset(RESET_HARD, "sim");
+    o_cruise = stock_cruise; stock_thr = 0;
+    p_smooth = 1; g_low_ok = 1; g_sg_ok = 1; g_sg_hold = 0; g_feed = 0; g_stopped_at = 0; s_cb_was_on = 0; s_jn_cancel_at = -1e9; g_rb_cancel_at = -1e9;
+    p_ah = 0; p_hill = 0; g_radar_ok = 0; p_own_acc = 0;
+    g_route = 1; g_road = road_flat; g_s = 0; g_bend_ms = NAN;
+    memset(&T, 0, sizeof T);
+    T.engine_on = 1; T.gear = 5; T.dgear = 5; T.air_psi = 120;
+    *(unsigned char *)(GA + GA_ON) = 1; *(float *)(GA + GA_SET) = set_kmh;
+}
+template <class F> static kpo kp_run(float set_kmh, float kmh, int n, F per)
+{
+    kp_init(set_kmh);
+    for (int i = 0; i < n; i++, t_now += 1 / 60.0) {
+        T.speed = kmh / 3.6f; T.cruise = set_kmh / 3.6f;
+        *(float *)(GA + GA_BRAKE_REQ) = 0;
+        per(i);
+        vehicle_frame();
+        act_stub(GA, 1 / 60.0f, 0);
+    }
+    g_sim_jn.dist_m = 0; g_route = 0; g_bend_ms = NAN;
+    kpo o = { s_target_dbg, s_want_curve, s_want_acc, C.u, C.i, *(float *)(GA + GA_BRAKE_REQ) };
+    return o;
+}
+// the largest step between neighbors of a sweep, per output
+struct kpstep { float target, wc, wa, u; };
+static void kp_step(kpstep *w, const kpo &a, const kpo &b)
+{
+    w->target = fmaxf(w->target, fabsf(b.target - a.target)); w->wc = fmaxf(w->wc, fabsf(b.wc - a.wc));
+    w->wa = fmaxf(w->wa, fabsf(b.wa - a.wa)); w->u = fmaxf(w->u, fabsf(b.u - a.u));
+}
+static int g_kp_show;
+static void kp_junction(float dist, int roundabout)
+{
+    g_sim_jn = route_junction_t(); g_sim_jn.dist_m = dist; g_sim_jn.turn_deg = roundabout ? 0.0f : 90.0f; g_sim_jn.limit_ms = 25 / 3.6f;
+    g_sim_jn.ratio = roundabout ? 2.0f : 1.0f; g_sim_jn.roundabout = roundabout; g_sim_jn.curves = roundabout ? 2 : 1;
+}
+static int knife_edge_test()
+{
+    int bad = 0;
+    float keep_cancel = p_jn_cancel_s; p_jn_cancel_s = 0;
+    g_kp_show = getenv("KNIFE") != NULL;
+    printf("--- knife edges: one input swept across a threshold in small steps, the largest step between neighbors of the outputs\n");
+    {   // 3 / 17: the junction no-gas gate (speed 1 km/h over the junction speed), and its distance (max(400 m, 30 s))
+        kpstep w = { 0, 0, 0, 0 }; kpo prev = {};
+        for (int i = 0; i <= 120; i++) {
+            float kmh = 20 + 0.1f * i;
+            kpo o = kp_run(83, kmh, 40, [&](int) { kp_junction(300, 0); });
+            if (g_kp_show) printf("     junction 300 m, %.1f km/h: target %.2f u %.3f\n", kmh, o.target, o.u);
+            if (i) kp_step(&w, prev, o);
+            prev = o;
+        }
+        printf("   junction gate on the speed (20-32 km/h, 0.1 steps): largest step of the target %.2f km/h, of the throttle %.3f\n", w.target, w.u);
+        w = { 0, 0, 0, 0 };
+        for (int i = 0; i <= 80; i++) {
+            float d = 380 + 0.5f * i;
+            kpo o = kp_run(83, 40, 40, [&](int) { kp_junction(d, 0); });
+            if (g_kp_show) printf("     junction %.1f m, 40 km/h: target %.2f u %.3f\n", d, o.target, o.u);
+            if (i) kp_step(&w, prev, o);
+            prev = o;
+        }
+        printf("   junction gate on the distance (380-420 m, 40 km/h, 0.5 steps): largest step of the target %.2f km/h, of the throttle %.3f (a step of the target here is the gate\n"
+               "      of the no-gas rule, on a distance; the throttle follows through its slew, nothing feeds back: left as it is)\n", w.target, w.u);
+    }
+    {   // 10: the bend brake (the bend ahead at 36 km/h; 8 km/h over it the cap of the request goes from 0.2 to 0.4)
+        kpstep w = { 0, 0, 0, 0 }; kpo prev = {};
+        for (int i = 0; i <= 160; i++) {
+            float kmh = 33 + 0.1f * i;
+            kpo o = kp_run(90, kmh, 20, [&](int) { g_bend_ms = 10.0f; });
+            if (g_kp_show) printf("     bend 36 km/h, %.1f km/h: wish %.3f\n", kmh, o.wc);
+            if (i) kp_step(&w, prev, o);
+            prev = o;
+        }
+        printf("   bend brake on the speed (33-49 km/h, 0.1 steps): largest step of the brake wish %.3f\n", w.wc);
+    }
+    {   // 11: the junction brake (70 km/h onto a 25 km/h junction, the distance swept through the point where coasting stops being enough)
+        kpstep w = { 0, 0, 0, 0 }; kpo prev = {};
+        for (int i = 0; i <= 260; i++) {
+            float d = 320 - 1.0f * i;
+            kpo o = kp_run(83, 70, 20, [&](int) { kp_junction(d, 0); });
+            if (g_kp_show) printf("     junction %.1f m, 70 km/h: wish %.3f target %.1f\n", d, o.wc, o.target);
+            if (i) kp_step(&w, prev, o);
+            prev = o;
+        }
+        printf("   junction brake on the distance (320-60 m, 70 km/h, 1 m steps): largest step of the brake wish %.3f\n", w.wc);
+    }
+    {   // 4: a lead 40 m ahead at a steady gap rate (the game's ACC target 35 km/h under us at 50), the rate swept through 0.3 m/s
+        kpstep w = { 0, 0, 0, 0 }; kpo prev = {};
+        for (int i = 0; i <= 40; i++) {
+            float r = 0.1f + 0.01f * i;
+            kpo o = kp_run(83, 50, 120, [&](int k) { *(float *)(GA + GA_LEAD_M) = 40 + r * k / 60.0f; *(float *)(GA + GA_ACC_TARGET) = 35; });
+            if (g_kp_show) printf("     gap rate %.2f m/s: target %.1f\n", r, o.target);
+            if (i) kp_step(&w, prev, o);
+            prev = o;
+        }
+        printf("   gap rate (0.1-0.5 m/s, 0.01 steps): largest step of the target %.2f km/h (was 15.00: ACC target 35, our speed 50)\n", w.target);
+        bad |= w.target > 0.8f;
+    }
+    {   // 4 / own ACC: a lead 20 m ahead (the wanted gap is ~28 m), its speed 0.1-0.5 m/s over ours; the target the game's controller gets (+0x1a0)
+        kpstep w = { 0, 0, 0, 0 }; kpo prev = {};
+        for (int i = 0; i <= 40; i++) {
+            float op = 0.1f + 0.01f * i, tgt_game = 0;
+            kpo o = kp_run(83, 50, 150, [&](int k) {
+                memset(&s_radar, 0, k == 0 ? sizeof s_radar : 0);
+                p_own_acc = 1; g_radar_ok = 1; o_radar = fake_radar; g_level = 1;
+                float v = 50 / 3.6f, lv = v + op, gap = 20 + op * k / 60.0f;
+                g_fake_radar[0] = gap; g_fake_radar[1] = lv; g_fake_radar[2] = 3.4e38f; g_fake_radar[3] = 0; g_fake_radar[4] = 0;
+                radar_stub(GA, g_fake_radar);
+                *(float *)(GA + GA_LEAD_M) = gap; *(float *)(GA + GA_ACC_TARGET) = 35;
+            });
+            tgt_game = *(float *)(GA + GA_ACC_TARGET);
+            o.target = tgt_game;
+            if (g_kp_show) printf("     own ACC, lead %.2f m/s faster: ACC target %.1f km/h (cruise target %.1f)\n", op, tgt_game, s_target_dbg);
+            if (i) kp_step(&w, prev, o);
+            prev = o;
+        }
+        printf("   own ACC pulling away (0.1-0.5 m/s faster, 0.01 steps): largest step of the ACC target %.2f km/h (was 1.81)\n", w.target);
+        bad |= w.target > 0.3f;
+        p_own_acc = 0; g_radar_ok = 0;
+    }
+    {   // 11 closed loop: a junction (25 + 10 km/h) approached at 70 km/h, a plant that brakes like the game's (10 m/s2 per request): does the brake pump?
+        g_jn_quiet = 1; g_jn_bk = 10.0f;
+        for (int sc = 0; sc < 3; sc++) {
+            float v0 = sc == 0 ? 70.0f : sc == 1 ? 55.0f : 85.0f, d0 = sc == 0 ? 450.0f : sc == 1 ? 300.0f : 600.0f;
+            jnres r = jn_climb_run("approach", jn_flat_road, 33000, v0, d0, 90);
+            printf("   junction approach from %.0f km/h at %.0f m, brake 10 m/s2 per request: brake wish on/off x%d, %.1f km/h at the entrance\n", v0, d0, g_jn_flips, r.kmh_end);
+        }
+        g_jn_quiet = 0; g_jn_bk = 4.0f;
+    }
+    p_jn_cancel_s = keep_cancel;
+    printf("knife edge test: %s\n", bad ? "FAIL" : "ok");
     return bad;
 }
 
@@ -1449,6 +1600,7 @@ int main(int argc, char **argv)
         printf("--- ACC with a lead: game target against own ACC target\n");
         accres g[8], o[8];
         for (int sc = 0; sc < 8; sc++) { g[sc] = acc_run(nm[sc], 0, sc); o[sc] = acc_run(nm[sc], 1, sc); }
+        acc_run("a stopped lead 90 m ahead (queue), we 50", 1, 8);
         // own ACC: no emergency braking where the game's target needed it, no harder decel than the game, calm cut-in really calm
         // own ACC brakes itself early: no emergency braking where we can avoid it, never more than ~4 m/s2 (the emergency
         // hazards threshold), gaps not smaller than the game's
@@ -1753,6 +1905,7 @@ int main(int argc, char **argv)
     }
     if (force_mode_test()) return 1;   // after the lever test: it starts everything it uses afresh
     if (junction_climb_test()) return 1;
+    if (knife_edge_test()) return 1;
     {   // last, so nothing above sees its time or its state
         int bad = 0;
         float k0 = s_ah_k;

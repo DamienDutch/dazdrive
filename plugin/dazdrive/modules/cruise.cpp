@@ -275,6 +275,7 @@ static float band_up()
 // writer of the brake request, with the slew, the air guard and the hazard mute.
 static int s_sg_wait;  // Stop&Go: standing longer than stop_go_auto_s, the driver has to press Resume or the pedal: the dash shows B
 static float s_want_hill, s_want_hold, s_want_curve, s_want_acc, s_want_aeb;
+static float s_target_dbg;   // the cruise target of the last tick (km/h), for the sims
 static float s_lv_prev = NAN, s_a_lead;                 // own ACC: lead speed history (reset without a lead)
 
 // Standing, for Auto Hold's arming and its parking brake: with the low-speed owner the owner's one definition (< 0.3 km/h, measurement
@@ -743,6 +744,9 @@ static float approach_ceiling(int md, float e, float acc_kmhs, float dt, int shi
     return s_app_ceil = fminf(1.0f, fmaxf(0.0f, (fh + share * fmaxf(0.0f, full - fh)) / fg));
 }
 
+// 0 below a, 1 from b, linear between (a weight in place of a switch)
+static float ramp01(float x, float a, float b) { return x <= a ? 0.0f : x >= b ? 1.0f : (x - a) / (b - a); }
+
 // The coast deceleration over the next d meters: gravity of the mean grade the route has there on top of base (the grade of the truck now
 // when the route does not reach that far). Ride 8 (27-10): the grade of now at the foot of a climb planned a junction 290 m ahead as if the
 // whole road climbed, and at the top of it as if the climb went on.
@@ -953,8 +957,10 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
     s_lead_near = lead > 0.5f && lead < fmaxf(80.0f, 4 * fabsf(T.speed));
     float gap_rate = lead_rel_speed(g, lead, dt);  // m/s, + = the gap opens: the lead's speed from the radar, else d(gap)/dt
     if (lead > 0.5f && acc >= 0 && acc < target) {
-        if (p_acc_calm > 0 && gap_rate > 0.3f && lead > 8) target = fmaxf(acc, fminf(target, kmh));  // opening: coast at most
-        else target = acc;
+        // opening: coast at most. A weight, not a switch (27-10: at 0.3 m/s the target jumped from the ACC's to our speed, 15 km/h in a probe):
+        // in from 0.3 to 0.6 m/s, so the coasting comes a little later than before, never earlier
+        float w_coast = p_acc_calm > 0 ? ramp01(gap_rate, 0.3f, 0.6f) * ramp01(lead, 8.0f, 9.0f) : 0.0f;
+        target = acc + w_coast * (fmaxf(acc, fminf(target, kmh)) - acc);
     }
     // No gas while the wheel is turned (Damien 12-10: on a roundabout it gave gas with the wheel still round): hold the speed
     // until it is straight again (+ 0.8 s)
@@ -990,6 +996,7 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
             bend_kmh = bend_kmh == bend_kmh ? fminf(bend_kmh, cap_kmh) : cap_kmh;   // over it: the same gentle bend braking as for a bend ahead
         } else s_bn_cap = 0;
     } else { s_bn_init = 0; s_bn_on = 0; s_bn_cap = 0; }
+    s_target_dbg = target;   // (the sims read the target before the controller turns it into a throttle)
     float e = target - kmh;
     // Overshoot (Damien 13-10: a resume from 68 to 90 gave full throttle for 12 s into a descent, 92.5 km/h): the P term looks at the
     // error we will have in approach_s seconds at the speed we gain now, so the throttle eases off before the set speed is reached.
@@ -1387,14 +1394,32 @@ static void own_acc(char *g, float dt)
     // faster" kept the target at our speed, so it never opened the gap (Damien: "it seems to do nothing")
     // Damien: a lead that is clearly faster (≥ ~3.5 km/h) opens the gap by itself, even when you are on its bumper:
     // no braking then, only no speeding up. Just a little faster (0.3-1 m/s): only calm when the gap is already reasonable.
-    int pulling_away = opening > 1.0f || (opening > 0.3f && lead > 0.5f * dstar);
-    if (p_acc_calm > 0 && pulling_away && lead > 5) OA.t = fmaxf(OA.t, fminf(kmh, set));
+    // (Weights, not switches: the target is what the game's own overspeed braking reads at once, and it jumped by the whole gap between
+    // "follow" and "hold the speed" at an opening of 0.3 m/s. Full calm from 0.6 m/s, so that the calm comes a little later than before,
+    // never earlier; the state is lifted only at full weight.)
+    float w_pull = 0, w_close = 0;
+    if (p_acc_calm > 0) {
+        float w_open = ramp01(opening, 0.3f, 0.6f) * ramp01(lead, 0.5f * dstar, 0.6f * dstar);
+        w_pull = fmaxf(ramp01(opening, 1.0f, 1.3f), w_open) * ramp01(lead, 5.0f, 6.0f);
+    }
+    if (lead < 0.4f * dstar && s_acc_game == s_acc_game && s_acc_game >= 0) w_close = (1 - w_pull) * ramp01(0.45f * dstar - lead, 0.0f, 0.05f * dstar);   // (full from 0.4 x the wanted gap as before, in from 0.45)
+    float t_out = OA.t;
+    if (w_pull > 0) {
+        float hold = fmaxf(OA.t, fminf(kmh, set));
+        t_out += w_pull * (hold - t_out);
+        if (w_pull >= 1) OA.t = hold;
+    }
     // far too close: never more than the game's own ACC target (it knows how to open a gap)
-    if (!pulling_away && lead < 0.4f * dstar && s_acc_game == s_acc_game && s_acc_game >= 0) OA.t = fminf(OA.t, fmaxf(s_acc_game, want));
-    if (crossing) OA.t = fmaxf(OA.t, fminf(kmh, set));  // hold the speed past it (the game's emergency braking stays as the last resort)
+    if (w_close > 0) {
+        float cap = fminf(t_out, fmaxf(s_acc_game, want));
+        t_out += w_close * (cap - t_out);
+        if (w_close >= 1) OA.t = fminf(OA.t, cap);
+    }
+    if (crossing) { OA.t = fmaxf(OA.t, fminf(kmh, set)); t_out = fmaxf(t_out, fminf(kmh, set)); }  // hold the speed past it (the game's emergency braking stays as the last resort)
     if (OA.t > set) OA.t = set;
-    *tgt = OA.t;
-    s_acc_own = OA.t;
+    if (t_out > set) t_out = set;
+    *tgt = t_out;
+    s_acc_own = t_out;
 }
 
 static FILE *g_csv;
