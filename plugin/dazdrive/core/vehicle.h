@@ -35,6 +35,7 @@ struct vehicle {
     // learned by TrueShift while the clutch is closed and the pull is steady
     float rpm_k;         // measured rpm / driveline rpm (tire size etc.), 1 = as the ratios say
     float f_bias;        // extra resistance (N) the model misses (tires, wind, a wrong mass); 0 again with another load or engine
+    float peak_pw;       // the engine's peak power as torque factor x rpm (the highest point of the torque curve times rpm), set with the engine; 0 = not read
 };
 extern vehicle V;
 

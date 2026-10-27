@@ -1018,7 +1018,7 @@ static int run_scores_table()
     return g_sc_failed;
 }
 
-// ---- part 4: the torque-reserve floor, our own brake request, the route's cap and the upshift on a lift
+// ---- part 4: the power-reserve floor, our own brake request, the route's cap and the upshift on a lift
 // the ride's hunt (33.1 t ATO, 1.0 s box, 0.7 %, a junction ahead; 166.8 s: 8->7->9->7 in 8.1 s at 33 km/h): in 8 at 45 km/h the pedal off and
 // the engine brake at 0.25, then the deceleration assist brakes (its request does not show in the telemetry) to 33 km/h, the driver pulls at
 // 0.45, then lifts (2.5 s after an upshift landed, else after 7 s) with the engine brake at 0.25 and the assist braking a little
@@ -1073,16 +1073,25 @@ static float g_fv_amp; static void c_floorped(double t)
 }
 static int run_scores_part4()
 {
-    printf("\n=== SCORES part 4: the torque-reserve floor, our own brake request, the route's cap, the upshift on a lift (ATO) ===\n");
+    printf("\n=== SCORES part 4: the power-reserve floor, our own brake request, the route's cap, the upshift on a lift (ATO) ===\n");
     use_ato();
-    const char *keys[6] = { "choice_floor_torque_eco", "choice_floor_torque", "choice_floor_torque_power", "choice_own_brake", "choice_route_cap", "lift_upshift" };
+    const char *keys[6] = { "choice_floor_power_eco", "choice_floor_power", "choice_floor_power_power", "choice_own_brake", "choice_route_cap", "lift_upshift" };
     float def[6];
     for (int i = 0; i < 6; i++) for (int j = 0; j < m_trueshift.n_params; j++) if (!strcmp(m_trueshift.params[j].key, keys[i])) def[i] = m_trueshift.params[j].def;
+    {   // the floor rpm per mode: the lowest rpm where the engine still gives that share of its peak power (the sim's curve, 2700 Nm)
+        float id = ts_idle_rpm(), vd = 0.025f;
+        for (int j = 0; j < m_trueshift.n_params; j++) if (!strcmp(m_trueshift.params[j].key, "choice_floor_power_varied")) vd = m_trueshift.params[j].def;
+        printf("\n  the power-reserve floor (peak power %.0f kW; share of it -> lowest rpm, + choice_floor_power_varied -> while the pedal varies):\n", V.eng.torque * V.peak_pw * 0.10472f / 1000);
+        for (int i = 0; i < 3; i++)
+            printf("    %-7s %.3f -> %4.0f rpm   (varied %.3f -> %4.0f rpm)\n", i == 0 ? "Eco" : i == 1 ? "Normal" : "Power", def[i], gs_power_rpm(def[i], id), def[i] + vd, gs_power_rpm(def[i] + vd, id));
+        printf("    (for comparison, the shares 0.725 / 0.775 / 0.825 on this engine: %.0f / %.0f / %.0f rpm)\n", gs_power_rpm(0.725f, id), gs_power_rpm(0.775f, id), gs_power_rpm(0.825f, id));
+        sc_check(gs_power_rpm(def[0], id) < gs_power_rpm(def[1], id) && gs_power_rpm(def[1], id) < gs_power_rpm(def[2], id) && gs_power_rpm(def[1] + vd, id) > gs_power_rpm(def[1], id), "the floor rises from Eco to Normal to Power, and while the pedal varies");
+    }
     // 1. the hunt of the ride, with the new keys off (as before) and at their defaults
     printf("\n  the ride's hunt: 33.1 t, 0.7 %%, a turn 130 m ahead (5 km/h); in 8 at 45 km/h the engine brake 0.25, an assist brake the telemetry\n"
            "  does not show to 33 km/h, pedal 0.45, then a lift with the engine brake 0.25 (2.5 s after an upshift, else after 7 s; then 10 s)\n");
     int hunt_new = -1, hunt_old = -1, inc_new = -1, up_before = 0;
-    const char *rows[6] = { "new keys off (as before)", "only choice_floor_torque*", "only choice_own_brake", "only choice_route_cap", "only lift_upshift", "new keys at their defaults" };
+    const char *rows[6] = { "new keys off (as before)", "only choice_floor_power*", "only choice_own_brake", "only choice_route_cap", "only lift_upshift", "new keys at their defaults" };
     for (int kk = 0; kk < 12; kk++) {
         int k = kk % 6; g_hn_hold = kk < 6 ? 7 : 10;
         if (k == 0) printf("  pedal up to %.0f s:\n", g_hn_hold);
@@ -1108,8 +1117,8 @@ static int run_scores_part4()
            "  of the lift takes it back: one pair, no hunt)\n");
     sc_check(hunt_new == 0 && inc_new == 0 && up_before == 0, "new keys at their defaults: no hunting pair (pedal 7 s), no hunt (three reversals in 10 s) and no upshift before the turn (7 s and 10 s)");
     // 2. the floor at 45 km/h, 17 t: a steady foot against one wavering 0.30-0.54 every 5 s
-    printf("\n  the floor from 45 km/h, 17 t, Normal on 0.6 %% (choice_floor_torque %.2f, + %.2f while the pedal varies): a steady pedal 0.15 against one wavering 0.05-0.25\n", def[1], 0.03f);
-    float fl_st = gs_torque_rpm(def[1], ts_idle_rpm()), fl_var = 0; double rpm_st = 0, rpm_var = 0; int sh_st = 0, sh_var = 0, var_seen = 0;
+    printf("\n  the floor from 45 km/h, 17 t, Normal on 0.6 %% (choice_floor_power %.3f, + %.3f while the pedal varies): a steady pedal 0.15 against one wavering 0.05-0.25\n", def[1], 0.025f);
+    float fl_st = gs_power_rpm(def[1], ts_idle_rpm()), fl_var = 0; double rpm_st = 0, rpm_var = 0; int sh_st = 0, sh_var = 0, var_seen = 0;
     {
         g_cf_rpm = -1; g_cf_varied = 0;
         g_fv_amp = 0;
@@ -1120,8 +1129,8 @@ static int run_scores_part4()
         sc_do("floor varied", {17000, 45, sc_gear_for(45, 1100), 40}, c_floorped, 1);
         g_fv_amp = 0;
         rpm_var = g_rpm_t > 0 ? g_rpm_s / g_rpm_t : 0; sh_var = shifts; var_seen = g_cf_varied; fl_var = g_cf_rpm;
-        printf("  steady pedal:  floor %4.0f rpm (%.2f of the peak torque), mean rpm %4.0f, %d shifts, end %.0f km/h%s\n", fl_st, def[1], rpm_st, sh_st, v_st, st_var ? " (seen as varying!)" : "");
-        printf("  varying pedal: floor %4.0f rpm (%.2f of the peak torque), mean rpm %4.0f, %d shifts, end %.0f km/h\n", fl_var, g_cf_share, rpm_var, sh_var, M.v * 3.6f);
+        printf("  steady pedal:  floor %4.0f rpm (%.3f of the peak power), mean rpm %4.0f, %d shifts, end %.0f km/h%s\n", fl_st, def[1], rpm_st, sh_st, v_st, st_var ? " (seen as varying!)" : "");
+        printf("  varying pedal: floor %4.0f rpm (%.3f of the peak power), mean rpm %4.0f, %d shifts, end %.0f km/h\n", fl_var, g_cf_share, rpm_var, sh_var, M.v * 3.6f);
         sc_check(!st_var && var_seen && fl_var > fl_st, "the varying foot is seen as varying, the steady one not, and its floor is higher");
     }
     // 3. the upshift on a lift: a driver whose lifts are short first (median 0.8 s: under the shift time + 0.5 s), then one who lifts for 3 s
@@ -1142,7 +1151,8 @@ static int run_scores_part4()
         for (int j = 0; j < g_rec_n; j++) {
             double tr = g_rec[j].t - g_pl_t0;
             tr -= M.shift_time;   // (recorded when the gear is in: the shift started a shift time earlier)
-            if (tr >= g_lf_at && tr < g_lf_at + g_lf_dur + 0.1) { n_off++; if (first < 0) first = tr - g_lf_at; }
+            if (tr >= g_lf_at && tr < g_lf_at + g_lf_dur - 0.05f) { n_off++;   // (a shift that starts as the pedal comes back is an ordinary one, not a lift's)
+                if (first < 0) first = tr - g_lf_at; }
             if (!strcmp(g_rec[j].why, "up on lift")) n_lift++;
         }
         char seq[160]; sc_seq(seq, sizeof seq);

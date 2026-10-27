@@ -15,6 +15,14 @@ static float find_plateau(const engine_info *e)
     return e->range[R_HIGH][0];
 }
 
+// The engine's peak power as torque factor x rpm (the unit of the power curve here: share of the peak torque times rpm). Computed once per engine read.
+static float find_peak_pw(const engine_info *e)
+{
+    float best = 0;
+    for (float r = 100; r <= e->rpm_limit; r += 5) best = fmaxf(best, curve_factor(e, r) * r);
+    return best;
+}
+
 void vehicle_mass_stale() { V.mass_at = -1e9; }
 
 // Continuity broke (core/telemetry.cpp session_reset): trailer (de)coupled (LOAD: the mass, and what was learned against
@@ -58,7 +66,7 @@ void vehicle_update(void *gb)
         int ok = gb_engine(gb, &e);
         V.electric = e.electric;
         if (ok && (!V.eng_ok || e.torque != V.eng.torque || e.rpm_limit != V.eng.rpm_limit)) V.f_bias = 0;  // another engine: what was learned against the old one is void
-        if (ok) { V.eng = e; V.plateau = find_plateau(&e); }
+        if (ok) { V.eng = e; V.plateau = find_plateau(&e); V.peak_pw = find_peak_pw(&e); }
         V.eng_ok = ok;
         V.eng_at = now;
     }
