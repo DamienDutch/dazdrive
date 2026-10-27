@@ -59,7 +59,7 @@ static param g_params[] = {
     { "auto_hold", &p_ah, 1, "1 = Auto Hold: after stopping with the brake the truck stays held when you release the pedal (any slope, no timer) until you give gas; it lets go smoothly as the engine pulls. Not with crawl on, the parking brake, reverse or Stop&Go. With auto_hold on, hill_start is not used" },
     { "auto_hold_request", &p_ah_req, 0.6f, "how hard the hold brakes (brake request 0..1)" },
     { "auto_hold_lever", &p_ah_lever, 1, "1 = Auto Hold also holds after a stop with only the retarder or engine-brake lever on, or with the deceleration assist braking; it takes over from the assist's brake without a gap. 0 = only after a stop with the brake pedal" },
-    { "auto_hold_gentle_s", &p_ah_gentle, 0.5f, "letting go after a gentle launch (light pedal) takes about this long (s)" },
+    { "auto_hold_gentle_s", &p_ah_gentle, 0.25f, "letting go after a gentle launch (light pedal) takes about this long (s)" },
     { "auto_hold_hard_s", &p_ah_hard, 0.15f, "after a hard launch (pedal 0.8+) about this long (s), still ramped" },
     { "auto_hold_park_s", &p_ah_park, 60, "Auto Hold: after standing held this long (s) the parking brake goes on and the service brake lets go (no air spent, like a real truck); gas or Resume releases it, with the hold taken over for the pull-away. The plugin checks that the game really shows the parking brake and switches this off for the session if not. 0 = off" },
     { "auto_hold_max_s", &p_ah_max, 2.5f, "the hold never fights the pedal longer than this (s); then it is released at the hard rate" },
