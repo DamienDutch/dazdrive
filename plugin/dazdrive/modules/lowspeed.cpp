@@ -58,6 +58,8 @@ static const float LS_ASSIST_DECEL = 1.5f;  // m/s2 the stop assist asks of the 
 static const float LS_ARM_RPM0 = 100;         // Stop&Go's hold is set when the driveline is this near the stop threshold (rpm), before the box can go to neutral
 static const float LS_R_BRAKE = 0.01f;      // the game puts R in on a brake above this at a standstill (its own rule)
 static const float LS_PRE_S = 0.5f;         // a different start gear has to hold this long before the preselect at a standstill follows it (a mass estimate that wobbles)
+static const float LS_CAP_K = 2.5f;         // the clutch's torque capacity at command c is taken as the engine's peak torque x (1 - c)^LS_CAP_K: the soft end of the
+                                            // range sim_creep runs (1.6-2.5), because the game's curve is not measured; a hold that lets go late is safe, one that lets go early rolls back
 static const float LS_FIX_BRAKE = 0.3f;     // a gear that is not the start gear is not changed at a standstill under a brake above this (launch_correct's rule)
 static const float LS_FIT_RPM0 = 400;       // a launch that starts rolling (no standstill) uses the lowest gear from the start gear up that sits this far over idle or lower (rpm)
 static inline float ls_handoff(float idle) { return rs_off(idle, LS_HANDOFF_RPM0); }       // (by the engine's span with [trueshift] rpm_by_engine)
@@ -431,6 +433,19 @@ static void low_tail(void *self)
     gb_rest_state(self, 4, 0);
 }
 
+// The force (N) at the wheels the clutch the owner commands carries: the smaller of what the engine gives at its speed with the throttle it has
+// (the game's effective one) and what the commanded clutch can carry (LS_CAP_K), through the gear. Only while the smooth-start law holds the clutch;
+// NAN otherwise. Auto Hold lets go of the brake by this, not by an estimate from the clutch the game shows.
+static float commanded_force(const low_in &in)
+{
+    float r = wheel_radius();
+    if (!in.cr.launch || in.gear < 1 || in.gear > T.fwd_gears || !V.eng_ok || !(r > 0.1f) || !(T.diff > 0) || !(T.ratio[in.gear - 1] > 0)) return NAN;
+    float c = fminf(fmaxf(in.cr.launch_clutch, 0.0f), 1.0f);
+    float te = V.eng.torque * curve_factor(&V.eng, in.rpm) * fminf(fmaxf(T.eff_thr, 0.0f), 1.0f);
+    float cap = V.eng.torque * powf(1.0f - c, LS_CAP_K);
+    return fminf(te, cap) * T.ratio[in.gear - 1] * T.diff * V.eta / r;
+}
+
 // Once per frame, after the state and its command: what the hook, the tail and the other modules read, and the brake wish.
 static void low_publish(const low_in &in)
 {
@@ -473,6 +488,7 @@ static void low_publish(const low_in &in)
     g_o_hold = g_o_on && (st == LOW_LAUNCH || st == LOW_ROLLING_LOW);
     g_o_handed = g_o_on && st == LOW_HANDED;
     g_o_top = in.top_kmh;
+    g_o_force = g_o_on ? commanded_force(in) : NAN;
     g_o_hold_wish = g_o_on && st == LOW_STOPPED_HELD && in.cu.sg_hold && in.cu.hold != 1 ? ls_sg_hold_req(in.grade) : 0;
     if (p_owner > 0) act_brake(ACT_LOW, g_o_hold_wish);
 }

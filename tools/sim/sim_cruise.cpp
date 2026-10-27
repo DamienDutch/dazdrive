@@ -113,6 +113,8 @@ static int s_low_on, s_low_stopped, s_low_zone;
 int low_owner_on() { return s_low_on; }
 int low_stopped() { return s_low_on && s_low_stopped; }
 int low_sg_zone() { return s_low_on && s_low_zone; }
+static float s_low_force = NAN;   // the force at the wheels of the owner's commanded clutch (a launch under the smooth start's law), NAN = none
+float low_drive_force() { return s_low_force; }
 
 #include "modules/cruise.cpp"
 #include "core/display.cpp"
@@ -576,9 +578,10 @@ static void limiter_test()
 // and then closes in 0.35 s. The game's gate (neutral-exit-re notes): merged throttle 0 while the brake request > 0,
 // unless our patch passes it (s_thr_pass). Brake request slews +-5/s like the game.
 static float g_true_k = 1.0f;   // the engine really delivers this fraction of what the module thinks (model error)
-struct ahres { float roll_m, jerk, max_a, req_end, t_move, req_max_after, t_jerk; int held_ok; };
-static ahres ah_run(const char *name, float grade_pct, int hard, int gate, float est_k, int old_hill_start, int verbose_row)
+struct ahres { float roll_m, jerk, max_a, req_end, t_move, req_max_after, t_jerk, t_rel, t_lock; int held_ok; };   // t_rel, t_lock: seconds after the pedal that the request reached 0 and the clutch closed
+static ahres ah_run(const char *name, float grade_pct, int hard, int gate, float est_k, int old_hill_start, int verbose_row, float ramp_s = 0.35f, int owner_force = 0)
 {
+    s_low_force = NAN;
     memset(GA, 0, sizeof GA);
     memset(&AH, 0, sizeof AH);
     g_low_ok = 1; g_sg_hold = 0; g_crawl_on = 0; s_gate_ok = gate; s_thr_pass = 0; s_req_ours = 0; s_want_hold = s_want_hill = 0;
@@ -593,7 +596,7 @@ static ahres ah_run(const char *name, float grade_pct, int hard, int gate, float
     float gr = grade_pct / 100, sing = gr / sqrtf(1 + gr * gr);
     T.place.orientation.pitch = atanf(gr) / 6.2831853f;
     double v = 5, x = 0, t0 = t_now; float brake_applied = 0, thr = 0, a_f = 0, a_prev = 0, rpm = 700, clutch = 1;
-    double t_stop = -1, t_launch = -1, t_gear = -1, x_stop = 0, minx = 1e9, t_mv = -1;
+    double t_stop = -1, t_launch = -1, t_gear = -1, x_stop = 0, minx = 1e9, t_mv = -1, t_rel = -1;
     ahres r = {};
     const double T_REL = 3.0, T_LAUNCH = 7.0;     // brake released 3 s after the stop is detected... launch 4 s later
     for (int k = 0; t_now - t0 < 16; k++, t_now += 1 / 60.0) {
@@ -613,8 +616,10 @@ static ahres ah_run(const char *name, float grade_pct, int hard, int gate, float
         if (T.eff_thr > 0.01f && t_gear < 0) t_gear = t;
         if (T.eff_thr <= 0.01f && v < 0.1) { t_gear = -1; }
         T.gear = (t_gear >= 0 && t - t_gear > 0.15) ? 1 : 0;
-        float clutch_t = T.gear == 1 ? fmaxf(0, 1 - (float)(t - t_gear - 0.15) / 0.35f) : 1;
+        float clutch_t = T.gear == 1 ? fmaxf(0, 1 - (float)(t - t_gear - 0.15) / ramp_s) : 1;
         clutch = clutch_t; T.eff_clutch = clutch;
+        // [lowspeed] owner=1: the clutch above is the command of the smooth-start law, the drive Auto Hold lets go by is what it carries (lowspeed.cpp commanded_force)
+        s_low_force = owner_force && T.gear == 1 ? fminf(g_sim_eng.torque * curve_factor(&g_sim_eng, T.rpm) * T.eff_thr, g_sim_eng.torque * powf(1 - clutch, 2.5f)) * ratio * diff * V.eta / R : NAN;
         rpm += (700 + 1300 * T.eff_thr - rpm) * (float)(dt / 0.25); T.rpm = rpm;
         *(float *)(GA + GA_BRAKE_REQ) = 0;                 // AEB option off would leave it; our writer puts back what it wrote
         if (s_req_ours > 0) *(float *)(GA + GA_BRAKE_REQ) = s_req_ours;   // (what we left there last tick)
@@ -649,12 +654,15 @@ static ahres ah_run(const char *name, float grade_pct, int hard, int gate, float
         a_prev = a_s;
         if (t_launch >= 0 && v > 0.1 && t_mv < 0) t_mv = t - t_launch;
         if (t_launch >= 0 && t - t_launch > 1.5) r.req_max_after = fmaxf(r.req_max_after, req);
+        if (t_launch >= 0 && t_rel < 0 && t - t_launch > 0.1 && req <= 0.002f) t_rel = t - t_launch;
         if (verbose_row && k % 2 == 0 && t_stop >= 0 && t > t_stop + 3.5 && t < t_stop + 7) printf("   t=%5.2f thr %.2f clutch %.2f drive %6.0f N  req %.2f  brake %.2f  v %.3f km/h x %.3f\n", t - t_stop, thr, clutch, Fd, req, brake_applied, v * 3.6, x - x_stop);
     }
     // stop point: roll back below the stop position while the truck was meant to be standing
     r.roll_m = t_stop < 0 ? 99 : (float)(x_stop - minx);
     r.req_end = *(float *)(GA + GA_BRAKE_REQ);
     r.t_move = (float)t_mv;
+    r.t_rel = (float)t_rel; r.t_lock = t_launch >= 0 && t_gear >= 0 ? (float)(t_gear + 0.15 + ramp_s - t_launch) : -1;
+    s_low_force = NAN;
     printf("%-44s roll back %.3f m, launch jerk %.1f m/s3 (at %.2f s), peak accel %.1f m/s2, moves after %.2f s, request after 1.5 s %.2f, at end %.2f%s\n", name,
            r.roll_m, r.jerk, r.t_jerk, r.max_a, r.t_move, r.req_max_after, r.req_end, r.req_end == 0 ? "" : "  <-- NOT 0");
     return r;
@@ -1432,5 +1440,24 @@ int main(int argc, char **argv)
         if (bad) return 1;
     }
     if (force_mode_test()) return 1;   // after the lever test: it starts everything it uses afresh
+    {   // last, so nothing above sees its time or its state
+        int bad = 0;
+        float k0 = s_ah_k;
+        // [lowspeed] owner=1: the smooth-start law closes the clutch slowly (1.2 s), Auto Hold lets go by the force that command carries; the estimate from the
+        // clutch the game shows is the same sim with the owner's force off. No roll back over 0.05 m, the request at 0 within 1.5 s of the clutch closing.
+        printf("--- Auto Hold, the owner's smooth start: the clutch closes over 1.2 s\n");
+        for (float gr : { 6.0f, 10.0f }) for (int hard : { 0, 1 }) {
+            char nm[96];
+            snprintf(nm, sizeof nm, "  %2.0f%% %s, estimate from the clutch seen", gr, hard ? "hard" : "gentle");
+            ahres e = ah_run(nm, gr, hard, 1, 1.0f, 0, 0, 1.2f, 0);
+            snprintf(nm, sizeof nm, "  %2.0f%% %s, the owner's commanded force", gr, hard ? "hard" : "gentle");
+            ahres o = ah_run(nm, gr, hard, 1, 1.0f, 0, 0, 1.2f, 1);
+            printf("     request at 0 %.2f s after the pedal (estimate %.2f), the clutch closed at %.2f s\n", o.t_rel, e.t_rel, o.t_lock);
+            bad |= o.roll_m > 0.05f || o.req_end != 0 || o.t_rel < 0 || o.t_rel - o.t_lock > 1.5f;
+        }
+        s_ah_k = k0;
+        printf("Auto Hold with the owner's commanded force: %s\n", bad ? "FAIL" : "ok");
+        if (bad) return 1;
+    }
     return 0;
 }

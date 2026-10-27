@@ -413,6 +413,12 @@ static void auto_hold(char *g, float dt)
         if (T.in_brake > 0.1f && kmh < 1.0f) { AH.st = AH_HOLD; break; }
         if (T.in_brake > 0.1f) { AH.st = AH_OFF; break; }
         float need = ah_need(), drive = s_gate_ok && V.mass_ok ? ah_drive_force() : NAN;
+        // [lowspeed] owner=1 under the smooth-start law: the clutch is the owner's command, so the drive is the force that command carries (the
+        // engine's torque and the clutch's capacity, lowspeed.cpp), not an estimate from the clutch the game shows; the two timers below that wait
+        // for a clutch that never closes against the brake are not needed then (the law closes it whatever the brake does; the 2.5 s limit stays)
+        float lf = low_drive_force();
+        int owner_f = lf == lf;
+        if (owner_f) drive = s_gate_ok && V.mass_ok ? s_ah_k * lf : NAN;
         float target = drive == drive ? h * fmaxf(0, 1 - drive / need) : 0;   // no drive data / no throttle gate / mass unknown: only the pedal rate paces it
         int moving = T.speed > 0.3f / 3.6f;
         if (moving || AH.launch_t > p_ah_max) target = 0;
@@ -420,10 +426,10 @@ static void auto_hold(char *g, float dt)
         // the drive estimate stays low while the clutch is still open and the engine at idle; Damien: "too slow").
         if (grade < 1.5f) target = 0;
         // Uphill but the clutch never bites while we hold (engine kept at idle): do not wait for it longer than 0.6 s.
-        if (AH.launch_t > 0.6 && clutch_seen() > 0.9f) target = fminf(target, h * 0.5f);
+        if (!owner_f && AH.launch_t > 0.6 && clutch_seen() > 0.9f) target = fminf(target, h * 0.5f);
         // ... and with the pedal (almost) flat for 1.2 s and the clutch still open the hold is what keeps the clutch from closing (the
         // automatic does not close it against the service brake): let go (Damien 12-10: 4 % up, gear 2, pedal 1.0, clutch 0.97 for 2 s)
-        if (AH.launch_t > 1.2 && clutch_seen() > 0.9f && T.in_thr > 0.7f) target = 0;
+        if (!owner_f && AH.launch_t > 1.2 && clutch_seen() > 0.9f && T.in_thr > 0.7f) target = 0;
         float ped = fminf(1, fmaxf(0, (T.in_thr - 0.25f) / 0.55f));          // 0 gentle .. 1 hard
         float t_rel = p_ah_gentle + (p_ah_hard - p_ah_gentle) * ped;          // seconds for the full hold
         float rate = h / fmaxf(t_rel, 0.05f);
