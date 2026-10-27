@@ -876,12 +876,16 @@ static accres acc_run(const char *name, int own, int scen)
 // costs 60 psi per unit, the compressor gives 4 psi/s (rough; only for "one ramp vs pulses").
 struct aebres { float min_gap, peak_dec, end_kmh, warn_lead_s, psi_drop, max_req, after_kd; int max_st, flips, hit; float warn_gap, brake_gap, final_gap, hit_kmh; };
 static double g_aeb_v0 = 80;   // our start speed (km/h)
+static double g_plant_k = 1;   // the plant's brakes against the AEB's fit (1 = the fit: 10 m/s2 per request at 30 t and less)
+static double g_prime_k = 0;   // > 0: [core] brake_learn on, the vehicle model's estimate primed to this plant's gain (the learned gain is then x this of the plant's: 1 = exact)
 static aebres aeb_run(const char *name, int scen, float mass, float psi0)
 {
     memset(GA, 0, sizeof GA); memset(&C, 0, sizeof C); memset(&OA, 0, sizeof OA); memset(&s_radar, 0, sizeof s_radar);
     memset(&AE, 0, sizeof AE); AE.gap_prev = AE.rate = AE.vl_prev = NAN; s_req_ours = 0; s_want_aeb = 0; s_aeb_was = 0; s_br_at = 0; s_air_low = 0;
     p_smooth = 1; p_own_acc = 1; g_radar_ok = 1; o_radar = fake_radar; g_low_ok = 1; g_level = 1; g_sg_ok = 0; p_ah = 0; p_hill = 0;
     o_cruise = stock_cruise; stock_thr = 0; s_aeb_owns = 1; g_sim_mass = mass;
+    g_brake_learn = g_prime_k > 0 ? 1.0f : 0.0f;
+    if (g_prime_k > 0) vehicle_brake_prime(0, (float)(g_prime_k * g_plant_k * 10 / fmax(1.0, mass / 30000.0) * mass), 0.02f, 8);
     T.engine_on = 1; T.gear = 8; T.dgear = 8; T.eff_clutch = 0; T.parking_brake = 0; T.in_brake = 0; T.in_thr = 0; T.air_warning = 0; T.paused = 0;
     double t0 = t_now, x = 0, v = g_aeb_v0 / 3.6, lx = 0, lv = 0, brk = 0, psi = psi0, a_f = 0;
     int lead_on = 0, last_dir = 0;
@@ -959,7 +963,7 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
         prev_req = req;
         if (getenv("AEBDBG") && lead_on && (AE.st || req > 0)) printf("  t %.2f gap %.2f v %.2f st %d a_need %.2f a_cmd %.2f req %.3f accel %.2f\n", t, gap, v, AE.st, AE.a_need, AE.a_cmd, req, a_f);
         brk = req > brk ? fmin(req, brk + 5 * dt) : fmax(req, brk - 5 * dt);   // the game's slew
-        double applied = fmax(brk * 10 / fmax(1.0, mass / 30000.0), pbrake * 8.0);
+        double applied = fmax(brk * 10 / fmax(1.0, mass / 30000.0) * g_plant_k, pbrake * 8.0);
         static double applied_prev; if (t == 0) applied_prev = 0;
         if (applied > applied_prev) psi -= (applied - applied_prev) / 10 * 60;
         applied_prev = applied;
@@ -986,6 +990,7 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
     printf("%-50s max %-15s min gap %5.1f m, peak decel %.1f, max request %.2f, warning %.1f s before braking, air -%.0f psi, request reversals %d, end %.0f km/h%s\n",
            name, aeb_name[r.max_st], r.min_gap, r.peak_dec, r.max_req, r.warn_lead_s, r.psi_drop, r.flips, r.end_kmh, r.hit ? "  <-- HIT" : "");
     s_aeb_owns = 0; g_sim_mass = 26000; T.in_steer = 0; T.yaw = 0; GA[0x1d0] = 0;
+    g_brake_learn = 0;
     return r;
 }
 
@@ -1351,6 +1356,34 @@ int main(int argc, char **argv)
             a = aeb_run(nm, 2, 26000, 140);
             if (a.hit) printf("   hit: we 60 km/h, impact closing speed %.0f km/h\n", a.hit_kmh);
         }
+        // [core] brake_learn: the AEB's capability from the learned gain. Plants with other brakes than the fit (x0.5 ... x1.5 of 10 m/s2 per
+        // request at <= 30 t, 10 / (mass / 30 t) above), the standing lead at 80 km/h and the lead braking 5 m/s2 (following 25 m), mode 1 and 0, the fit
+        // against the learned gain (exact, and 25 % too high: the clamp at the fit is what stands between that and an optimistic stage). Mode 0 (time stages)
+        // does not use the capability: it runs as before with brake_learn on (asserted: the same figures).
+        // Asserted: no hit with the learned gain where the fit had none and the minimum gap never shorter than the fit's (0.01 m); the strong
+        // plants run as the fit (the clamp). Printed: min gap and final gap, fit -> learned.
+        printf("--- aeb with the learned brake gain (brake_learn 1), plants x0.5 .. x1.5 of the fit; per line: fit -> learned\n");
+        int nb = 0;
+        for (int m = 1; m >= 0; m--)
+            for (float mass : { 26000.0f, 60000.0f })
+                for (int scen : { 14, 7 })
+                    for (double pk : { 0.5, 0.7, 1.0, 1.5 })
+                        for (double lx : { 1.0, 1.25 }) {
+                            if (scen == 7 && m == 0) continue;
+                            p_aeb_mode = (float)m; g_aeb_v0 = 80; g_plant_k = pk;
+                            g_prime_k = 0;
+                            aebres f = aeb_run("fit", scen, mass, 140);
+                            g_prime_k = lx;
+                            aebres l = aeb_run("learned", scen, mass, 140);
+                            g_prime_k = 0;
+                            bool ok = (!l.hit || f.hit) && l.min_gap >= f.min_gap - 0.01f;
+                            if (!ok) nb++;
+                            bad |= !ok;
+                            printf("   mode %d %s %2.0f t plant x%.1f est x%.2f | min gap %5.1f -> %5.1f, final %5.1f -> %5.1f, max req %.2f -> %.2f%s%s | %s\n", m, scen == 14 ? "standing lead" : "braking lead ", mass / 1000, pk, lx,
+                                   f.min_gap, l.min_gap, f.final_gap, l.final_gap, f.max_req, l.max_req, f.hit ? " HIT(fit)" : "", l.hit ? " HIT(learned)" : "", ok ? "ok" : "FAIL");
+                        }
+        g_plant_k = 1; p_aeb_mode = 0; g_aeb_v0 = 80;
+        printf("   %d runs failed\n", nb);
         p_aeb_mode = 0; g_aeb_v0 = 80;
         printf("AEB distance mode test: %s\n", bad ? "FAIL" : "ok");
         if (bad) return 1;

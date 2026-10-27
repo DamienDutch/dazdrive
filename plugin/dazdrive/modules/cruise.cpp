@@ -1645,6 +1645,19 @@ static void aeb(char *g, float dt)
     s_aeb_watch = active ? 1 : 0;  // not watching (cruise off with aeb_without_cruise = 0, reversing, ...): the game's own AEB is left alone
     float heavy = fminf(2.0f, fmaxf(1.0f, load_mass() / 30000)), hs = sqrtf(heavy);  // heavier: slower to stop, so earlier
     float a_top = fminf(p_aeb_max_dec, 0.4f + 10.0f / heavy);  // aeb_mode 1: the most it can ask for: what the brakes deliver at full request (see below)
+    // [core] brake_learn: the brakes' gain as the vehicle model measured it (m/s2 per request at this mass) in place of the fit above. Never more
+    // optimistic than the fit (a wrong capability is the dangerous error: the stages start by it; a +10 % margin cost 0.3 m in the sim's following
+    // case and bought nothing, since a_top is capped by aeb_max_decel anyway), and never under 2.6 m/s2 per request (a_top 3.0: an estimate that
+    // low is a bad measurement more likely than brakes that weak). So it can only make the AEB earlier and the request larger, for weak brakes
+    // (a heavy trailer with poor brakes, a physics mod). It also sizes the feedforward below. Only in aeb_mode 1, the distance mode.
+    float g_aeb = NAN;
+    if (g_brake_learn > 0 && p_aeb_mode > 0) {   // (the time stages of aeb_mode 0 are tuned on their own: in the sim a larger request there made one 60 t case worse, so they stay as they are)
+        float gl = vehicle_brake_gain();
+        if (gl == gl) {
+            g_aeb = fminf(fmaxf(gl, 2.6f), 10.0f / heavy);
+            a_top = fminf(p_aeb_max_dec, 0.4f + g_aeb);
+        }
+    }
     // aeb_mode 1: a warning from aeb_warn_decel, full braking from aeb_full_frac of a_top (a heavy truck cannot brake as hard: it starts in proportion earlier)
     float f_a1 = p_aeb_full_frac * a_top, w_a1 = p_aeb_warn_dec * a_top / p_aeb_max_dec;
     // Evasive lane change (see below): one indicator and steering or turning to that side, compared with what the truck did before the warning
@@ -1847,7 +1860,7 @@ static void aeb(char *g, float dt)
     AE.a_cmd = a_cmd;
     if (st == AEB_HOLD) target = 0.4f;
     else if (a_cmd > 0) {
-        float ff = (a_cmd - 0.4f) / 10.0f * heavy;
+        float ff = g_aeb == g_aeb ? (a_cmd - 0.4f) / g_aeb : (a_cmd - 0.4f) / 10.0f * heavy;
         if (now - AE.st_at > 0.6) AE.i = fminf(0.5f, fmaxf(-0.15f, AE.i + 0.08f * (a_cmd + T.accel) * dt));
         target = fminf(1, fmaxf(0.05f, ff + AE.i));
         if (T.air_psi > 1 && T.air_psi < 90 && st < AEB_FULL) target = fminf(target, 0.6f);  // save the air outside full braking
