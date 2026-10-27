@@ -597,10 +597,12 @@ static void sc_show(const char *title, const gs_out &o, int cur)
 static int run_scores_table();
 static int run_scores_part4();
 static int run_scores_cruise();
+static int run_scores_approach();
 static int run_scores()
 {
     printf("\n=== SCORES part 1: the score function on the vehicle model (Renault ATO 12 speeds, diff 3.08) ===\n");
     use_ato();
+    if (getenv("SC_PART6")) return run_scores_approach();   // (only part 6; SC_VERBOSE=1 with -v prints the module log)
     if (getenv("SC_PART4")) return run_scores_part4();   // (only part 4, for a quick look; its numbers may differ a little from the full run)
     gs_out o; gs_out o2;
     // 17 t at 45 km/h in 8, pedal 0.5: the demand of a pull
@@ -690,6 +692,7 @@ static int run_scores()
     sc_check(short_skip > 0 && t_near == 0 && t_far > 0, "time objective: a skip can win under load, Eco skips farther than Power, never less");
     r |= run_scores_part4();
     r |= run_scores_cruise();   // (last: its runs move the clock too)
+    r |= run_scores_approach();
     return r | g_sc_failed;
 }
 
@@ -1194,8 +1197,10 @@ static void c_cforce(double t)
     float a = t <= 0 ? 0 : (M.v - CF.v_prev) / dt * 3.6f; CF.v_prev = M.v;
     if (t <= 0) { CF.on = 0; CF.at = -1; CF.acc_f = 0; }
     CF.acc_f += (a - CF.acc_f) * fminf(1.0f, dt / 0.5f);
-    float ep = CF.acc_f > 0 ? e - 2.5f * CF.acc_f : e;
+    int md = mode_of(M.cvar);   // (Eco / Power: the gains and the rate as cruise_body has them)
+    float ep = CF.acc_f > 0 ? e - 2.5f * (md == MODE_ECO ? 1.2f : md == MODE_POWER ? 0.6f : 1.0f) * CF.acc_f : e;
     float kp = 0.25f, ki = 0.08f, rate = 0.6f, k = 1;
+    if (md == MODE_ECO) { kp = 0.18f; ki = 0.05f; rate = 0.4f; } else if (md == MODE_POWER) { kp = 0.35f; ki = 0.12f; rate = 1.0f; }
     int shifting = M.state != 0;
     if (CF.fm) {
         float full = cf_full(M.v), fg = M.gear > 0 ? vehicle_force_at(M.gear, M.v, 1.0f) : 0;
@@ -1249,6 +1254,81 @@ static int run_scores_cruise()
     }
     CF.fm = 0; CF.on = 0; CF.at = -1;
     sc_check(!bad, "force_mode 1: the cruise holds 83 on the flat and loses no more than 1 km/h more on the 3 % climb than force_mode 0");
+    return g_sc_failed;
+}
+
+// ---- part 6: the cruise control's approach to the set speed and its hold, with choice 1 (ride 7: 33 t, 70 -> 83 km/h, 11 held 22 s before the 12th)
+// The own cruise controller of part 5 in each mode (g_cruise_smooth on: TrueShift knows the throttle is the cruise's). Flat road, route on.
+// A minute at 70 km/h first (the model of the resistance learns while the speed is steady), then the set speed goes to 83: the times are
+// from that moment. Reports the approach (throttle at full for how long, the highest throttle, the time to the set speed) and when each gear came
+static const double AP_PRE = 60;
+static double g_ap_set_t, g_ap_wot, g_ap_thr_max; static float g_ap_cut_from = 1e9f, g_ap_cut_s = 0, g_ap_v0 = 70, g_ap_v1 = 83;
+static void c_capp(double t)
+{
+    const double dt = 1 / 60.0;
+    if (t <= 0) { g_ap_set_t = -1; g_ap_wot = 0; g_ap_thr_max = 0; g_rec_n = 0; g_pl_t0 = t_now; }
+    g_cf_set = t < AP_PRE ? g_ap_v0 : g_ap_v1;
+    c_cforce(t);
+    float kmh = M.v * 3.6f;
+    // a cut of the cruise throttle (a bend, a junction or a limit ahead): from g_ap_cut_from (s after the approach started) for g_ap_cut_s seconds the throttle is 0
+    if (t >= AP_PRE + g_ap_cut_from && t < AP_PRE + g_ap_cut_from + g_ap_cut_s) { M.cc = 0; CF.at = -1; }
+    if (t < AP_PRE) return;
+    if (g_ap_set_t < 0 && kmh >= g_cf_set - 0.5f) g_ap_set_t = t - AP_PRE;
+    if (g_ap_set_t < 0) { if (M.cc > 0.98f) g_ap_wot += dt; g_ap_thr_max = fmax(g_ap_thr_max, M.cc); }
+}
+static float r_ap_cut(double s) { return s < 1300 ? 2.0f : 0.0f; }   // 2 % up to 1.3 km (the pre-roll), then flat
+static int sc_first_to(int gear)   // index of the first recorded shift into this gear, -1 = none
+{
+    for (int i = 0; i < g_rec_n; i++) if (g_rec[i].b == gear) return i;
+    return -1;
+}
+static int run_scores_approach()
+{
+    printf("\n=== SCORES part 6: the cruise control's approach to 83 km/h and its hold with choice 1, 33 t, flat, ATO (own controller per mode) ===\n");
+    use_ato();
+    g_cruise_smooth = 1;
+    int bad = 0;
+    g_cf_set = 83;
+    printf("  from 70 km/h in 10 (1371 rpm):   mode    to 83   at full thr  highest thr   gears (s after the set speed was reached)\n");
+    struct Md { const char *name; float cvar; } mds[3] = { { "Eco", 10 }, { "Normal", 3 }, { "Power", 1.6667f } };
+    double t12[3] = { 1e9, 1e9, 1e9 };   // (1e9 = the 12th never came)
+    for (int i = 0; i < 3; i++) {
+        CF.fm = 0;
+        g_rec_on = 1;
+        sc_do(mds[i].name, {33000, 70, 10, AP_PRE + 70, mds[i].cvar, 0.5f, 0, -1, -1, NULL, 1}, c_capp, 1);
+        g_rec_on = 0;
+        char gs[200] = ""; int k = 0;
+        for (int j = 0; j < g_rec_n && k < 170; j++) if (g_rec[j].t - g_pl_t0 >= AP_PRE) k += snprintf(gs + k, sizeof gs - k, "%s%d@%.1f", k ? ", " : "", g_rec[j].b, g_rec[j].t - g_pl_t0 - AP_PRE - g_ap_set_t);
+        int j12 = sc_first_to(12);
+        if (j12 >= 0) t12[i] = g_rec[j12].t - g_pl_t0 - AP_PRE - g_ap_set_t;
+        printf("                                   %-7s %5.1f s %6.1f s      %5.2f      %s\n", mds[i].name, g_ap_set_t, g_ap_wot, g_ap_thr_max, gs);
+    }
+    // ride 7: the 12th within a few seconds of arriving at the set speed (it took 22 s)
+    sc_check(t12[1] <= 6, "ride 7, Normal: the 12th is in within 6 s of reaching the set speed");
+    sc_check(t12[0] <= 8, "ride 7, Eco: the 12th is in within 8 s of reaching the set speed");
+    // a cut of the cruise throttle for a bend (not the driver's lift): 72 km/h on 2 % in 10 (the road flattens as the cut begins), the throttle 0 for 8 s,
+    // the cruise back after it. The upshift the scores want (a flat road, no pull asked) must not wait for the cut to end
+    {
+        printf("\n  a cut of the cruise throttle for a bend (not the driver's lift): 72 km/h on 2 %% in 10, flat from the cut on, the throttle 0 for 8 s\n");
+        CF.fm = 0; g_ap_v0 = g_ap_v1 = 72; g_ap_cut_from = 1.0f; g_ap_cut_s = 8;
+        double up_s[2] = { -1, -1 };
+        for (int i = 0; i < 2; i++) {   // Normal, Eco
+            g_rec_on = 1;
+            sc_do(i ? "cut Eco" : "cut Normal", {33000, 72, 10, AP_PRE + 20, i ? 10.0f : 3.0f, 0.5f, 0, -1, -1, r_ap_cut, 1}, c_capp, 1);
+            g_rec_on = 0;
+            char gs[120] = ""; int k = 0, up = -1;
+            for (int j = 0; j < g_rec_n; j++) if (g_rec[j].t - g_pl_t0 >= AP_PRE) {
+                if (up < 0 && g_rec[j].b > g_rec[j].a) up = j;
+                k += snprintf(gs + k, sizeof gs - k, "%s%d>%d@%.1f", k ? ", " : "", g_rec[j].a, g_rec[j].b, g_rec[j].t - g_pl_t0 - AP_PRE - 1.0);
+            }
+            if (up >= 0) up_s[i] = g_rec[up].t - g_pl_t0 - AP_PRE - 1.0 - M.shift_time;
+            char fs[16] = "-"; if (up >= 0) snprintf(fs, sizeof fs, "%.1f", up_s[i]);
+            printf("    %-7s first upshift %s s after the cut began   %s\n", i ? "Eco" : "Normal", fs, gs);
+        }
+        sc_check(up_s[0] >= 0 && up_s[0] <= 4, "a cut of the cruise throttle: the upshift comes at once (within 4 s), not when the cut is over (Normal)");
+        g_ap_cut_from = 1e9f; g_ap_v0 = 70; g_ap_v1 = 83;
+    }
+    g_cruise_smooth = 0;
     return g_sc_failed;
 }
 

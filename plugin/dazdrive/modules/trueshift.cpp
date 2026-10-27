@@ -308,6 +308,7 @@ static struct {
 enum { LIFT_N = 64, LIFT_MIN = 5 };
 static float g_lift[LIFT_N];
 static int g_lift_n;
+static const float CC_FALL_S = 0.5f;   // choice 1, our own cruise throttle: the filters follow it this fast (s) when it falls
 static const float PV_STD = 0.05f;   // standard deviation of the pedal over 10 s above which it counts as varying (a steady foot ~0.01, a foot wavering 0.30-0.54: 0.085)
 
 // The median of the lifts measured so far (s), < 0 = fewer than LIFT_MIN
@@ -703,6 +704,11 @@ static void refresh(void *self)
     // Bursts are averaged over cruise_damp_s; when it stays off the throttle
     // (slowing for traffic, adaptive cruise) the damped value follows in ~1 s.
     float cc_tau = now - cc_zero_since > 1.5 ? 1.0f : p_cc_damp;
+    // choice 1 with our own cruise throttle (smooth, no bursts): its throttle is already smooth, so it is followed as it falls (0.5 s) instead of
+    // through the three filters below in a row (cruise_damp_s, demand, force), which kept 10 kN 'needed' for 20 s where 3 kN held the speed
+    // (ride 7, 396-416 s). Not while the driver's own pedal is on
+    const bool cc_own = p_choice > 0 && cc && g_cruise_smooth && pedal < 0.05f;
+    if (cc_own && eff < S.cc_thr) cc_tau = fminf(cc_tau, CC_FALL_S);
     S.cc_thr += (float)(dt / (cc_tau + dt)) * (eff - S.cc_thr);
     if (!cc) S.cc_thr = eff;
     // with the Eco / Power pedal curve the engine's own throttle (eff) is what counts, not the raw pedal
@@ -711,6 +717,7 @@ static void refresh(void *self)
     // Demand rises fast (0.3 s) and falls slowly (2 s). Load itself does not
     // move the shift points: the force checks handle it.
     float tau = S.thr > S.demand ? by_mode(0.5f, 0.3f, 0.2f) : by_mode(1.5f, 2.0f, 3.0f);
+    if (cc_own && S.thr <= S.demand) tau = fminf(tau, CC_FALL_S);
     if (S.seed_demand) { S.demand = S.thr; S.seed_demand = 0; }   // right after a hard reset: the pedal of now, not 0
     else S.demand += (float)(dt / (tau + dt)) * (S.thr - S.demand);
 
@@ -718,7 +725,7 @@ static void refresh(void *self)
     if (g > 0 && clutch_seen() < 0.1f && V.eng_ok) {
         float f = force_at(g, v, S.thr);
         if (S.seed_force) { S.f_need = f; S.seed_force = 0; }   // right after a hard reset: what this pedal asks now, not 0
-        else { float tf = f > S.f_need ? 0.3f : 3.0f; S.f_need += (float)(dt / (tf + dt)) * (f - S.f_need); }
+        else { float tf = f > S.f_need ? 0.3f : cc_own ? CC_FALL_S : 3.0f; S.f_need += (float)(dt / (tf + dt)) * (f - S.f_need); }
     }
 
     // Extra resistance the vehicle model misses (tires, wind, a wrong mass), learned into it: force the
@@ -1394,6 +1401,11 @@ static int decide_gear(void *self, int *why)
         float f_wish = p_ch_obj > 0 && !coast_p ? pedal_wish_force(v) : -1;
         if (f_wish < 0 && p_ch_obj > 0 && !coast_p) f_wish = cruise_wish_force(v);
         if (f_wish >= 0) need = fmaxf(f_wish, f_hold);
+        // The cruise holds its set speed (own throttle, within 1.5 km/h of it and hardly accelerating, the driver's pedal off): what is asked is
+        // the force to hold the speed, not the filtered need that is still running down after the approach. That keeps the score steady, like a
+        // real steady drive: no pull in hand to pay for, so the shift to a gear that sits lower is cheap (ride 7: 22 s in 11 at 83 km/h before the 12th)
+        const bool cc_hold = p_choice > 0 && g_cruise_smooth && T.cruise > 0.5f && T.in_thr < 0.05f && fabsf(v - T.cruise) * 3.6f < 1.5f && fabsf(T.accel) < 0.08f;
+        if (cc_hold) need = f_hold;
         gs_out so;
         // choice_route_cap: the speeds the scores look ahead to stop at what the route allows: the speed allowed now for the bends and
         // junctions ahead at a gentle 0.3 m/s2, less what the horizon's 8 s at this speed use of the way there (ride: 7->9 at 34 km/h,
@@ -1430,9 +1442,9 @@ static int decide_gear(void *self, int *why)
             if (so.second > cur && so.cur_ok && (now - S.hold_log_at > 5 || now < S.hold_log_at)) {
                 S.hold_log_at = now;
                 const gs_term &c0 = so.t[cur], &c2 = so.t[so.second];
-                logv(2, "score hold %d: gear %d %.3f (share %.2f, %.0f rpm; gas %.3f revs %.3f shift %.3f stay %.3f), gear %d %.3f (share %.2f, %.0f rpm; gas %.3f revs %.3f shift %.3f, %d shifts) (%.0f km/h, pedal %.2f, throttle %.2f, demand %.2f, asks %.0f N, to hold %.0f N (model bias %.0f N), grade %.1f%%)",
+                logv(2, "score hold %d: gear %d %.3f (share %.2f, %.0f rpm; gas %.3f revs %.3f shift %.3f stay %.3f), gear %d %.3f (share %.2f, %.0f rpm; gas %.3f revs %.3f shift %.3f, %d shifts) (%.0f km/h, pedal %.2f, throttle %.2f, demand %.2f, asks %.0f N, to hold %.0f N (model bias %.0f N)%s, grade %.1f%%)",
                      cur, cur, c0.score, c0.share, c0.rpm, c0.gas, c0.rpmc, c0.shiftc, c0.stay, so.second, c2.score, c2.share, c2.rpm, c2.gas, c2.rpmc, c2.shiftc, c2.shifts,
-                     v * 3.6f, T.in_thr, thr, S.demand, need, f_hold, V.f_bias, grade_pct());
+                     v * 3.6f, T.in_thr, thr, S.demand, need, f_hold, V.f_bias, cc_hold ? ", cruise holding" : "", grade_pct());
             }
             *why = so.wait ? W_SKIP_WAIT : W_HOLD;
             return cur;
@@ -1457,6 +1469,9 @@ static int decide_gear(void *self, int *why)
             } else {
                 bool wants_power = clampf(T.in_thr, 0, 1) >= 0.5f || thr >= 0.5f || thr > S.demand + 0.05f;
                 bool jn_soon = jn >= 0 && jn < fmaxf(50.0f, v * 3);
+                // our own cruise cut its throttle (a bend, a junction or a limit ahead) while the driver's pedal is off: that is no driver's lift,
+                // so neither 'lifting' nor the gentle slowing it causes (not a brake) holds the gear (ride 7, 621-640 s: 10 held 10 s at 72 km/h)
+                const bool cc_cut = p_choice > 0 && g_cruise_smooth && T.cruise > 0.5f && T.in_thr < 0.05f && thr < 0.05f && act_request() <= 0 && T.accel > -0.5f;
                 double dwell = now - S.kd_at < by_mode(3, p_kick_dwell, 8) + 1 ? by_mode(3, p_kick_dwell, 8) : by_mode(p_dwell_du, p_dwell_du, 4.0f);
                 // a change for a better score only while pulling steadily (the early upshift's conditions): not right after taking over, not
                 // right after a brake at low speed, not onto a rising grade, not within the kickdown dwell, not while the truck is slowing, not
@@ -1466,11 +1481,11 @@ static int decide_gear(void *self, int *why)
                 // (choice_own_brake: our own brake request counts as a brake: the deceleration assist's does not show in the telemetry)
                 double brake_at = p_ch_own_brake > 0 && S.own_brake_at > S.brake_at ? S.own_brake_at : S.brake_at;
                 bool steady_up = now - S.ours_at > (S.ours_launch ? 1.0 : 3.0) && (now - brake_at > 6 || v * 3.6f >= 60) && !climbing &&
-                                 !(now - S.kd_at < by_mode(3, p_kick_dwell, 8)) && T.accel > -0.15f && thr >= 0.6f * S.demand &&
+                                 !(now - S.kd_at < by_mode(3, p_kick_dwell, 8)) && (cc_cut || (T.accel > -0.15f && thr >= 0.6f * S.demand)) &&
                                  T.eff_thr <= fmaxf(thr, S.demand) + 0.15f;
                 if (coast_p && S.mode == MODE_POWER && p_mode_char > 0 && now - S.pedal_on_at < 3 && rpm < lim * 0.9f) ret = cur, why_v = W_POWER_HOLDS;
                 // (lift_upshift: the slowing of a coasting truck is not a reason; its own checks stand)
-                else if (!wants_power && ((T.accel < -0.2f && w != lift_g) || jn_soon) && rpm < lim * 0.9f) ret = cur, why_v = W_UP_VETO;
+                else if (!wants_power && ((T.accel < -0.2f && w != lift_g && !cc_cut) || jn_soon) && rpm < lim * 0.9f) ret = cur, why_v = W_UP_VETO;
                 else if (S.shift_dir < 0 && since < dwell && rpm < S.up_pt + 100) ret = cur, why_v = W_ANTI_HUNT_UP;
                 // (choice_objective 1: no flip back up soon after a downshift unless the revs near the top of the window; and no upshift ladder:
                 // after an upshift the next one waits until this gear has pulled for choice_up_wait shift times, the shift it cost)
@@ -1493,9 +1508,9 @@ static int decide_gear(void *self, int *why)
                 S.veto_log_at = now;
                 char cs[24] = "out";
                 if (so.cur_ok) snprintf(cs, sizeof cs, "%.3f", so.t[cur].score);
-                logv(2, "score veto %d->%d (%s%s%s): gear %d %.3f (share %.2f, %.0f rpm), gear %d %s (share %.2f, %.0f rpm) (%.0f km/h, pedal %.2f, throttle %.2f, demand %.2f, asks %.0f N, to hold %.0f N, grade %.1f%%)",
+                logv(2, "score veto %d->%d (%s%s%s): gear %d %.3f (share %.2f, %.0f rpm), gear %d %s (share %.2f, %.0f rpm) (%.0f km/h, pedal %.2f, throttle %.2f, demand %.2f, asks %.0f N, to hold %.0f N%s, grade %.1f%%)",
                      cur, w, why_text[why_v], not_steady ? ": " : "", not_steady ? not_steady : "", w, so.t[w].score, so.t[w].share, so.t[w].rpm, cur, cs,
-                     so.t[cur].share, so.t[cur].rpm, v * 3.6f, T.in_thr, thr, S.demand, need, f_hold, grade_pct());
+                     so.t[cur].share, so.t[cur].rpm, v * 3.6f, T.in_thr, thr, S.demand, need, f_hold, cc_hold ? ", cruise holding" : "", grade_pct());
             }
             if (ret != cur && now - S.score_log_at > 0.5) {
                 S.score_log_at = now;

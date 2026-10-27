@@ -173,6 +173,8 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
     // the route's cap holds the look ahead of a gear up, so a skip does not rest on a speed the route says the truck will not reach)
     float r_min = c.floor_pw > 0 ? gs_power_rpm(c.floor_pw, idle) : c.floor > 0 ? plateau + c.floor : 0, v_floor = v + a_d * 3 * c.horizon;
     float v_floor_up = c.v_cap > 0 ? fminf(v_floor, fmaxf(c.v_cap, 0.5f)) : v_floor;
+    // (the hysteresis a gear up must stand above the floor: the plateau floor has it; the power floor is the driver's own number, a gear lands on it as it is)
+    const float f_hyst = c.floor_pw > 0 ? 0.0f : c.hyst;
     const bool now_up = r_min > 0 && c.floor_pw > 0;          // a gear up is checked at the speed of now and right after the shift too
     float u = fpeak > 1 ? fminf(1, need / fpeak) : 1;         // demanded power over the power available at this speed
     // a gear that is held for a long time (the speed hardly changes) pays its revs for longer than one the speed runs away from: up to 4 times
@@ -189,7 +191,7 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
         float fn = need * (g > cur ? 1 + c.learn_res : 1);
         t->share = f1 > 1 ? fn / f1 : 9;
         bool in = t->rpm >= o->lo + (g > cur ? c.hyst : 0) && t->rpm <= o->hi_g[g] - (g < cur ? c.hyst : 0) &&
-                  (g == cur && !c.floor_cur ? true : t->rpm * ((g > cur ? v_floor_up : v_floor) / vg) >= r_min + (g > cur ? c.hyst : 0)) &&
+                  (g == cur && !c.floor_cur ? true : t->rpm * ((g > cur ? v_floor_up : v_floor) / vg) >= r_min + (g > cur ? f_hyst : 0)) &&
                   (g <= cur || !now_up || (t->rpm >= r_min && vehicle_rpm_at(g, v) >= r_min));
         t->in = in;
         // time_obj: when at least a_min is asked, the gear we are in and a gear up may also be short if at full throttle they still give a_min:
@@ -235,7 +237,7 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
                 float va = fmaxf(0.5f, vs - loss), r = vehicle_rpm_at(g, va), f1 = vehicle_force_at(g, va, 1.0f) / (1 + c.learn_res);
                 float vp = vs + a_d * 3 * c.horizon;
                 if (c.v_cap > 0) vp = fminf(vp, fmaxf(c.v_cap, 0.5f));
-                if (r >= o->lo + c.hyst && r * (vp / va) >= r_min + c.hyst && (!now_up || r >= r_min) && (fminf(need, f1) - f_res) / m >= fminf(c.a_min, a_d)) {
+                if (r >= o->lo + c.hyst && r * (vp / va) >= r_min + f_hyst && (!now_up || r >= r_min) && (fminf(need, f1) - f_res) / m >= fminf(c.a_min, a_d)) {
                     v_s[g] = vs; v_t = fmaxf(v_t, vs + 5 / 3.6f);
                     break;
                 }
