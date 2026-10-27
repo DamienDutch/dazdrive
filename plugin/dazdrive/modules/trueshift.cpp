@@ -28,7 +28,7 @@
 float g_rpm_by_engine;   // [trueshift] rpm_by_engine (core/rpmspan.h; LowSpeed reads it too)
 
 static float p_eco_ceil, p_mode_char, p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, p_min_gap, p_dwell_ud, p_dwell_du,
-    p_max_skip, p_skip_acc, p_skip_wait, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
+    p_max_skip, p_skip_acc, p_skip_wait, p_skip_land_frac, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
     p_idle, p_trace, p_lookahead, p_roll, p_roll_cruise, p_roll_cruise_min, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_stop, p_tones, p_crest_band, p_relax,
@@ -51,6 +51,7 @@ static param g_params[] = {
     { "dwell_down_up_s", &p_dwell_du, 2.0f, "after a downshift, no upshift for this long (unless clearly past the upshift point)" },
     { "max_skip", &p_max_skip, 2, "most gears an upshift may skip (0 = never skip)" },
     { "skip_accel", &p_skip_acc, 0.15f, "acceleration (m/s2) the skipped-to gear must still give" },
+    { "skip_land_frac", &p_skip_land_frac, 0.3f, "a skip upshift (more than one gear up) is only taken when the gear it lands in sits at least this share of the way up from the choice floor to the upshift point (0.3 = the skip lands in the top 70 % of the window; 0 = only the pull checks decide, as before). Never at a pedal of 0.9 or more: a hard launch still skips" },
     { "choice", &p_choice, 0, "0 = the gear is chosen by the shift points and rules (upshift and downshift points, reserve, skip checks). 1 = the gear is chosen by scores: of the gears the hard rules allow, the one with the lowest cost of throttle, revs and shift time wins (the hard rules still run first: rev limit, stall, braking, engine brake, kickdown, hints, dwell times). Aims at fewer shifts and more drive time" },
     { "choice_comfort_eco", &p_ch_eco, 0.9f, "choice 1, Eco: the share of its full-throttle force a gear may need for the acceleration asked before it starts to cost a lot (higher = skips as far as the engine can pull)" },
     { "choice_comfort", &p_ch_norm, 0.8f, "choice 1, Normal: the same, a little more careful" },
@@ -1110,6 +1111,13 @@ static float floor_share()   // choice_floor_power of the mode, + choice_floor_p
     float b = by_mode(p_ch_pw_eco, p_ch_pw_norm, p_ch_pw_pw);
     return b > 0 ? fminf(1.0f, b + (S.varied && p_ch_pw_var > 0 ? p_ch_pw_var : 0.0f)) : 0;
 }
+// The choice floor of the mode (the score's own floor, core/gearscore.h): the lowest rpm under load. choice_floor_power* (a share of the
+// peak power), else choice_floor_rpm over the torque plateau.
+static float choice_floor_rpm()
+{
+    float fs = floor_share();
+    return fs > 0 ? gs_floor_rpm(fs, idle_rpm(), p_ch_fl_idle) : V.plateau + p_ch_floor;
+}
 
 static gs_cfg score_cfg(int skips, int skips_up, int skips_later, int low_edge, int coast, float pedal, float v_cap)
 {
@@ -1484,7 +1492,14 @@ static int decide_gear(void *self, int *why)
             if (vc == vc) v_cap = sqrtf(fmaxf(0.25f, vc * vc - 2 * 0.3f * v * 8));
         }
         // (no skipping with the pedal off, and no skip up on a climb of 1.5 % and more (the upshift path: 2 %): the gear skipped to had no pull later)
-        gs_eval(&so, cur, n, v, need, f_hold, coast_p, score_cfg(coast_p ? 0 : skips, coast_p || grade > 0.015f ? 0 : skips, grade > 0.015f ? 0 : skips_free, ebrake || (coast_p && S.demand < 0.05f), coast_p, clampf(T.in_thr, 0, 1), v_cap));
+        int sup = coast_p || grade > 0.015f ? 0 : skips;
+        // skip_land_frac: a skip must land a share of the way up from the choice floor to the upshift point (not at a near-flat pedal, where a
+        // hard launch may still skip). Otherwise only +1 is offered, and the score still decides between +1 and staying.
+        if (sup > 0 && p_skip_land_frac > 0 && clampf(T.in_thr, 0, 1) < 0.9f && cur + 2 <= n) {
+            float fl = choice_floor_rpm(), lm = fl + p_skip_land_frac * (S.up_pt - fl);
+            if (rpm_at(cur + 2, v2) < lm) sup = 0;
+        }
+        gs_eval(&so, cur, n, v, need, f_hold, coast_p, score_cfg(coast_p ? 0 : skips, sup, grade > 0.015f ? 0 : skips_free, ebrake || (coast_p && S.demand < 0.05f), coast_p, clampf(T.in_thr, 0, 1), v_cap));
         // kickdown_by_wish: the kickdown is due (wish_kick_update). Of the lower gears the window and the floor let in that can give more than
         // this one, the best score, whatever the dwell times say (the stall rule and the limiter came before, and the window keeps the revs under
         // the limit). Nothing to take: no new trigger for a second
@@ -1697,6 +1712,11 @@ static int decide_gear(void *self, int *why)
             if (!coast && learned().res > 0 && rh < fmaxf(dn_pt(h) + p_hyst, idle_rpm() + ioff(350)) + learned().rpm &&
                 rpm < S.up_pt + 150) { block = "no pull here before"; break; }
             if (h > cur + 1) {
+                // skip_land_frac: a skip must land a share of the way up from the choice floor to the upshift point (a hard launch may still skip)
+                if (p_skip_land_frac > 0 && clampf(T.in_thr, 0, 1) < 0.9f) {
+                    float fl = choice_floor_rpm();
+                    if (rh < fl + p_skip_land_frac * (S.up_pt - fl)) { block = "skip: lands too low for skip_land_frac"; break; }
+                }
                 // At high demand only when the skipped-to gear still pulls hard (light truck).
                 bool pull_away = v2u < 20 / 3.6f;   // (25-10, Damien: under 20 km/h a skip is fine even at full pedal)
                 float a_skip = skip_accel() * (S.demand > 0.75f && !pull_away ? 2.0f : 1.0f);
