@@ -842,6 +842,21 @@ static int test_key()
     return bad;
 }
 
+// Shared steering: the offset pull's back-off share swept across follow_bend_o3 (hand on the wheel, activity 0.7): it stepped by (1 - follow_backoff) there
+static int follow_edge_test()
+{
+    for (auto &p : g_params) *p.val = p.def;
+    p_follow = 1;
+    float worst = 0, prev = follow_fb(0.0030f, 0.7f);
+    for (int i = 1; i <= 200; i++) { float fb = follow_fb(0.0030f + 0.00001f * i, 0.7f); worst = fmaxf(worst, fabsf(fb - prev)); prev = fb; }
+    float at_bend = follow_fb(p_f_bend, 0.7f), far_in = follow_fb(0.5f * p_f_bend, 0.7f);
+    printf("shared steering at follow_bend_o3 (|o3| 0.0030-0.0050, 1e-5 steps): largest step of the offset-pull factor %.4f (was %.2f), factor 1 at the bend value %.2f, backed off to %.2f inside\n", worst, 1 - p_f_back, at_bend, far_in);
+    int bad = worst > 0.05f || at_bend != 1.0f || far_in > p_f_back + 0.01f;
+    printf("follow edge test: %s\n", bad ? "FAIL" : "ok");
+    p_follow = 0;
+    return bad;
+}
+
 int main(int argc, char **argv)
 {
     sim_env_apply("lane", g_params, sizeof g_params / sizeof g_params[0]);
@@ -1106,7 +1121,7 @@ int main(int argc, char **argv)
             double pk, opp, os, late; run_driver(c, nom, kmh, &pk, &opp, &os, &late);
             printf("  %-14s %2.0f km/h  peak A %.4f  mean A opposing the driver %.4f  overshoot after letting go %.2f m  |o1| at 14-32 s after %.2f\n", c.name, kmh, pk, opp, os, late);
         }
-    int rc = test_indicator() | test_indicator_key() | test_ffb() | test_saturation() | test_lane_state() | test_cruise_lane_on();
+    int rc = follow_edge_test() | test_indicator() | test_indicator_key() | test_ffb() | test_saturation() | test_lane_state() | test_cruise_lane_on();
     rc |= test_key(); rc |= test_cal_fit(); rc |= test_cal_aborts(); rc |= test_cal_waits();   // in this order: they share the module state
     return rc;
 }

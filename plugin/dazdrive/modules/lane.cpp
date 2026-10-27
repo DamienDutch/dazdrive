@@ -625,6 +625,15 @@ static void wheel_gain_step(float A, float wheel, float dt)
 
 // Mode 2 control (the model-based law; mode 1, the 0.4.14 law, was removed 11-10).
 // Pure function of its inputs (tools/sim/sim_lane.cpp runs it).
+// Shared steering (follow 1): the share of the offset pull left while your hand is on the wheel. Not in a bend (|o3| over follow_bend_o3):
+// there the pull is whole. A weight over the last fifth under that value, not a switch at it (27-10: the pull stepped by (1 - follow_backoff) x
+// the offset term there); the whole pull comes back a little earlier than before, never later.
+static float follow_fb(float o3, float act)
+{
+    if (!(p_follow > 0)) return 1;
+    float bend = clampf((fabsf(o3) - 0.8f * p_f_bend) / fmaxf(0.2f * p_f_bend, 1e-6f), 0, 1);
+    return 1 - (1 - bend) * clampf((act - 0.3f) / 0.4f, 0, 1) * (1 - p_f_back);
+}
 static float lane_step(float u, float o1, float o2, float o3, float dt, float wheel, float A, float kmh)
 {
     if (!(dt > 0 && dt < 0.5f)) dt = 0.016f;
@@ -736,7 +745,7 @@ static float lane_step(float u, float o1, float o2, float o3, float dt, float wh
         // at 90 km/h on a slow wheel, delay 0.35 + lag 0.15)
         // your hand is clearly on the wheel (activity over 0.3) on a straight: less pull on the offset only. Not in a bend (there the
         // activity can be a misreading, ts5b) and not for the small activity of hand noise.
-        float fb = p_follow > 0 && fabsf(o3) < p_f_bend ? 1 - clampf((g_act - 0.3f) / 0.4f, 0, 1) * (1 - p_f_back) : 1;
+        float fb = follow_fb(o3, g_act);
         float a_cmd = -p_k_off * so * stiff * fb * e1 + (k_head * ls * sqrtf(ldf) * (0.5f + 0.5f * swf) * o2 + g_ci * ls) * li + ff;
         // Bend blend (Damien 24-10, his Polo's Travel Assist: what you already steer counts, the assist adds the rest). The wheel minus
         // where the assist alone puts it (g_dev, 0.5 s filter) is your own steering; the part of it that goes into the bend, over a dead
