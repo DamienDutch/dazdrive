@@ -1445,7 +1445,10 @@ static int decide_gear(void *self, int *why)
         if (cur < n && rpm_at(cur + 1, v) < rs_abs(idle_rpm(), p_air_rpm)) { *why = W_AIR_CHARGE; return cur; }
     }
 
-    if (junction_near) { *why = W_JUNCTION_AHEAD; return cur; }
+    // A junction holds the gear only up to the upshift point (plus the hysteresis):
+    // past it the engine is already over the edge of upshifting, so the normal choice
+    // goes on (it upshifts at least one) instead of revving far over the upshift point.
+    if (junction_near && rpm < S.up_pt + p_hyst) { *why = W_JUNCTION_AHEAD; return cur; }
 
     int coast = coast_p;
     int skips = skip_allowed(), skips_free = skips;   // (skips_free: what is allowed once the takeover is a few seconds old)
@@ -1624,11 +1627,17 @@ static int decide_gear(void *self, int *why)
                 // (kickdown_by_wish: no upshift into a gear that would not give the wish: the kickdown would take it back a moment later)
                 else if (S.wk_on && !forced && f_wish >= 0 && f_wish > by_mode(p_kr_eco, p_kr_norm, p_kr_pw) * vehicle_force_at(w, v, 1.0f)) ret = cur, why_v = W_WISH_UP;
                 else if (!forced && !steady_up && w != lift_g) {
-                    ret = cur, why_v = W_HOLD;
                     // which of the steady conditions failed (for the veto line below)
                     not_steady = now - S.ours_at <= (S.ours_launch ? 1.0 : 3.0) ? "just taken over" : !(now - brake_at > 6 || v * 3.6f >= 60) ? "after a brake" :
                                  climbing ? "grade rising" : now - S.kd_at < by_mode(3, p_kick_dwell, 8) ? "kickdown dwell" : T.accel <= -0.15f ? "slowing" :
                                  thr < 0.6f * S.demand ? "lifting" : "throttle over the demand";
+                    // A lifted pedal holds the gear only up to the upshift point (plus the
+                    // hysteresis): past it the revs are already over the edge of upshifting,
+                    // so the normal choice goes on (it upshifts at least one).
+                    if (!strcmp(not_steady, "lifting") && rpm >= S.up_pt + p_hyst)
+                        ret = w, why_v = w - cur > 1 ? W_UP_SKIP : W_UP;
+                    else
+                        ret = cur, why_v = W_HOLD;
                 }
                 else if (w == lift_g) { ret = w; why_v = W_LIFT_UP; }
                 else { ret = w; why_v = w - cur > 1 ? W_UP_SKIP : W_UP; }
@@ -1656,7 +1665,9 @@ static int decide_gear(void *self, int *why)
     }
 
     // (not within the kickdown/lugging dwell either: the early path took 9 -> 10 two seconds after a lugging 10 -> 9 on a 2.3 % climb)
-    if (steady && cur < n && S.demand < p_power_from && !(S.shift_dir < 0 && since < p_dwell_du) && !(now - S.kd_at < by_mode(3, p_kick_dwell, 8)) && !climbing) {
+    // (not with a junction ahead: the cap above lets a gear revved far past the upshift point through, but an early upshift into the
+    // junction is still wrong - it only ends in a shift back)
+    if (steady && cur < n && S.demand < p_power_from && !(S.shift_dir < 0 && since < p_dwell_du) && !(now - S.kd_at < by_mode(3, p_kick_dwell, 8)) && !climbing && !junction_near) {
         float need = fmaxf(S.f_need, f_res), k = mode_reserve() + learned().res;
         if (g_ahead == g_ahead) {
             need = fmaxf(need, resist_grade(v, g_ahead));
