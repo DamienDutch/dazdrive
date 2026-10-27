@@ -18,6 +18,7 @@
 #define LOG_BOOST 1  // experimental: more detail in the log by default
 #include "../core/suite.h"
 #include "../core/game.h"
+#include "../core/route.h"
 #include <math.h>
 #include <ctype.h>
 #include <string.h>
@@ -31,6 +32,7 @@ static float p_sway, p_sw_cut, p_sw_rec, p_sw_amp;
 static float p_learn, p_l_rate, p_l_min, p_l_max, p_l_update, p_l_save;
 static float p_head_ref, p_k_off, p_k_head, p_k_afb, p_bend_a, p_edge_boost, p_rate2, p_i2, p_i2max;
 static float p_wref, p_bend_hold, p_unwind_s, p_bend_lead, p_soft, p_bend_lat;
+static float p_control, p_cal_hold, p_cal_timeout;
 
 static param g_params[] = {
     { "mode", &p_mode, 2, "lane assist: 0 = the game's own law (the plugin only measures it, in lane.csv), 2 = model-based law fitted on real rides: offset + heading + bend feed-forward + assist feedback (1 is treated as 2)" },
@@ -101,6 +103,9 @@ static param g_params[] = {
     { "indicator_resume", &p_ind_resume, 0, "with indicator_pause: lane keeping that went off during the lane change (above min_kmh) is switched on again afterwards (sets the game's lane-keeping flag). Off by default: the game does not switch it off for an indicator, and with keep_on not for speed, so it would mostly undo your own key press" },
     { "non_ffb_mode", &p_nonffb, 0, "without a force-feedback wheel (keyboard, gamepad, mouse steering: the game adds the assist to the steering angle instead of turning the wheel; recognized from the steering data in ~1 s): 0 = the game's own law (mode 2 is fitted on FFB wheels), 2 = mode 2 anyway (not tuned)" },
     { "tone", &p_tone, 1, "1 = a rising tone when lane keeping is switched on, a falling one when it goes off" },
+    { "control", &p_control, 1, "1 = the game's lane-keeping key tells a tap from a hold: a tap switches lane keeping on or off as always, holding it (calibration_hold_s) arms the steering calibration test. Needs mode 2 and learn 1. The key is found by watching its first presses: until then a hold is a plain toggle. 0 = the key only toggles" },
+    { "calibration_hold_s", &p_cal_hold, 0.8f, "control: hold the lane-keeping key this long (s) to arm the steering calibration; hold it again to disarm. Lane keeping is on afterwards" },
+    { "calibration_timeout_s", &p_cal_timeout, 300, "control: an armed calibration that finds no suitable stretch (straight road, a lane seen, lane centering steering, nobody close ahead, a speed the model is valid at) gives up after this many seconds, with a tone" },
 };
 
 enum { GA_U = 0x1d5c, V_STEER_IN = 0x1408, V_A = 0x1420, V_STEER = 0x640 };
@@ -172,8 +177,10 @@ static void driver_activity(float wheel, float A, float dt)
 }
 
 // Actuator model fitted on runs/ts3*, ts4* (lka-sysid notes): A' = -al*A + be*u.
-static float model_be(float kmh) { return 0.235f - 0.0010f * clampf(kmh, 30, 100); }
-static float model_al(float kmh) { return 2.6f + 0.016f * clampf(kmh, 30, 100); }
+// the speed band the fitted actuator model (and so the learner and the calibration test) is valid in
+static const float MODEL_KMH_LO = 30, MODEL_KMH_HI = 100, LEARN_MIN_KMH = 50;
+static float model_be(float kmh) { return 0.235f - 0.0010f * clampf(kmh, MODEL_KMH_LO, MODEL_KMH_HI); }
+static float model_al(float kmh) { return 2.6f + 0.016f * clampf(kmh, MODEL_KMH_LO, MODEL_KMH_HI); }
 
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -418,7 +425,7 @@ static void learn_step(float u, float o1, float o2, float o3, float dt, float wh
     L_rt[L_rn % LK_RING] = L_t; L_rx[L_rn % LK_RING] = xA; L_rn++;
     learn_ring(xA, dt);
     if (g_act > 0.15f) L_quiet = L_t + 3;
-    L_usable = kmh >= 50 && g_act < 0.08f && L_t > L_warm && L_t > L_quiet && fabsf(o3) < 0.0025f && fabsf(o3 - L_lpo3) < 0.0008f &&
+    L_usable = kmh >= LEARN_MIN_KMH && g_act < 0.08f && L_t > L_warm && L_t > L_quiet && fabsf(o3) < 0.0025f && fabsf(o3 - L_lpo3) < 0.0008f &&
                fabsf(o1) < 1.0f && fabsf(u) < 0.3f && !g_ind && fabsf(A) < 0.045f && dt < 0.2f && L_t > L_ring_cool - 6 && !sway_active();
     if (!L_usable) { learn_block_reset(); return; }
     if (L_t - L_acc < LK_TICK) return;
@@ -811,6 +818,260 @@ static float lane_step(float u, float o1, float o2, float o3, float dt, float wh
     }
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// Steering calibration (the game's lane-keeping key held: `control`). A short sequence of small request pulses on a straight
+// stretch, and a fit of what the wheel does with them, stored in the per-wheel profile like the learner's own estimate.
+//   - Why pulses: the learner only sees what the closed loop happens to do (A rms 0.0015 on a calm drive). Pulses of the size the
+//     assist really works at (A peak ~0.008) excite the wheel on purpose and are identified in seconds.
+//   - Open loop, request replaced: the centering law would cancel a pulse within 0.1 s (assist_feedback closes a loop around A).
+//     Safety instead comes from where it starts (centered, settled, straight, nobody close), a pulse set that returns the heading
+//     to zero (two pairs, + - then - +; the offset moves one way and back, ~0.25 m at 80 km/h) and aborts the moment anything
+//     looks wrong; centering then takes over with the soft start.
+//   - Amplitude: the lateral excursion of a pulse is ~ c v^2 gA A, so A peak = 0.008 (80/km/h)^2 x (reference loop gain / the
+//     profile's loop gain), within 0.004-0.011: about the same excursion at every speed and wheel.
+enum { CAL_IDLE, CAL_ARMED, CAL_RUN };
+static int g_cal, g_cal_reset;   // g_cal_reset: the physics thread resets the centering state at its next tick (a stop from the frame must not touch it)
+static double g_cal_armed_at, g_cal_ok_since, g_cal_t0, g_cal_straight_since, g_cal_why_at;
+static const float CAL_LEN_S = 6.0f, CAL_PRE_S = 1.2f, CAL_PW = 0.6f, CAL_BAND_M = 0.5f, CAL_HEAD_MAX = 0.03f, CAL_START_M = 0.10f, CAL_START_HEAD = 0.008f, CAL_SETTLE_S = 3.0f;
+static const float CAL_P0[4] = { 0, 0.9f, 2.4f, 3.3f }, CAL_PS[4] = { 1, -1, -1, 1 };   // pulse starts (s) and signs
+enum { CAL_N = 1500, CAL_PRE_N = 256 };
+struct cal_samp { float t, A, w, o1, o2; };
+static cal_samp C_pre[CAL_PRE_N]; static int C_pre_n;      // ring: the last CAL_PRE_S while armed
+static cal_samp C_run[CAL_N]; static int C_n;
+static float C_amp, C_v, C_peak_o1, C_peak_o2;
+static const char *g_cal_why = "";                         // why it is not (yet) suitable, for the log
+
+static void cal_status(int on) { disp_post(DISP_LANE, DISP_STATUS, on ? 'T' : 0, 0); }
+
+// 0 = suitable now; else the reason it is not. The same gates as the learner's usable stretch (L_usable: hands off, quiet 3 s, straight
+// and steady lane term, |o1| < 1, no indicator, small A, speed from LEARN_MIN_KMH) plus what a test needs on top.
+static const char *cal_unsuitable(float kmh, float o1, float o2, double now)
+{
+    float v = kmh / 3.6f;
+    if (g_pause || g_ind) return "indicator";
+    if (p_needs_cc > 0 && !(T.cruise > 0.5f)) return "cruise off: lane centering does not steer";
+    if (now < g_panic_until || g_soft_at >= 0) return "lane centering is still settling in";
+    if (kmh < fmaxf(LEARN_MIN_KMH, p_min_kmh) || kmh > MODEL_KMH_HI) return "speed outside the band the model holds for";
+    if (!L_usable) return "not a quiet straight stretch (steering, bend, small start-up)";
+    if (T.in_brake > 0.02f || T.eff_brake > 0.02f) return "braking";
+    float gap = g_inc.gap_m;
+    if (gap == gap && gap < 6.0f * v) return "a vehicle ahead";
+    if (!(g_lane_ok_at > g_lane_bad_at && now - g_lane_bad_at > 5)) return "lane not seen steadily";
+    if (fabsf(o1) > CAL_START_M || fabsf(o2) > CAL_START_HEAD || fabsf(g_do1) > 0.08f) return "not centered and settled";
+    float need = v * (CAL_LEN_S + 1) + 50;
+    float st = route_ok() ? route_straight_m(0.06f) : -1;
+    if (st >= 0) { if (st < need) return "a bend ahead on the route"; }
+    else if (!(now - g_cal_straight_since > 10)) return "no route and under 10 s of straight lane";
+    return NULL;
+}
+
+static void cal_arm(double now)
+{
+    g_cal = CAL_ARMED; g_cal_armed_at = now; g_cal_ok_since = 0; g_cal_straight_since = now; C_pre_n = 0; g_cal_why = ""; g_cal_why_at = 0;
+    if (p_tone > 0) play_cue(CUE_LANE_CAL_ARM);
+    disp_post(DISP_LANE, DISP_FLASH, 'T', 1.5);
+    logline("Lane calibration: armed (waits for a straight stretch, gives up after %.0f s)", p_cal_timeout);
+}
+
+// back to idle. A running test hands the wheel back: centering resumes with the soft start. No profile change.
+static void cal_abort(const char *why)
+{
+    int run = g_cal == CAL_RUN;
+    if (g_cal == CAL_IDLE) return;
+    g_cal = CAL_IDLE; cal_status(0);
+    if (p_tone > 0) play_cue(CUE_LANE_CAL_ABORT);
+    logline("Lane calibration: %s: %s%s", run ? "stopped" : "disarmed", why, run ? " (profile unchanged, hold the lane-keeping key to arm again)" : "");
+    if (run) g_cal_reset = 1;   // centering takes over at full strength (the next law tick resets its state): the truck is where it was a moment ago, not a fresh switch-on (the soft start would let a bend or a drift run, sim)
+}
+
+static float cal_interp(const cal_samp *s, int n, float t, int field)
+{
+    auto f = [&](int i) { return field == 0 ? s[i].A : field == 1 ? s[i].w : field == 2 ? s[i].o1 : s[i].o2; };
+    if (t <= s[0].t) return f(0);
+    for (int i = 1; i < n; i++) if (s[i].t >= t) {
+        float d = s[i].t - s[i - 1].t;
+        return d > 1e-6f ? f(i - 1) + (f(i) - f(i - 1)) * (t - s[i - 1].t) / d : f(i);
+    }
+    return f(n - 1);
+}
+
+// The fit. A -> wheel: wheel = gA A(t - d) over a bank of delays (as the learner's), c from the heading: o2(t) - o2(0) = c x -v integral of
+// the wheel (+ a drift, for a wind or a camber). Returns 1 when the gain and delay are good enough to store.
+struct cal_fit_t { float gA, dl, c, r2a, r2c, rms; int c_ok; };
+static int cal_fit(float t0, cal_fit_t *r)
+{
+    static cal_samp S[CAL_N + CAL_PRE_N];
+    int n = 0;
+    for (int k = 0; k < CAL_PRE_N && k < C_pre_n; k++) {
+        const cal_samp &p = C_pre[((C_pre_n - 1 - k) % CAL_PRE_N + CAL_PRE_N) % CAL_PRE_N];
+        if (p.t - t0 < -CAL_PRE_S - 0.5f) break;
+        S[n] = p; S[n].t = p.t - t0; n++;
+    }
+    for (int i = 0, m = n; i < m / 2; i++) { cal_samp x = S[i]; S[i] = S[m - 1 - i]; S[m - 1 - i] = x; }   // oldest first
+    int n0 = n;
+    for (int i = 0; i < C_n && n < CAL_N + CAL_PRE_N; i++) { S[n] = C_run[i]; S[n].t = C_run[i].t - t0; n++; }
+    if (n0 < 8 || n - n0 < 40) return 0;
+    // The wheel's answer is a pure delay d and a first-order lag tau: wheel = gA LP_tau(A(t - d)), gA the gain at standstill of the pulse
+    // (DC), d + tau the delay the learner's pure-delay fit would read at low frequency (the lag's group delay at DC is tau). Both are
+    // searched on a 20 Hz grid: tau in a short list, d in 0.05 s steps with a parabola over the best; the plain pure-delay fit alone
+    // reads a lagging wheel 25 % too weak (the pulses are slow, the lag takes the top off them).
+    const float dtg = 0.05f;
+    enum { NG = 160, NKD = 17 };                       // grid points, delays 0..0.8 s
+    static const float TAUS[] = { 0, 0.05f, 0.1f, 0.15f, 0.2f, 0.3f, 0.4f, 0.5f };
+    float tg0 = S[0].t;                                // grid start (the oldest pre-roll sample)
+    int ngrid = (int)((CAL_LEN_S - tg0) / dtg) + 1;
+    if (ngrid > NG || ngrid < NKD + 40) return 0;
+    static float Ag[NG], Wg[NG], F[NG];
+    for (int g = 0; g < ngrid; g++) { Ag[g] = cal_interp(S, n, tg0 + g * dtg, 0); Wg[g] = cal_interp(S, n, tg0 + g * dtg, 1); }
+    int i0 = NKD - 1, nw = ngrid - i0;
+    double wm = 0, Syy = 0;
+    for (int i = i0; i < ngrid; i++) wm += Wg[i];
+    wm /= nw;
+    for (int i = i0; i < ngrid; i++) Syy += (Wg[i] - wm) * (Wg[i] - wm);
+    if (Syy < 1e-12) return 0;
+    int bt = -1, bk = -1; double bres = 1e30; static double RES[8][NKD], SXY[8][NKD], SXX[8][NKD];
+    for (int ti = 0; ti < 8; ti++) {
+        float a = TAUS[ti] > 0 ? dtg / (TAUS[ti] + dtg) : 1;
+        F[0] = Ag[0];
+        for (int g = 1; g < ngrid; g++) F[g] = F[g - 1] + a * (Ag[g] - F[g - 1]);
+        for (int k = 0; k < NKD; k++) {
+            double am = 0, sxx = 0, sxy = 0;
+            for (int i = i0; i < ngrid; i++) am += F[i - k];
+            am /= nw;
+            for (int i = i0; i < ngrid; i++) { double x = F[i - k] - am, y = Wg[i] - wm; sxx += x * x; sxy += x * y; }
+            SXX[ti][k] = sxx; SXY[ti][k] = sxy; RES[ti][k] = sxx > 1e-12 ? Syy - sxy * sxy / sxx : 1e30;
+            if (RES[ti][k] < bres) { bres = RES[ti][k]; bt = ti; bk = k; }
+        }
+    }
+    if (bt < 0) return 0;
+    // a lag only when it clearly pays: 8 % less residual than the same fit without one
+    double r_nolag = 1e30; for (int k = 0; k < NKD; k++) r_nolag = fmin(r_nolag, RES[0][k]);
+    if (bt > 0 && bres > 0.92 * r_nolag) { bt = 0; bk = 0; bres = 1e30; for (int k = 0; k < NKD; k++) if (RES[0][k] < bres) { bres = RES[0][k]; bk = k; } }
+    double dl = bk * dtg;
+    if (bk > 0 && bk < NKD - 1) {
+        double r0 = RES[bt][bk - 1], r2 = RES[bt][bk + 1], den = r0 - 2 * bres + r2;
+        if (den > 1e-15) dl += dtg * clampf((float)(0.5 * (r0 - r2) / den), -0.5f, 0.5f);
+    }
+    int ng = nw;
+    r->gA = (float)(SXY[bt][bk] / SXX[bt][bk]); r->dl = (float)(dl + TAUS[bt]); r->r2a = (float)(1 - bres / Syy); r->rms = (float)sqrt(SXX[bt][bk] / ng);
+    const float dmax = 0.9f;
+    // heading: integrate the wheel from 0, regress o2 on it with a drift term
+    {
+        int nh = (int)(CAL_LEN_S / dtg);
+        double wmean = 0; for (int g = 0; g <= nh; g++) wmean += cal_interp(S, n, g * dtg, 1); wmean /= (nh + 1);
+        static double X[200], Y[200], Tt[200]; double acc = 0, mx = 0, my = 0, mt = 0;
+        for (int g = 0; g <= nh && g < 200; g++) {
+            if (g) acc += 0.5 * ((cal_interp(S, n, g * dtg, 1) - wmean) + (cal_interp(S, n, (g - 1) * dtg, 1) - wmean)) * dtg;
+            X[g] = -C_v * acc; Y[g] = cal_interp(S, n, g * dtg, 3); Tt[g] = g * dtg; mx += X[g]; my += Y[g]; mt += Tt[g];
+        }
+        int m = nh + 1 < 200 ? nh + 1 : 200; mx /= m; my /= m; mt /= m;
+        double sxx = 0, sxt = 0, stt = 0, sxy = 0, sty = 0, syy = 0;
+        for (int g = 0; g < m; g++) { double x = X[g] - mx, y = Y[g] - my, t = Tt[g] - mt; sxx += x * x; sxt += x * t; stt += t * t; sxy += x * y; sty += t * y; syy += y * y; }
+        double det = sxx * stt - sxt * sxt;
+        r->c_ok = 0; r->c = L_c; r->r2c = 0;
+        if (det > 1e-12 && syy > 1e-12) {
+            double c = (sxy * stt - sty * sxt) / det, b = (sty * sxx - sxy * sxt) / det;
+            double res = syy - c * sxy - b * sty;
+            r->c = (float)c; r->r2c = (float)(1 - res / syy);
+            r->c_ok = r->r2c >= 0.4f && r->c / REF_C >= 0.4f && r->c / REF_C <= 2.5f;
+            if (!r->c_ok) r->c = L_c;
+        }
+    }
+    return r->rms >= 0.001f && r->r2a >= 0.6f && r->gA / REF_GA >= 0.4f && r->gA / REF_GA <= 2.5f && r->dl >= 0 && r->dl <= dmax - 0.05f;
+}
+
+// The test is over: fit, store, report. The profile is a trial like any learner update (rolled back when the next period scores worse).
+static void cal_finish()
+{
+    cal_fit_t r = {};
+    int ok = cal_fit((float)(g_cal_t0 - g_cal_armed_at), &r);
+    g_cal = CAL_IDLE; cal_status(0);
+    // the wheel the test saw must not be the driver's: the fit has to explain the wheel by A alone
+    if (!ok) {
+        if (p_tone > 0) play_cue(CUE_LANE_CAL_ABORT);
+        logline("Lane calibration: inconclusive (gA %.2f delay %.2f s R2 %.2f, A rms %.4f): profile unchanged", r.gA, r.dl, r.r2a, r.rms);
+        return;
+    }
+    float old_gA = L_gA, old_dl = L_dl, old_c = L_c; lprof old = L_cur;
+    float st = clampf(REF_GA * REF_C / (r.gA * r.c), p_l_min, p_l_max);
+    float nd = clampf(1.25f * REF_DELAY / clampf(r.dl, 0.05f, 0.55f), 0.5f, 1.0f);
+    float ns = clampf(fminf(st, L_cur.cap), p_l_min, p_l_max);
+    L_base = L_cur; L_cur.s = ns; L_cur.dfac = nd; L_trial = 1; L_dirty = 1; L_hold = 2;
+    L_gA = r.gA; L_dl = r.dl; L_c = r.c;
+    for (int k = 0; k < LK_NK; k++) L_Sxx[k] = L_Sxy[k] = 0;   // the slow estimate starts over from here
+    L_Syy = L_Nw = L_Cxx = L_Cxy = L_Cyy = 0; L_dev_blocks = 0; learn_block_reset();
+    if (p_tone > 0) play_cue(CUE_LANE_CAL_DONE);
+    disp_post(DISP_LANE, DISP_FLASH, 'L', 1.5);
+    logline("Lane calibration: done. gA %.2f (was %.2f), delay %.2f s (was %.2f), c %.3f (was %.3f%s) | R2 %.2f/%.2f, peak offset %.2f m | profile s %.2f -> %.2f, dfac %.2f -> %.2f%s",
+            r.gA, old_gA, r.dl, old_dl, r.c, old_c, r.c_ok ? "" : ", not fitted", r.r2a, r.r2c, C_peak_o1, old.s, L_cur.s, old.dfac, L_cur.dfac,
+            st > L_cur.cap + 1e-4f ? " (capped by the ring ceiling)" : "");
+    prof_save("calibration");
+}
+
+// One law tick while armed or running. Returns 1 when the test owns the request (*out); 0 = the centering law runs as usual.
+// Called from stub_law with the lane keeping on and the law running.
+static int cal_tick(float o1, float o2, float o3, float dt, float wheel, float A, float kmh, float *out)
+{
+    double now = wall_s();
+    if (g_cal == CAL_IDLE) return 0;
+    float v = kmh / 3.6f;
+    if (g_cal == CAL_ARMED) {
+        C_pre[C_pre_n++ % CAL_PRE_N] = { (float)(now - g_cal_armed_at), A, wheel, o1, o2 };
+        if (!(fabsf(o3) < 0.0015f && fabsf(o3 - L_lpo3) < 0.0008f)) g_cal_straight_since = now;
+        if (now - g_cal_armed_at > p_cal_timeout) { cal_abort("no suitable stretch in time"); return 0; }
+        const char *why = cal_unsuitable(kmh, o1, o2, now);
+        if (why) {
+            g_cal_ok_since = 0;
+            if (strcmp(why, g_cal_why) && now - g_cal_why_at > 5) { g_cal_why = why; g_cal_why_at = now; logv(2, "Lane calibration: waiting (%s)", why); }
+            return 0;
+        }
+        if (!g_cal_ok_since) g_cal_ok_since = now;
+        if (now - g_cal_ok_since < CAL_SETTLE_S) return 0;
+        float scale = clampf(REF_GA * REF_C / fmaxf(L_gA * L_c, 0.01f), 0.5f, 1.5f);
+        float apk = clampf(0.008f * (80.0f / kmh) * (80.0f / kmh) * scale, 0.004f, 0.011f);
+        C_amp = clampf(apk * model_al(kmh) / model_be(kmh) / 0.85f, 0.05f, 0.5f);   // 0.85: a 0.6 s pulse gets that share of the static A through the game's integrator
+        C_v = v; C_n = 0; C_peak_o1 = C_peak_o2 = 0; g_cal_t0 = now; g_cal = CAL_RUN;
+        cal_status(1);
+        if (p_tone > 0) play_cue(CUE_LANE_RESUME);
+        disp_post(DISP_LANE, DISP_FLASH, 'T', 1.5);
+        logline("Lane calibration: starting at %.0f km/h, request pulse %.2f (A peak ~%.4f), o1 %.2f m", kmh, C_amp, apk, o1);
+    }
+    // running: the wheel and driver tracking of lane_step, then the checks, then the pulse
+    float tt = (float)(now - g_cal_t0);
+    wheel_gain_step(A, wheel, dt);
+    driver_activity(wheel, A, dt);
+    g_law_at = now;
+    const char *stop = NULL;
+    float gap = g_inc.gap_m;
+    unsigned char fl = *(unsigned char *)(game_actor_safe() + 0x1d0);
+    if (g_pause || (fl & 12)) stop = "indicator";
+    else if (p_needs_cc > 0 && !(T.cruise > 0.5f)) stop = "cruise off";
+    else if (g_act > 0.25f) stop = "you are steering";
+    else if (T.in_brake > 0.05f || T.eff_brake > 0.05f) stop = "braking";
+    else if (gap == gap && gap < 3.5f * v) stop = "a vehicle closing in";
+    else if (fabsf(o3) > 0.003f) stop = "a bend";
+    else if (route_ok() && route_straight_m(0.06f) >= 0 && route_straight_m(0.06f) < v * (CAL_LEN_S - tt) + 30) stop = "a bend ahead on the route";
+    else if (fabsf(o1) > CAL_BAND_M || fabsf(o2) > CAL_HEAD_MAX) stop = "the truck left the inner part of the lane";
+    else if (o1 == 0 && o2 == 0 && o3 == 0) stop = "the lane was lost";
+    else if (kmh < LEARN_MIN_KMH - 3 || kmh > MODEL_KMH_HI + 3) stop = "the speed left the band";
+    else if (!(dt > 0 && dt < 0.2f)) stop = "a hitch in the game";
+    if (stop) { cal_abort(stop); return 0; }
+    if (C_n < CAL_N) C_run[C_n++] = { (float)(now - g_cal_armed_at), A, wheel, o1, o2 };
+    C_peak_o1 = fmaxf(C_peak_o1, fabsf(o1)); C_peak_o2 = fmaxf(C_peak_o2, fabsf(o2));
+    if (tt >= CAL_LEN_S) {
+        cal_finish();
+        g_cal_reset = 1;   // centering comes back at full strength (g_u carries on from the last pulse value)
+        return 0;
+    }
+    float u = 0;
+    for (int k = 0; k < 4; k++) {
+        float x = tt - CAL_P0[k];
+        if (x >= 0 && x < CAL_PW) u += CAL_PS[k] * C_amp * 0.5f * (1 - cosf(6.2831853f * x / CAL_PW));
+    }
+    *out = u; g_u = u; g_lane_state = LANE_ACTIVE;
+    return 1;
+}
+
 // Soft start (Damien 11-10, the ride after dev.10: "a hard jolt when I first switched it on", stay gentle until it has been in the
 // middle once). That jolt: the game's own law steered the first 4 s (FFB not recognized yet) and let the truck drift to -0.9 m,
 // then mode 2 took over at full strength at once (u 0.4 -> 1.0, wheel 0.01 -> 0.16 rad in 0.5 s).
@@ -864,6 +1125,7 @@ static void stub_law(void *ga, float o1, float o2, float o3, float dt)
     if (was_slow && !slow) g_resume_at = wall_s();
     // Indicator pause: no request at all (the game's u decays to 0 in a few frames), short-term state forgotten.
     if (p_mode >= 1 && (g_pause || slow)) {
+        if (g_cal == CAL_RUN) cal_abort(g_pause ? "indicator" : "too slow");
         g_lane_state = g_pause ? LANE_WAIT_INDICATOR : LANE_WAIT_SLOW;
         float d = before * 0.85f;
         *(float *)(g + GA_U) = fabsf(d) < 1e-3f ? 0 : d;
@@ -871,6 +1133,7 @@ static void stub_law(void *ga, float o1, float o2, float o3, float dt)
         return;
     }
     if (p_mode >= 1 && o1 == 0 && o2 == 0 && o3 == 0) {
+        if (g_cal == CAL_RUN) cal_abort("the lane was lost");
         g_lane_state = LANE_WAIT_NO_LANE;
         float d = before * 0.9f;
         *(float *)(g + GA_U) = fabsf(d) < 1e-3f ? 0 : d;
@@ -890,8 +1153,12 @@ static void stub_law(void *ga, float o1, float o2, float o3, float dt)
             logv(2, "Lane: soft start (%.0f%% until near the center), o1 %.2f m", p_soft * 100, o1);
         }
         g_lane_state = LANE_ACTIVE;   // the runaway guard in lane_step overrides it
-        out = lane_step(u, o1, o2, o3, dt, wheel, A, fabsf(T.speed) * 3.6f);
-        if (g_soft_at >= 0) { out *= soft_share(o1, o2, fabsf(T.speed) * 3.6f, wall_s()); g_u = out; }
+        float cal_out = 0;
+        if (g_cal_reset) { g_cal_reset = 0; lane_reset(); }
+        int cal = g_cal != CAL_IDLE && cal_tick(o1, o2, o3, dt, wheel, A, fabsf(T.speed) * 3.6f, &cal_out);   // the steering calibration owns the request
+        if (g_cal_reset) { g_cal_reset = 0; lane_reset(); }
+        out = cal ? cal_out : lane_step(u, o1, o2, o3, dt, wheel, A, fabsf(T.speed) * 3.6f);
+        if (g_soft_at >= 0 && !cal) { out *= soft_share(o1, o2, fabsf(T.speed) * 3.6f, wall_s()); g_u = out; }
         // Indicator set (the game's own clamp, lka-roll-re notes A2): the assist may not steer back against a lane change.
         // Mode 2 is much firmer than the game's law, so it must keep this rule too.
         unsigned char fl = *(unsigned char *)(g + 0x1d0);
@@ -950,6 +1217,7 @@ static const char *ln_status() { return g_status; }
 // The control law runs on the game's physics step with its own dt; only our state must not carry over.
 static void ln_reset(int level, const char *why)
 {
+    if (g_cal == CAL_RUN) cal_abort("the game was paused or moved");
     lane_reset();
     g_u = g_ci = g_do1 = g_o1_prev = g_o2_prev = g_w_prev = 0;
     g_law_at = -1e9;  // filter_a lets the assist offset go until the law runs again
@@ -1143,9 +1411,141 @@ static void lane_state_tick()
     if (g_lane_state != LANE_OFF && wall_s() - g_stub_at > 0.15) g_lane_state = LANE_OFF;
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// The game's lane-keeping key, tap or hold (`control`). The game toggles lane keeping (game_actor+0x1d1 bit 0x20) on the press, so a
+// hold cannot be told from a tap by the bit alone: it needs the key's own state. The game keeps one action object per key
+// (game_actor + offset -> object, state at +0xf8: 2 fresh press, 1 held, 0 up: cruise-keys notes), read the way cruise.cpp reads the ACC
+// distance key. The offset of the lane key's pointer is not in our notes, so it is found from the presses (key_vote): the slots next to
+// the cruise keys that read non-zero just before the bit flipped, twice in a row for the same slot. Until it is found, or if it
+// goes wrong, every press is a plain toggle with its tone at once, as with control 0.
+//   TAP  (released before calibration_hold_s): the game's toggle stands; its tone and letter come when the key is released.
+//   HOLD (calibration_hold_s): arms the steering calibration (cal_arm); lane keeping is on afterwards (the toggle of the press undone).
+//   A later gesture on the same key (about 3 s held) belongs in key_tick next to the hold: the hold fires at calibration_hold_s and
+//   K_down_at keeps counting, so a longer threshold can be tested there. Not built.
+enum { KEY_LO = 0x1e600, KEY_N = 96, KEY_STATE = 0xf8 };
+static int g_key_off, g_key_bad;                                  // game_actor offset of the lane key's action pointer (0 = not found), gave up
+static double K_nz[KEY_N], K_down_at, K_up_at, K_fire_at;         // per slot: when its state was last non-zero; the found key: held since / up since; when a hold last acted
+static unsigned char K_zero[KEY_N], K_bad[KEY_N], K_votes[KEY_N], K_ok[KEY_N];
+static void *K_ptr[KEY_N];                                        // the object each slot pointed to at the last look, and whether it is readable (K_ok)
+static int K_miss, K_fired;                                       // toggles in a row without the key down; the hold of this press has acted
+static struct { int active; double at; } K_pend;                  // a toggle whose tone waits for the key to come up (or for the hold)
+
+static int control_on() { return p_control > 0 && p_mode >= 2 && p_learn > 0 && o_law; }
+
+// The action state at ga+off: -1 = no action object there. slot < 0: not cached (the found key); else the readable check of the object is
+// only repeated when the pointer in the slot changes (96 slots at frame rate would be a lot of VirtualQuery calls).
+static int key_state(char *ga, int off, int slot = -1)
+{
+    if (slot < 0 && !mem_readable(ga + off, 8)) return -1;
+    void *p = *(void **)(ga + off);
+    if ((uintptr_t)p < 0x10000 || ((uintptr_t)p & 7)) return -1;
+    if (slot >= 0) {
+        if (p != K_ptr[slot]) { K_ptr[slot] = p; K_ok[slot] = mem_readable(p, KEY_STATE + 4); }
+        if (!K_ok[slot]) return -1;
+    } else if (!mem_readable(p, KEY_STATE + 4)) return -1;
+    return *(int *)((char *)p + KEY_STATE);
+}
+
+static void key_cue(int on)   // the tone, the dashboard letter and the log line of a toggle
+{
+    if (p_tone > 0) play_cue(on ? CUE_ON : CUE_OFF);
+    disp_post(DISP_LANE, DISP_FLASH, on ? 'L' : 'X', 1.5);  // L = lane keeping on, X = off (1.5 s on the dashboard)
+    logline("Lane: lane keeping %s", on ? "on" : "off");
+}
+
+// A toggle that the driver did (not ours): which slot was held just before? Two votes in a row for the same one find the key.
+static void key_vote(double now)
+{
+    if (g_key_off) return;
+    int hit = -1, n = 0;
+    for (int i = 0; i < KEY_N; i++) if (!K_bad[i] && K_zero[i] && K_nz[i] > 0 && now - K_nz[i] < 0.5) { n++; hit = i; }
+    if (n != 1) return;
+    K_nz[hit] = 0;
+    for (int i = 0; i < KEY_N; i++) if (i != hit) K_votes[i] = 0;
+    if (++K_votes[hit] >= 2) {
+        g_key_off = KEY_LO + 8 * hit;
+        K_down_at = K_up_at = K_fire_at = 0; K_miss = 0; K_fired = 0;
+        logline("Lane: the lane-keeping key is the action at game_actor+0x%x: a hold of %.1f s arms the steering calibration", g_key_off, p_cal_hold);
+    } else logv(2, "Lane: lane-keeping key candidate game_actor+0x%x", KEY_LO + 8 * hit);
+}
+
+// A toggle seen by ln_frame (the driver's key, not our own switching). 1 = the key is known: tone and letter wait for the key to come up
+// (or for the hold to act); 0 = give the tone at once.
+static int key_edge(int on)
+{
+    (void)on;
+    if (!control_on()) return 0;
+    double now = wall_s();
+    key_vote(now);
+    if (!g_key_off || g_key_bad) return 0;
+    if (!(K_down_at || (K_up_at && now - K_up_at < 0.5))) {   // the key was not down: the game switched it, not a press
+        if (++K_miss >= 3) {
+            logline("Lane: lane-keeping key at game_actor+0x%x was not held at 3 toggles in a row: looking for it again", g_key_off);
+            g_key_off = 0; K_miss = 0; for (auto &v : K_votes) v = 0;
+        }
+        return 0;
+    }
+    K_miss = 0;
+    // The game toggled while or just after a hold had acted (a toggle on the release of a long press): lane keeping stays on, no tone.
+    if (K_fire_at > 0 && now - K_fire_at < 5 && (K_fired || !K_down_at)) {
+        char *ga = game_actor_safe();
+        if (ga && !on) lka_set(ga, 1);
+        K_pend.active = 0;
+        return 1;
+    }
+    K_pend.active = 1; K_pend.at = now;
+    return 1;
+}
+
+static void key_tick(char *ga)
+{
+    double now = wall_s();
+    static double scan_at;
+    if (!g_key_off) {
+        if (now - scan_at < 0.03) return;   // 30 Hz is plenty for a key that is down for 50 ms or more
+        scan_at = now;
+        for (int i = 0; i < KEY_N; i++) {
+            int off = KEY_LO + 8 * i;
+            if (K_bad[i] || (off >= 0x1e710 && off <= 0x1e750 && (off & 0xf) == 0)) continue;   // the cruise keys' own slots
+            int st = key_state(ga, off, i);
+            if (st < 0) continue;
+            if (st > 2) { K_bad[i] = 1; continue; }        // not a key state
+            if (st == 0) K_zero[i] = 1;
+            else if (K_zero[i]) K_nz[i] = now;
+        }
+        return;
+    }
+    if (g_key_bad) { if (K_pend.active) { K_pend.active = 0; key_cue((*(unsigned char *)(ga + 0x1d1) & 0x20) != 0); } return; }
+    int held = key_state(ga, g_key_off) > 0;
+    if (held) { K_up_at = 0; if (!K_down_at) K_down_at = now; }
+    else { if (!K_up_at) K_up_at = now; if (now - K_up_at > 0.1) { K_down_at = 0; K_fired = 0; } }
+    if (K_down_at && now - K_down_at > 6) {   // nobody holds a key that long: the state does not return to 0
+        g_key_bad = 1; K_pend.active = 0;
+        logline("Lane: the lane-keeping key reads held for 6 s: tap and hold are off for this session (every press is a plain toggle)");
+        return;
+    }
+    int on = (*(unsigned char *)(ga + 0x1d1) & 0x20) != 0;
+    // The hold. Acts on the key alone (whether the game toggled on the press, on the release, or not at all): lane keeping on afterwards.
+    if (!K_fired && K_down_at && now - K_down_at >= p_cal_hold) {
+        K_fired = 1; K_fire_at = now; K_pend.active = 0;
+        if (!on) lka_set(ga, 1);   // the press switched it off: a hold is not a toggle (silently)
+        if (g_cal != CAL_IDLE) cal_abort("disarmed by the driver");
+        else cal_arm(now);
+        return;
+    }
+    // A tap: the toggle's tone when the key is up again before the hold
+    if (K_pend.active && !K_down_at) { K_pend.active = 0; key_cue(on); }
+}
+
 static void ln_frame()
 {
     lane_state_tick();
+    if (control_on()) {
+        char *ga0 = game_actor_safe();
+        if (ga0) key_tick(ga0);
+        if (g_cal == CAL_ARMED && wall_s() - g_cal_armed_at > p_cal_timeout) cal_abort("no suitable stretch in time");
+        if (g_cal == CAL_RUN && wall_s() - g_stub_at > 0.3) cal_abort("lane keeping went off");
+    }
     // Hysteresis on the minimum speed: once above on_kmh it works down to min_kmh; below that it waits for on_kmh.
     if (g_minp) {
         static int latched;
@@ -1162,12 +1562,12 @@ static void ln_frame()
     static float prev_k;
     static double cross_at = -10;  // when the speed last came up through the game's minimum (55): the game's own switch-on happens then, a key press does not
     { float k = fabsf(T.speed) * 3.6f; if (prev_k < 55 && k >= 55) cross_at = wall_s(); prev_k = k; }
-    if (p_tone > 0 && o_law && wall_s() - at > 0.1) {  // offsets are 1.60's: only where the hook matched
+    if ((p_tone > 0 || control_on()) && o_law && wall_s() - at > 0.1) {  // offsets are 1.60's: only where the hook matched
         at = wall_s();
         char *ga = game_actor_safe();
         int on = ga ? (*(unsigned char *)(ga + 0x1d1) & 0x20) != 0 : -1;
         if (on >= 0 && was >= 0 && on != was && on == g_lka_expect) {
-            logv(2, "Lane: lane keeping %s (indicator)", on ? "on" : "off");
+            logv(2, "Lane: lane keeping %s (by the plugin)", on ? "on" : "off");
             g_lka_expect = -1;
         } else if (on >= 0 && was >= 0 && on != was && on == 1 && p_slow_resume <= 0 && slow_off && wall_s() - cross_at < 0.6 && ga) {
             // Switched on by itself right where the speed comes back up through the game's minimum (55) after a slow stretch (Damien
@@ -1178,9 +1578,7 @@ static void ln_frame()
             if (!on && fabsf(T.speed) * 3.6f < 56) slow_off = 1;  // went off at low speed (the game's rule or the key)
             else if (on) slow_off = 0;                           // switched on by the key at another speed: normal again
             g_lka_expect = -1;
-            play_cue(on ? CUE_ON : CUE_OFF);
-            disp_post(DISP_LANE, DISP_FLASH, on ? 'L' : 'X', 1.5);  // L = lane keeping on, X = off (1.5 s on the dashboard)
-            logline("Lane: lane keeping %s", on ? "on" : "off");
+            if (!key_edge(on)) key_cue(on);   // (with `control` and the key known, key_tick gives the tone when the key comes up)
             g_engaged = 0;
         }
         if (on >= 0) was = on;

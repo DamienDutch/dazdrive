@@ -291,7 +291,8 @@ SETUP_GROUPS = [
      "knobs": [
         {"kind": "toggle", "label": "Off at a roundabout", "help": "When the cruise cancels itself for a roundabout, lane centering goes off too, and back on at the next Resume.", "keys": [["lane", "roundabout_off", 1, 0]]},
         {"kind": "toggle", "label": "Cruise switches it on", "help": "Switching the cruise on (also Resume) switches lane centering on. Off: the cruise leaves it as it is.", "keys": [["lane", "cruise_switches_on", 1, 0]]},
-        {"kind": "toggle", "label": "Tones when it switches on, off or pauses", "help": "Rising for on, falling for off.", "keys": [["lane", "tone", 1, 0]]}]},
+        {"kind": "toggle", "label": "Tones when it switches on, off or pauses", "help": "Rising for on, falling for off.", "keys": [["lane", "tone", 1, 0]]},
+        {"kind": "toggle", "label": "Hold the lane key to calibrate", "help": "Hold the game's lane-keeping key for a moment: on the next straight stretch with lane centering steering, a few small steering pulses measure how your wheel responds, and the result is stored in your wheel's profile. A tap still switches lane centering on or off.", "keys": [["lane", "control", 1, 0]]}]},
     {"id": "crawl", "off_when": ["creep", "enabled", "0"], "title": "Crawl mode", "section": "creep",
      "tuning": [{"name": "Standard", "desc": "5 km/h", "over": {}},
                 {"name": "Slow", "desc": "3 km/h, for tight docks", "over": {"creep": {"creep_kmh": 3}}}],

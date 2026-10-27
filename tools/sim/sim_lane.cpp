@@ -16,6 +16,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <string>
+#include <vector>
 
 telemetry T;
 char g_dir[MAX_PATH];
@@ -60,12 +61,16 @@ void logline(const char *fmt, ...)
     if (!verbose) return;
     va_list ap; va_start(ap, fmt); printf("%7.2f  ", t_now); vprintf(fmt, ap); printf("\n"); va_end(ap);
 }
-void play_cue(int) {}
+static std::vector<int> g_cues;   // the tones played, in order (the calibration and key tests read them)
+void play_cue(int c) { g_cues.push_back(c); }
+static int sim_route_ok; static float sim_route_straight = 1e9f;   // the route look-ahead: none, or straight for this many meters
+int route_ok() { return sim_route_ok; }
+float route_straight_m(float) { return sim_route_ok ? sim_route_straight : -1; }
 uintptr_t game_scan(const char *) { return 0; }
 int game_patch_call(uintptr_t, void *) { return 0; }
 float *game_patch_rip_float(uintptr_t, int, int, float) { return NULL; }
 int game_patch_store_xmm8(uintptr_t, float (*)(float)) { return 0; }
-static char GA[0x2000], VEH[0x1500], GB[64];
+static char GA[0x20000], VEH[0x1500], GB[64];
 char *game_actor_safe() { return GA; }
 void *game_gearbox() { return GB; }
 char *gb_inner(void *) { return VEH; }
@@ -89,6 +94,7 @@ struct pp {
     float stick = 0;  // stiction (rad): the wheel only moves once its target is this far away (hysteresis; the crash replay fits best with some)
     float db = 0;     // centering band of the FFB wheel (rad): it stops db short of G A (ts5b crash fit: wheel = 2.95 A(t-0.33) - 0.010 sign)
 };
+static int g_sim_lost;  // 1 = the game reports no lane (o1 = o2 = o3 = 0)
 static int via_stub;  // 1 = the request goes through stub_law (gating, filter_a timing) like in the game
 static float vkmh = 80;
 static float DTS = 1.0f / 60;
@@ -133,7 +139,9 @@ static void step(pl &p, const pp &m, float dt, float o3, int drv, float w_cmd, f
     if (via_stub) {  // the game's law writes clamp(u_raw) (it already did above), stub_law wraps it as in the game
         *(float *)(GA + GA_U) = before;
         o_law = sim_game_law; g_sim_uraw = uraw;
-        stub_law(GA, o1m, o2m, o3, dt);
+        float o3s = o3;
+        if (g_sim_lost) { o1m = o2m = 0; o3s = 0; }   // the lane is lost: the game hands over zeros
+        stub_law(GA, o1m, o2m, o3s, dt);
         out = *(float *)(GA + GA_U);
     } else {
         out = lane_step(u, o1m, o2m, o3, dt, (float)p.w, (float)p.A, kmh);
@@ -562,6 +570,277 @@ static int test_ffb()
     return bad;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Steering calibration (the lane-keeping key held) on the plant: a known wheel gain and delay must be recovered, the truck must stay in
+// the inner part of the lane, every abort must leave the profile alone, the timeout must disarm.
+static int count_cue(int c) { int n = 0; for (int x : g_cues) n += x == c; return n; }
+struct prof_snap { float s, d, cap, gA, dl, c; int dirty; };
+static prof_snap snap() { return { L_cur.s, L_cur.dfac, L_cur.cap, L_gA, L_dl, L_c, L_dirty }; }
+static bool same(const prof_snap &a, const prof_snap &b) { return a.s == b.s && a.d == b.d && a.cap == b.cap && a.gA == b.gA && a.dl == b.dl && a.c == b.c && a.dirty == b.dirty; }
+
+enum { AB_NONE, AB_INDICATOR, AB_DRIVER, AB_BEND, AB_LOST, AB_LEAD, AB_BRAKE, AB_WIND, AB_CRUISE, AB_SPEED, AB_ROUTE, AB_KEYOFF, AB_RESET, AB_N };
+static const char *ab_name[AB_N] = { "none (full run)", "indicator", "driver steers", "a bend (lane term)", "lane lost", "lead closing in", "braking", "side wind (truck drifts out)",
+                                     "cruise off (needs_cruise)", "speed leaves the band", "bend ahead on the route", "lane keeping switched off", "game reset (pause)" };
+struct calres { int started, finished, aborted; double t_start, t_end, peak_o1, peak_o2, max_after, steer_max; float gA, dl, c; prof_snap before, after; int rerun; };
+
+static void cal_setup(float kmh, unsigned seed)
+{
+    apply({ "mode 2", 2 });
+    p_learn = 1; p_cal_timeout = 300; L_loaded = 1; snprintf(L_key, sizeof L_key, "SimWheel"); g_ffb = 1; via_stub = 1; quiet = 0; rng = seed;
+    memset(GA, 0, sizeof GA); GA[0x1d1] = 0x20; memset(VEH, 0, sizeof VEH);
+    g_cues.clear(); T.cruise = 0; T.in_brake = T.eff_brake = 0; g_inc.gap_m = NAN; sim_route_ok = 0; g_sim_lost = 0; g_cal_reset = 0;
+    g_pause = 0; g_ind = 0; g_cal = CAL_IDLE; g_law_at = g_stub_at = -1e9; g_soft_at = g_soft_end = g_centre_since = -1; g_panic_until = 0; g_resume_at = -1e9;
+    g_lane_ok_at = g_lane_bad_at = -1e9; L_cur = L_base = { 1, 1, p_l_max }; L_gA = REF_GA; L_dl = REF_DELAY; L_c = REF_C; L_dirty = 0; L_hold = 0; L_trial = 0;
+    vkmh = kmh;
+}
+
+static int g_cal_verbose = getenv("CALV") != NULL;   // CALV=1: the log lines of the calibration runs
+static calres cal_run(const pp &m, float kmh, int ab, double ab_after = 2.0, double tmax = 150, bool arm = true)
+{
+    cal_setup(kmh, 777); int vsave = verbose; if (g_cal_verbose) verbose = 1;
+    pl p = { 0.03, 0, 0, 0, 0 };
+    calres r = {};
+    r.before = snap();
+    float dt = DTS, os = 0;
+    if (arm) cal_arm(0);
+    double after_end = -1;
+    for (int i = 0; i < (int)(tmax / dt); i++) {
+        t_now = i * dt;
+        float o3 = 0.0002f * gauss(); (void)os;
+        float wind = 0.0002f * gauss(); int drv = 0; float wcmd = 0; g_sim_lost = 0;
+        if (g_cal == CAL_RUN && !r.started) { r.started = 1; r.t_start = t_now; }
+        if (!arm && !r.started && t_now >= 13.0) { r.started = 1; r.t_start = 13.0; }   // the same disturbance without any calibration (the baseline)
+        double ta = r.started ? t_now - r.t_start : -1;
+        // the bend, lost lane, wind and a steering driver are 2 s long (a real one may last, the centering law then deals with it); the rest stay
+        bool brief = ab == AB_BEND || ab == AB_LOST || ab == AB_WIND || ab == AB_DRIVER;
+        if (r.started && ab != AB_NONE && ta >= ab_after && (!brief || ta < ab_after + 2.0)) {
+            switch (ab) {
+            case AB_INDICATOR: GA[0x1d0] = 4; break;
+            case AB_DRIVER: drv = 2; wcmd = 0.03f * (float)sin(2 * 3.14159 * 1.5 * ta); break;
+            case AB_BEND: o3 = 0.0045f; break;
+            case AB_LOST: g_sim_lost = 1; break;
+            case AB_LEAD: g_inc.gap_m = 2.0f * kmh / 3.6f; break;
+            case AB_BRAKE: T.in_brake = 0.3f; break;
+            case AB_WIND: wind += 0.02f; break;
+            case AB_CRUISE: p_needs_cc = 1; T.cruise = 0; break;
+            case AB_SPEED: vkmh = 120; break;
+            case AB_ROUTE: sim_route_ok = 1; sim_route_straight = 40; break;
+            case AB_KEYOFF: GA[0x1d1] = 0; break;
+            case AB_RESET: if (g_cal == CAL_RUN) ln_reset(0, "pause"); break;
+            }
+        }
+        if (ab == AB_KEYOFF && ta >= ab_after) ln_frame();   // the law is not called any more: only the frame can notice
+        else step(p, m, dt, o3, drv, wcmd, wind);
+        if (r.started && g_cal == CAL_RUN) { r.peak_o1 = fmax(r.peak_o1, fabs(p.o1)); r.peak_o2 = fmax(r.peak_o2, fabs(p.o2)); }
+        if (r.started && r.t_end == 0 && (arm ? g_cal == CAL_IDLE : t_now - r.t_start >= ab_after)) { r.t_end = t_now; after_end = t_now; }
+        if (after_end > 0) r.max_after = fmax(r.max_after, fabs(p.o1));
+        if (g_cal == CAL_RUN && r.t_end > 0) r.rerun = 1;
+        if (r.t_end > 0 && t_now > r.t_end + 40) break;
+    }
+    r.finished = count_cue(CUE_LANE_CAL_DONE); r.aborted = count_cue(CUE_LANE_CAL_ABORT);
+    r.gA = L_gA; r.dl = L_dl; r.c = L_c; r.after = snap();
+    verbose = vsave; g_sim_lost = 0; GA[0x1d0] = 0; p_needs_cc = 0; T.in_brake = 0; g_inc.gap_m = NAN; sim_route_ok = 0; T.cruise = 0;
+    return r;
+}
+
+static int test_cal_fit()
+{
+    int bad = 0;
+    printf("\nSteering calibration, fit of a known wheel (plant gA / delay + lag / c; tolerance gA 10 %%, delay 0.08 s, c 15 %%; the inner band is |o1| < 0.5 m):\n");
+    struct pc { float gA, delay, tw, c, kmh; const char *name; };
+    const pc cs[] = { { 1.0f, 0, 0.3f, 0.19f, 80, "nominal wheel" }, { 1.0f, 0, 0.3f, 0.19f, 55, "nominal, 55 km/h" }, { 1.0f, 0, 0.3f, 0.19f, 95, "nominal, 95 km/h" },
+                      { 0.7f, 0.30f, 0.05f, 0.17f, 80, "weak, slow wheel" }, { 1.5f, 0.15f, 0.05f, 0.21f, 80, "strong, quick wheel" }, { 1.3f, 0.35f, 0.10f, 0.15f, 70, "slow, strong wheel" } };
+    for (auto &c : cs) {
+        pp m; m.gA = c.gA; m.delay = c.delay; m.tw = c.tw; m.c = c.c;
+        calres r = cal_run(m, c.kmh, AB_NONE);
+        double exp_dl = c.delay + c.tw;
+        int ok = r.started && r.finished == 1 && r.aborted == 0 && fabs(r.gA / c.gA - 1) <= 0.10 && fabs(r.dl - exp_dl) <= 0.08 && fabs(r.c / c.c - 1) <= 0.15 && r.peak_o1 < 0.5 && r.max_after < 0.5 && !r.rerun;
+        printf("  %-20s %3.0f km/h: started %.1f s, ended %.1f s | gA %.2f (plant %.2f) delay %.2f (plant %.2f) c %.3f (plant %.3f) | peak |o1| %.2f m, |o2| %.3f | profile s %.2f dfac %.2f%s\n",
+               c.name, c.kmh, r.t_start, r.t_end, r.gA, c.gA, r.dl, exp_dl, r.c, c.c, r.peak_o1, r.peak_o2, r.after.s, r.after.d, ok ? "" : "  <-- WRONG");
+        bad |= !ok;
+    }
+    printf("Calibration fit test: %s\n", bad ? "FAILED" : "ok");
+    return bad;
+}
+
+static int test_cal_aborts()
+{
+    int bad = 0;
+    printf("\nSteering calibration, every abort stops at once, plays the stop tone and leaves the profile alone (no run again without a new hold):\n");
+    pp m;
+    for (int ab = AB_INDICATOR; ab < AB_N; ab++) {
+        calres r = cal_run(m, 80, ab, 2.0, 80), b = cal_run(m, 80, ab, 2.0, 80, false);   // b: the same disturbance with no calibration armed
+        double allow = ab == AB_WIND ? 2.0 : 0.45;   // a drift is only seen once the heading error is 0.03 rad
+        int ok = r.started && r.aborted == 1 && r.finished == 0 && same(r.before, r.after) && !r.rerun && r.t_end - r.t_start < 2.0 + allow && r.peak_o1 < 0.5 && r.max_after < 0.7 && r.max_after <= fmax(r.peak_o1, b.max_after) + 0.35;   // the centering law takes over again: no worse than the disturbance alone (or where the truck was)
+        printf("  %-30s: stopped %.2f s after the abort cue, tones: stop %d done %d, profile %s, peak |o1| %.2f, after %.2f m (no calibration: %.2f m)%s\n", ab_name[ab], r.t_end - r.t_start - 2.0, r.aborted, r.finished,
+               same(r.before, r.after) ? "unchanged" : "CHANGED", r.peak_o1, r.max_after, b.max_after, ok ? "" : "  <-- WRONG");
+        bad |= !ok;
+    }
+    printf("Calibration abort test: %s\n", bad ? "FAILED" : "ok");
+    return bad;
+}
+
+// armed but never suitable: nothing starts, the profile stays, the timeout disarms with the stop tone
+static int test_cal_waits()
+{
+    int bad = 0;
+    printf("\nSteering calibration, unsuitable stretches (nothing starts) and the timeout (20 s here):\n");
+    enum { W_SLOW, W_LEAD, W_BRAKE, W_ROUTE, W_NOCRUISE, W_N };
+    const char *name[W_N] = { "speed under the band (40 km/h)", "a vehicle 3 s ahead", "braking", "bend ahead on the route", "cruise off (needs_cruise)" };
+    pp m;
+    for (int w = 0; w < W_N; w++) {
+        cal_setup(w == W_SLOW ? 40 : 80, 31);
+        p_cal_timeout = 20;
+        if (w == W_LEAD) g_inc.gap_m = 3.0f * 80 / 3.6f;
+        if (w == W_BRAKE) T.in_brake = 0.1f;
+        if (w == W_ROUTE) { sim_route_ok = 1; sim_route_straight = 100; }
+        if (w == W_NOCRUISE) p_needs_cc = 1;
+        prof_snap b = snap();
+        pl p = { 0.03, 0, 0, 0, 0 };
+        cal_arm(0);
+        int started = 0; double off_at = -1;
+        for (int i = 0; i < 30 * 60; i++) {
+            t_now = i * DTS;
+            step(p, m, DTS, 0.0002f * gauss(), 0, 0, 0.0002f * gauss());
+            started |= g_cal == CAL_RUN;
+            if (g_cal == CAL_IDLE && off_at < 0) off_at = t_now;
+        }
+        int ok = !started && off_at > 19.9 && off_at < 20.2 && count_cue(CUE_LANE_CAL_ABORT) == 1 && same(b, snap());
+        printf("  %-32s: started %s, disarmed at %.1f s (timeout 20), stop tone %d, profile %s%s\n", name[w], started ? "YES" : "no", off_at, count_cue(CUE_LANE_CAL_ABORT),
+               same(b, snap()) ? "unchanged" : "CHANGED", ok ? "" : "  <-- WRONG");
+        bad |= !ok;
+        p_needs_cc = 0; g_inc.gap_m = NAN; T.in_brake = 0; sim_route_ok = 0;
+    }
+    // the timeout also runs from the frame (no law calls: lane keeping off)
+    cal_setup(80, 31); p_cal_timeout = 20; o_law = fake_law; GA[0x1d1] = 0;
+    cal_arm(0);
+    double off_at = -1;
+    for (int i = 0; i < 30 * 60; i++) { t_now = i * DTS; ln_frame(); if (g_cal == CAL_IDLE && off_at < 0) off_at = t_now; }
+    int ok = off_at > 19.9 && off_at < 20.2;
+    printf("  %-32s: disarmed at %.1f s%s\n", "lane keeping off (frame only)", off_at, ok ? "" : "  <-- WRONG");
+    bad |= !ok;
+    printf("Calibration wait/timeout test: %s\n", bad ? "FAILED" : "ok");
+    return bad;
+}
+
+// The lane-keeping key: found from its presses, tap = toggle with its tone when the key is up, hold = arm / disarm, control 0 = plain toggle.
+static char ACT[6][0x100];
+static void key_reset(int control)
+{
+    apply({ "mode 2", 2 });
+    p_learn = 1; L_loaded = 1; snprintf(L_key, sizeof L_key, "SimWheel"); g_ffb = 1; p_control = control; o_law = fake_law; via_stub = 0;
+    memset(GA, 0, sizeof GA); memset(ACT, 0, sizeof ACT); GA[0x1d1] = 0x20;
+    *(void **)(GA + 0x1e780) = ACT[3];   // the lane key
+    *(void **)(GA + 0x1e760) = ACT[1];   // another key
+    *(void **)(GA + 0x1e610) = ACT[2];   // a readable object nobody presses
+    *(void **)(GA + 0x1e710) = ACT[4];   // a cruise key's slot: never looked at
+    g_key_off = g_key_bad = 0; K_miss = 0; K_down_at = K_up_at = K_fire_at = 0; K_fired = 0; K_pend = {}; memset(K_ptr, 0, sizeof K_ptr); memset(K_ok, 0, sizeof K_ok);
+    for (int i = 0; i < KEY_N; i++) { K_nz[i] = 0; K_zero[i] = K_bad[i] = K_votes[i] = 0; }
+    g_cal = CAL_IDLE; g_cues.clear(); T.speed = 80 / 3.6f; T.cruise = 0; g_pause = 0;
+    g_lka_expect = -1;
+}
+static void frames(double s) { for (int i = 0; i < (int)(s * 60 + 0.5); i++) { t_now += 1.0 / 60; ln_frame(); } }
+// the key (ACT[slot]) down for `down` s; toggles the lane-keeping bit on the press when asked, like the game
+static void press(int slot, double down, bool toggles, int also = -1)
+{
+    t_now += 1.0 / 60;
+    if (toggles) GA[0x1d1] ^= 0x20;
+    *(int *)(ACT[slot] + 0xf8) = 2; if (also >= 0) *(int *)(ACT[also] + 0xf8) = 2;
+    ln_frame();
+    *(int *)(ACT[slot] + 0xf8) = 1; if (also >= 0) *(int *)(ACT[also] + 0xf8) = 1;
+    frames(down);
+    *(int *)(ACT[slot] + 0xf8) = 0; if (also >= 0) *(int *)(ACT[also] + 0xf8) = 0;
+    frames(0.6);
+}
+static int bit_on() { return (GA[0x1d1] & 0x20) != 0; }
+static int test_key()
+{
+    int bad = 0;
+    printf("\nThe lane-keeping key (control 1):\n");
+    auto check = [&](const char *what, bool ok) { printf("  %-78s %s\n", what, ok ? "ok" : "<-- WRONG"); bad |= !ok; };
+    key_reset(1);
+    frames(0.5);
+    press(3, 0.15, true, 1);     // tap 1 with another key down at the same time: two candidates, no vote
+    check("tap 1 (another key down too): off, tone at once, key not found", !bit_on() && g_cues.size() == 1 && g_cues[0] == CUE_OFF && !g_key_off);
+    press(3, 0.15, true);        // tap 2: first vote
+    check("tap 2: on, tone at once, key not found yet (one vote)", bit_on() && g_cues.size() == 2 && g_cues[1] == CUE_ON && !g_key_off);
+    press(3, 0.15, true);        // tap 3: second vote in a row
+    check("tap 3: off, tone at once, key found at game_actor+0x1e780", !bit_on() && g_cues.size() == 3 && g_key_off == 0x1e780);
+    press(3, 0.15, true);        // tap 4, the key is known: the tone waits for the release
+    check("tap 4 (key known): on, one tone", bit_on() && g_cues.size() == 4 && g_cues[3] == CUE_ON);
+    // the tone comes with the release, not with the press
+    {
+        size_t n0 = g_cues.size();
+        t_now += 1.0 / 60; GA[0x1d1] ^= 0x20; *(int *)(ACT[3] + 0xf8) = 2; ln_frame();
+        *(int *)(ACT[3] + 0xf8) = 1; frames(0.3);
+        size_t during = g_cues.size() - n0;
+        *(int *)(ACT[3] + 0xf8) = 0; frames(0.6);
+        check("tap 5: no tone while the key is down, the tone after the release", during == 0 && g_cues.size() == n0 + 1 && g_cues.back() == CUE_OFF && !bit_on());
+    }
+    press(3, 0.5, true);         // back on
+    g_cues.clear();
+    // hold 1.2 s from on: the press switched it off, 0.8 s later it is on again and the calibration is armed
+    press(3, 1.2, true);
+    check("hold from on: lane keeping on, calibration armed, one arm tone, no on/off tone", bit_on() && g_cal == CAL_ARMED && g_cues.size() == 1 && g_cues[0] == CUE_LANE_CAL_ARM);
+    g_cues.clear();
+    press(3, 1.2, true);
+    check("hold again: disarmed, lane keeping on, one stop tone", bit_on() && g_cal == CAL_IDLE && g_cues.size() == 1 && g_cues[0] == CUE_LANE_CAL_ABORT);
+    g_cues.clear();
+    press(3, 0.3, true);         // off
+    press(3, 1.2, true);         // hold from off: the press switched it on, armed
+    check("hold from off: lane keeping on, armed", bit_on() && g_cal == CAL_ARMED);
+    g_cues.clear();
+    press(3, 0.3, true);         // tap while armed: off, stays armed
+    check("tap while armed: off, still armed", !bit_on() && g_cal == CAL_ARMED);
+    press(3, 0.3, true);
+    g_cal = CAL_IDLE; g_cues.clear();
+    press(3, 0.6, true);         // shorter than 0.8 s = a tap
+    check("0.6 s press (under calibration_hold_s) is a tap", g_cal == CAL_IDLE && g_cues.size() == 1);
+    // the letter
+    {
+        press(3, 0.3, true);     // on
+        g_cues.clear();
+        t_now += 1.0 / 60; GA[0x1d1] ^= 0x20; *(int *)(ACT[3] + 0xf8) = 2; ln_frame(); *(int *)(ACT[3] + 0xf8) = 1;
+        frames(0.9);
+        char c = disp_pick();
+        *(int *)(ACT[3] + 0xf8) = 0; frames(0.6);
+        check("the dashboard shows T once armed", c == 'T');
+        g_cal = CAL_IDLE;
+    }
+    // how the game handles a long press is not known: toggle on the press (above), on the release, or not at all; the hold must arm in all three
+    for (int mode = 1; mode <= 2; mode++) {
+        key_reset(1);
+        frames(0.5);
+        press(3, 0.15, true); press(3, 0.15, true); press(3, 0.15, true); press(3, 0.15, true);   // found; bit on
+        g_cues.clear();
+        t_now += 1.0 / 60; *(int *)(ACT[3] + 0xf8) = 2; ln_frame(); *(int *)(ACT[3] + 0xf8) = 1; frames(1.2);
+        *(int *)(ACT[3] + 0xf8) = 0; if (mode == 1) GA[0x1d1] ^= 0x20; frames(0.8);   // mode 1: the game toggles on the release; mode 2: not at all
+        check(mode == 1 ? "hold, the game toggles on the release: armed, lane keeping on, only the arm tone" : "hold, the game does nothing: armed, lane keeping on, only the arm tone",
+              bit_on() && g_cal == CAL_ARMED && g_cues.size() == 1 && g_cues[0] == CUE_LANE_CAL_ARM);
+    }
+    // control 0: plain toggles, no search, no arming
+    key_reset(0);
+    frames(0.5);
+    press(3, 1.2, true);
+    press(3, 0.15, true); press(3, 0.15, true); press(3, 0.15, true);
+    check("control 0: a hold is a toggle (tone at once), nothing armed, no key search", g_cal == CAL_IDLE && !g_key_off && g_cues.size() == 4 && count_cue(CUE_LANE_CAL_ARM) == 0);
+    // a game-made toggle (not a press) three times: the key is looked for again
+    key_reset(1);
+    frames(0.5);
+    press(3, 0.15, true); press(3, 0.15, true); press(3, 0.15, true);
+    bool found = g_key_off == 0x1e780;
+    for (int k = 0; k < 3; k++) { t_now += 0.7; GA[0x1d1] ^= 0x20; frames(0.5); }
+    check("three toggles without the key down: the key is looked for again", found && g_key_off == 0);
+    // a key that reads held for 6 s: tap and hold off for the session
+    key_reset(1);
+    frames(0.5);
+    press(3, 0.15, true); press(3, 0.15, true); press(3, 0.15, true);
+    *(int *)(ACT[3] + 0xf8) = 1; frames(7);
+    check("a key stuck at held for 6 s: given up, a press is a plain toggle", g_key_bad == 1);
+    printf("Lane key test: %s\n", bad ? "FAILED" : "ok");
+    return bad;
+}
+
 int main(int argc, char **argv)
 {
     atexit(print_refmax);
@@ -825,5 +1104,7 @@ int main(int argc, char **argv)
             double pk, opp, os, late; run_driver(c, nom, kmh, &pk, &opp, &os, &late);
             printf("  %-14s %2.0f km/h  peak A %.4f  mean A opposing the driver %.4f  overshoot after letting go %.2f m  |o1| at 14-32 s after %.2f\n", c.name, kmh, pk, opp, os, late);
         }
-    return test_indicator() | test_indicator_key() | test_ffb() | test_saturation() | test_lane_state() | test_cruise_lane_on();
+    int rc = test_indicator() | test_indicator_key() | test_ffb() | test_saturation() | test_lane_state() | test_cruise_lane_on();
+    rc |= test_key(); rc |= test_cal_fit(); rc |= test_cal_aborts(); rc |= test_cal_waits();   // in this order: they share the module state
+    return rc;
 }
