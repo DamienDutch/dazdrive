@@ -65,6 +65,7 @@ struct gs_cfg {
     float k_shift;     // time_obj: a second in a shift counts this many seconds of driving
     float floor_idle_frac;   // with floor_pw: the floor is at least idle + this share of (plateau - idle) (0 = the power term alone)
     float floor_pw;    // > 0: the floor is the lowest rpm with this share of the peak power (gs_power_rpm) instead of plateau + floor, also checked right after an upshift (0 where floor is 0)
+    int cross;         // 1 = each gear's window top is the power crossover to the next gear where that lies above the top of the power range (a firm pedal, Power / Normal)
     float v_cap;       // > 0: m/s the route allows ahead; the speeds the demand is followed to (later shifts, the floor's look ahead for a gear up) stop there
 };
 
@@ -121,6 +122,20 @@ static inline float gs_floor_rpm(float share, float idle, float frac)
     return frac > 0 ? fmaxf(r, idle + frac * fmaxf(0.0f, V.plateau - idle)) : r;
 }
 
+// The power crossover of gear g to g + 1: the rpm in g where the engine's power equals the power in g + 1 at the rpm it lands at after the shift
+// (rpm x ratio(g+1) / ratio(g)), from the torque curve and the ratios. Never below base (the top of the power range), never above 95 % of the limit.
+// Below it staying in g gives more power than the next gear, above it the next gear does.
+static inline float gs_cross_rpm(int g, float v, float base, float lim)
+{
+    float r0 = vehicle_rpm_at(g, v), r1 = vehicle_rpm_at(g + 1, v);
+    float cap = 0.95f * lim;
+    if (!(r0 > 1) || !(r1 > 1) || base >= cap) return base;
+    float rr = r1 / r0;
+    for (float r = base; r <= cap; r += 5)
+        if (curve_factor(&V.eng, r) * r <= curve_factor(&V.eng, r * rr) * r * rr) return r;
+    return cap;
+}
+
 // time_obj: seconds from v0 in gear g (just shifted into) to v_t at the demanded acceleration a_d, capped per gear at full throttle; at the
 // window's top hi one gear up, which costs k shift times and the speed f_res loses in it. The next shift of the last gear counts for the
 // share of that gear's range used up. A gear that gives under 0.02 m/s2 counts as 0.02 (it is slow, not impossible).
@@ -156,6 +171,7 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
     // the window's top: the top of the power range, never above 93 % of the limit (the rpm cost, not the window, keeps the revs down)
     float fpeak = gs_peak_force(v);
     for (int g = 1; g <= n; g++) o->hi_g[g] = fminf(V.eng.range[R_POWER][1], 0.93f * lim);
+    if (c.cross) for (int g = 1; g < n; g++) o->hi_g[g] = fmaxf(o->hi_g[g], gs_cross_rpm(g, v, o->hi_g[g], lim));
     o->hi = o->hi_g[cur];
     int span = 1 + (c.skips_up > 0 ? c.skips_up : 0), span_dn = 1 + (c.skips > 0 ? c.skips : 0);
     int span_later = 1 + (c.skips_later > 0 ? c.skips_later : 0);

@@ -33,7 +33,7 @@ static float p_eco_ceil, p_mode_char, p_enabled, p_takeover, p_on_kmh, p_off_kmh
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
     p_idle, p_trace, p_lookahead, p_roll, p_roll_cruise, p_roll_cruise_min, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_stop, p_tones, p_crest_band, p_relax,
     p_choice, p_ch_eco, p_ch_norm, p_ch_power, p_ch_rpm, p_ch_shift, p_ch_stay, p_ch_stay_pw, p_ch_floor,
-    p_ch_obj, p_ch_amin, p_ch_ts_eco, p_ch_ts_norm, p_ch_ts_pw, p_ch_upwait, p_ch_flip, p_ch_pw_eco, p_ch_pw_norm, p_ch_pw_pw, p_ch_pw_var, p_ch_fl_idle,
+    p_ch_obj, p_ch_amin, p_ch_ts_eco, p_ch_ts_norm, p_ch_ts_pw, p_ch_upwait, p_ch_flip, p_ch_pw_eco, p_ch_pw_norm, p_ch_pw_pw, p_ch_pw_var, p_ch_fl_idle, p_pw_cross,
     p_ch_own_brake, p_ch_route_cap, p_lift_up, p_lift_delay;
 
 static param g_params[] = {
@@ -69,6 +69,7 @@ static param g_params[] = {
     { "choice_floor_power_eco", &p_ch_pw_eco, 0.64f, "choice 1, Eco: under load the revs stay at or above the lowest rpm where the engine still gives this share of its peak power (torque times rpm, read from its torque curve), also right after an upshift: the power in hand for the next push. Replaces choice_floor_rpm. 0 = choice_floor_rpm" },
     { "choice_floor_power", &p_ch_pw_norm, 0.69f, "choice 1, Normal: the same" },
     { "choice_floor_power_power", &p_ch_pw_pw, 0.74f, "choice 1, Power: the same" },
+    { "power_shift_crossover", &p_pw_cross, 1, "choice 1: 1 = at a firm pedal in Power (0.8 or more) and at a full pedal in Normal (0.95 or more) the upshift point is the power crossover of the engine and the gearbox: the rpm where the power in this gear equals the power in the next gear at the rpm it lands at, from the engine's torque curve and the ratios, never below the top of the power range and never above 95 % of the rev limit. Eco never. 0 = the top of the power range, as before" },
     { "rpm_by_engine", &g_rpm_by_engine, 0, "1 = the fixed rpm margins of the shift rules (the stall margin, the lowest landing rpm, the comfort floors, the stop and hand-off margins, the engine-brake light stage, the air-charge and M-lug revs) follow the engine's own span from idle to the torque plateau and its brake range, instead of numbers fitted on engines with idle 550-600 and a plateau at 900-1000 rpm. On those engines nothing changes. 0 = the fixed numbers" },
     { "choice_floor_idle_frac", &p_ch_fl_idle, 0.5f, "choice 1: the floor of choice_floor_power* is at least this share of the way from idle up to the start of the torque plateau, so an engine with a high plateau keeps a floor of its own span and not one near idle. 0 = the power share alone" },
     { "choice_floor_power_varied", &p_ch_pw_var, 0.025f, "choice 1: added to the share above while the driver's pedal has been varying over the last 10 s (standard deviation of the pressed pedal over 0.05; lifts do not count): more power in hand for the next push. 0 = off" },
@@ -1082,6 +1083,7 @@ static gs_cfg score_cfg(int skips, int skips_up, int skips_later, int low_edge, 
     c.k_shift = by_mode(p_ch_ts_eco, p_ch_ts_norm, p_ch_ts_pw);
     c.floor_pw = low_edge ? 0 : floor_share();
     c.floor_idle_frac = p_ch_fl_idle;
+    c.cross = p_pw_cross > 0 && pedal >= by_mode(2.0f, 0.95f, 0.8f);   // (Eco: no pedal is that far)
     c.v_cap = v_cap;
     return c;
 }

@@ -609,10 +609,12 @@ static int run_scores_part4();
 static int run_scores_cruise();
 static int run_scores_approach();
 static int run_scores_engine();
+static int run_scores_cross();
 static int run_scores()
 {
     printf("\n=== SCORES part 1: the score function on the vehicle model (Renault ATO 12 speeds, diff 3.08) ===\n");
     use_ato();
+    if (getenv("SC_PART8")) return run_scores_cross();   // (only part 8)
     if (getenv("SC_PART7")) return run_scores_engine();   // (only part 7)
     if (getenv("SC_PART6")) return run_scores_approach();   // (only part 6; SC_VERBOSE=1 with -v prints the module log)
     if (getenv("SC_PART4")) return run_scores_part4();   // (only part 4, for a quick look; its numbers may differ a little from the full run)
@@ -706,6 +708,7 @@ static int run_scores()
     r |= run_scores_cruise();   // (last: its runs move the clock too)
     r |= run_scores_approach();
     r |= run_scores_engine();
+    r |= run_scores_cross();
     return r | g_sc_failed;
 }
 
@@ -1507,6 +1510,65 @@ static int run_scores_engine()
     set_param("rpm_by_engine", 0.0f); use_ato(); g_idle_sim = 600; set_param("idle_rpm", 600);
     sc_check(!strcmp(sig[0][0], sig[0][1]), "rpm_by_engine 1 on today's curve (idle 600, plateau 900): the margins, every shift and every rpm of the pull-aways and stops are the same as with 0");
     sc_check(strcmp(sig[1][0], sig[1][1]) != 0, "rpm_by_engine 1 on the plateau-1300 engine: the margins follow its span");
+    return g_sc_failed;
+}
+
+// ---- part 8: [trueshift] power_shift_crossover. At a firm pedal in Power (0.8 up) and a full pedal in Normal (0.95 up) the window top of each gear is
+// the power crossover to the next one where that lies above the top of the power range (core/gearscore.h gs_cross_rpm). Per gear pair the crossover,
+// then a full pedal from 30 to 80 km/h at 17 and 33 t with the key 0 and 1: the time, the shifts and the rpm each upshift happened at
+static float g_x_ped = 1; static double g_x_t80, g_x_t0;
+static void c_x80(double t)
+{
+    if (t <= 0) { g_x_t80 = -1; g_x_t0 = t_now; g_rec_n = 0; }
+    M.pedal = g_x_ped;
+    if (g_x_t80 < 0 && M.v * 3.6f >= 80) g_x_t80 = t;
+}
+static int run_scores_cross()
+{
+    printf("\n=== SCORES part 8: power_shift_crossover, full pedal 30 -> 80 km/h (choice 1, 0.5 s box) ===\n");
+    struct Eg { const char *name; void (*use)(); } egs[2] = { { "Renault DE13 (ATO 12 speeds)", use_ato }, { "Volvo (2400 Nm)", use_volvo } };
+    struct Va { const char *name; float cvar, ped; } vas[4] = { { "Power, pedal 1.0", 1.6667f, 1.0f }, { "Normal, pedal 1.0", 3.0f, 1.0f }, { "Normal, pedal 0.6", 3.0f, 0.6f }, { "Eco, pedal 1.0", 10.0f, 1.0f } };
+    for (auto &eg : egs) {
+        eg.use(); set_param("choice", 1.0f); sim_reset(RESET_HARD, "sim: next engine"); sc_prime(33000, 0.5f, 30, 8);
+        float lim = V.eng.rpm_limit, base = fminf(V.eng.range[R_POWER][1], 0.93f * lim);
+        printf("\n  %s: top of the power range %.0f rpm (limit %.0f), power crossover per gear pair (rpm in the lower gear; used = the window top, 95 %% of the limit = %.0f):\n   ", eg.name, V.eng.range[R_POWER][1], lim, 0.95f * lim);
+        for (int g = 1; g < T.fwd_gears; g++) {
+            float cr = gs_cross_rpm(g, 15, base, lim);
+            printf(" %d>%d %.0f%s", g, g + 1, cr, g % 6 == 0 && g + 1 < T.fwd_gears ? "\n   " : ";");
+        }
+        printf("\n  %-18s %-6s %-3s %8s %7s  %s\n", "full pedal 30 -> 80", "load", "key", "to 80 km/h", "shifts", "upshifts: rpm before the shift");
+        // a warm-up run: the module keeps some state across a reset, so the first run of a process differs from a second one
+        g_quiet = 1; g_x_ped = 1; set_param("power_shift_crossover", 1.0f); t_now = 5000;
+        sc_do("warm", {33000, 30, sc_gear_for(30, 1100), 10, 3.0f, 0.5f}, c_x80, 1);
+        for (float mass : { 17000.0f, 33000.0f }) {
+            for (auto &va : vas) {
+                double t80[2]; char sig[2][200] = {};
+                for (int key = 0; key < 2; key++) {
+                    set_param("power_shift_crossover", (float)key); g_x_ped = va.ped; t_now = 5000;
+                    sim_reset(RESET_HARD, "sim: next variant");
+                    sc_do(va.name, {mass, 30, sc_gear_for(30, 1100), 70, va.cvar, 0.5f}, c_x80, 1);   // (the same run twice: the second starts from what the first of its own kind left)
+                    t_now = 5000; sim_reset(RESET_HARD, "sim: again");
+                    g_rec_on = 1;
+                    sc_do(va.name, {mass, 30, sc_gear_for(30, 1100), 70, va.cvar, 0.5f}, c_x80, 1);
+                    g_rec_on = 0;
+                    char up[160] = ""; int q = 0, n = 0;
+                    for (int i = 0; i < g_rec_n && q < (int)sizeof up - 12; i++) if (g_rec[i].b > g_rec[i].a && (g_x_t80 < 0 || g_rec[i].t - g_x_t0 <= g_x_t80 + 0.5)) {
+                        q += snprintf(up + q, sizeof up - q, "%s%d>%d %.0f", n ? ", " : "", g_rec[i].a, g_rec[i].b, g_rec[i].rpm); n++;
+                    }
+                    t80[key] = g_x_t80;
+                    snprintf(sig[key], sizeof sig[key], "%s", up);
+                    char ts[12]; if (g_x_t80 >= 0) snprintf(ts, sizeof ts, "%.1f s", g_x_t80); else snprintf(ts, sizeof ts, "never");
+                    printf("  %-18s %4.0f t %3d %10s %7d  %s\n", va.name, mass / 1000, key, ts, n, up);
+                }
+                bool fast = va.cvar < 4 && va.ped >= 0.95f || (va.cvar < 2 && va.ped >= 0.8f);
+                char what[200];
+                if (fast) { snprintf(what, sizeof what, "%s, %s, %.0f t: the crossover is not slower to 80 km/h (%.2f s against %.2f s)", eg.name, va.name, mass / 1000, t80[1], t80[0]); sc_check(t80[1] >= 0 && t80[0] >= 0 && t80[1] <= t80[0] + 0.05, what); }
+                else { snprintf(what, sizeof what, "%s, %s, %.0f t: the key changes no shift (Eco, and Normal under a full pedal) and the time by under 0.2 s (the sim keeps a little state from run to run)", eg.name, va.name, mass / 1000); sc_check(!strcmp(sig[0], sig[1]) && fabs(t80[1] - t80[0]) < 0.2, what); }
+            }
+        }
+        g_quiet = 0;
+    }
+    set_param("power_shift_crossover", 1.0f); use_ato();
     return g_sc_failed;
 }
 
