@@ -197,6 +197,17 @@ float route_junction_m() { return route_ok() && M.junction_s > M.s ? (float)(M.j
 float route_bend_speed(float, float) { return NAN; }   // the scenarios have no road bends, only the junction above
 static float g_act_req;   // the brake request the suite itself holds (the deceleration assist in the ride; the telemetry does not show it)
 float act_request() { return g_act_req; }
+// The actuator's throttle wishes (core/actuate.cpp is not linked here): a scenario sets a cap or scale (the own speed limiter posts
+// ACT_CRUISE's scale), and the throttle model below applies it, so TrueShift's thr_capped() sees it as in the game.
+static act_wish g_act[ACT_N] = { {0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1} };
+const act_wish *act_wishes() { return g_act; }
+static float sim_thr_cap()   // the merged throttle cap and scale, as the actuator applies them (base, then caps, then scales)
+{
+    float r = 1.0f;
+    for (int o = 0; o < ACT_N; o++) if (g_act[o].cap < r) r = g_act[o].cap;
+    for (int o = 0; o < ACT_N; o++) r *= g_act[o].scale;
+    return r;
+}
 static void *SELF = (void *)&M;
 static char letter = 'A';
 
@@ -208,7 +219,7 @@ int gb_engage(void *, int g) { if (!M.parked) return 0; M.target = g; M.engaged 
 int game_engage_init() { return 1; }
 void gb_force(void *) { M.force = 1; }
 float gb_thr_in(void *) { return M.pedal; }
-float gb_thr_eff(void *) { return fmaxf(M.wish_on ? M.wish_thr : fmaxf(M.pedal, M.cc), M.thr_floor); }  // thr_floor: the game's 0.08 at pedal 0 (24-10, 1831 s); wish_on: the wish pedal's throttle
+float gb_thr_eff(void *) { return fmaxf((M.wish_on ? M.wish_thr : fmaxf(M.pedal, M.cc)) * sim_thr_cap(), M.thr_floor); }  // thr_floor: the game's 0.08 at pedal 0 (24-10, 1831 s); wish_on: the wish pedal's throttle
 float wheel_radius() { return RADIUS; }
 int gb_engine(void *, engine_info *e)
 {
@@ -311,7 +322,7 @@ static void tick(double dt, int stats)
     float rpm = rpm_now();
     float idle = TORQUE < 1000 ? 750 : g_idle_sim;
     if (rpm < idle) rpm = idle;   // clutch slips below idle
-    T.rpm = rpm; T.speed = M.v; T.in_thr = M.pedal; T.eff_thr = M.wish_on ? M.wish_thr : fmaxf(M.pedal, M.cc); g_pedal_mapped = M.wish_on;
+    T.rpm = rpm; T.speed = M.v; T.in_thr = M.pedal; T.eff_thr = (M.wish_on ? M.wish_thr : fmaxf(M.pedal, M.cc)) * sim_thr_cap(); g_pedal_mapped = M.wish_on;
     T.in_brake = M.brake; T.eff_brake = M.brake; T.cruise = M.cruise_kmh / 3.6f;
     T.motor_brake = M.ebrake; T.retarder = M.ret; T.eff_clutch = M.state ? 1 : 0;
     T.engine_on = 1; T.gear = M.gear; T.dgear = M.gear;
@@ -360,7 +371,7 @@ static void tick(double dt, int stats)
         if (M.target != M.gear) { M.state = 1; M.shift_end = t_now + M.shift_time; }
     }
     // physics
-    float F = 0, thr = M.wish_on ? M.wish_thr : fmaxf(M.pedal, M.cc);
+    float F = 0, thr = (M.wish_on ? M.wish_thr : fmaxf(M.pedal, M.cc)) * sim_thr_cap();
     if (!M.state && M.gear > 0) {
         float r = rpm_now();
         engine_info e; gb_engine(0, &e);
@@ -395,6 +406,7 @@ static void run(const char *name, setup su, void (*ctl)(double))
 {
     if (!g_quiet) printf("\n=== %s ===\n", name);
     memset(&M, 0, sizeof M);
+    for (int o = 0; o < ACT_N; o++) g_act[o] = act_wish{0, 0, 1, 1, 1};
     M.mass = su.mass; M.gear = M.target = su.g0; M.cvar = su.cvar; M.shift_time = su.shift_time;
     M.eb_level = su.eb_level; M.eb_toggle = su.eb_toggle; M.mass_seen = su.mass_seen;
     M.road = su.road; M.route_on = su.route; M.junction_s = su.junction; M.pedal = su.pedal0;
@@ -615,6 +627,9 @@ static int run_scores_approach();
 static int run_scores_engine();
 static int run_scores_cross();
 static int run_scores_kickwish();
+static int run_scores_skipfrac();
+static int run_scores_limiter();
+static int run_scores_cruisekick();
 static int run_scores()
 {
     printf("\n=== SCORES part 1: the score function on the vehicle model (Renault ATO 12 speeds, diff 3.08) ===\n");
@@ -716,6 +731,9 @@ static int run_scores()
     r |= run_scores_engine();
     r |= run_scores_cross();
     r |= run_scores_kickwish();
+    r |= run_scores_skipfrac();
+    r |= run_scores_limiter();
+    r |= run_scores_cruisekick();
     return r | g_sc_failed;
 }
 
@@ -1105,8 +1123,9 @@ static int run_scores_part4()
     printf("\n=== SCORES part 4: the power-reserve floor, our own brake request, the route's cap, the upshift on a lift (ATO) ===\n");
     use_ato();
     const char *keys[6] = { "choice_floor_power_eco", "choice_floor_power", "choice_floor_power_power", "choice_own_brake", "choice_route_cap", "lift_upshift" };
-    float def[6];
+    float def[6], sf_def = 0.3f;
     for (int i = 0; i < 6; i++) for (int j = 0; j < m_trueshift.n_params; j++) if (!strcmp(m_trueshift.params[j].key, keys[i])) def[i] = m_trueshift.params[j].def;
+    for (int j = 0; j < m_trueshift.n_params; j++) if (!strcmp(m_trueshift.params[j].key, "skip_land_frac")) sf_def = m_trueshift.params[j].def;
     {   // the floor rpm per mode: the lowest rpm where the engine still gives that share of its peak power (the sim's curve, 2700 Nm)
         float id = ts_idle_rpm(), vd = 0.025f;
         for (int j = 0; j < m_trueshift.n_params; j++) if (!strcmp(m_trueshift.params[j].key, "choice_floor_power_varied")) vd = m_trueshift.params[j].def;
@@ -1145,6 +1164,7 @@ static int run_scores_part4()
         int k = kk % 6; g_hn_hold = kk < 6 ? 7 : 10;
         if (k == 0) printf("  pedal up to %.0f s:\n", g_hn_hold);
         for (int i = 0; i < 6; i++) set_param(keys[i], k == 5 || (k == 1 && i < 3) || (k > 1 && i == k + 1) ? def[i] : 0.0f);
+        set_param("skip_land_frac", k == 5 ? sf_def : 0.0f);   // (the ride is reproduced with the new key off; its default is part of the "at their defaults" row)
         g_rec_on = 1;
         setup su = {33100, 45, 8, 25, 3, 1.0f, 0, -1, 0.25f, r_07, 1, 130};
         g_jn_kmh = 5;
@@ -1213,6 +1233,7 @@ static int run_scores_part4()
     g_lf_dur = 4; g_lf_grade = 0; g_tc_on = 4; g_tc_off = 3;
     sc_check(bad == 0, "lift 4 s: one upshift 0.6 s after the lift; a short-lift driver, a 0.5 s lift and a descent: none");
     for (int i = 0; i < 6; i++) set_param(keys[i], def[i]);
+    set_param("skip_land_frac", sf_def);
     return g_sc_failed;
 }
 
@@ -1533,6 +1554,9 @@ static void c_x80(double t)
 static int run_scores_cross()
 {
     printf("\n=== SCORES part 8: power_shift_crossover, full pedal 30 -> 80 km/h (choice 1, 0.5 s box) ===\n");
+    float sf_def = 0.3f;
+    for (int j = 0; j < m_trueshift.n_params; j++) if (!strcmp(m_trueshift.params[j].key, "skip_land_frac")) sf_def = m_trueshift.params[j].def;
+    set_param("skip_land_frac", 0.0f);   // (the crossover test predates skip_land_frac: it isolates the crossover key from the skip landing rule)
     struct Eg { const char *name; void (*use)(); } egs[2] = { { "Renault DE13 (ATO 12 speeds)", use_ato }, { "Volvo (2400 Nm)", use_volvo } };
     struct Va { const char *name; float cvar, ped; } vas[4] = { { "Power, pedal 1.0", 1.6667f, 1.0f }, { "Normal, pedal 1.0", 3.0f, 1.0f }, { "Normal, pedal 0.6", 3.0f, 0.6f }, { "Eco, pedal 1.0", 10.0f, 1.0f } };
     for (auto &eg : egs) {
@@ -1576,6 +1600,7 @@ static int run_scores_cross()
         g_quiet = 0;
     }
     set_param("power_shift_crossover", 1.0f); use_ato();
+    set_param("skip_land_frac", sf_def);
     return g_sc_failed;
 }
 
@@ -1695,6 +1720,125 @@ static int run_scores_kickwish()
     sc_check(n > 0 && ok == n, "gear 10 at 41 and 50 km/h, 33 t, pedal 0.6-1.0: the downshift comes within the per-mode time of the level (each case with the ratio 0.2 over kick_ratio)");
     set_param("kickdown_by_wish", 1.0f);
     g_pl_full = 0; g_pl_ped = 0.7f; M.wish_on = 0;
+    return g_sc_failed;
+}
+
+// ---- part 10: [trueshift] skip_land_frac. A skip upshift must land a share of the way up from the choice floor to the
+// upshift point, so a moderate pedal ramps through fewer skips and with a smaller rpm drop per upshift; a full-pedal launch
+// still skips as before.
+static float g_sf_ped; static int g_sf_full;
+static void c_skipfrac(double t)
+{
+    if (t <= 0) { g_rec_n = 0; g_pl_t0 = t_now; }
+    M.pedal = g_sf_full ? 1.0f : fminf(g_sf_ped, 0.3f + 0.02f * (float)t);
+}
+static void sf_stats(int *skips, double *drop)   // skip upshifts, and the median rpm drop over every upshift (g_rec.rpm is the rpm before the shift)
+{
+    *skips = 0; double d[REC_MAX]; int n = 0;
+    for (int i = 0; i < g_rec_n; i++) {
+        if (g_rec[i].b <= g_rec[i].a) continue;
+        if (abs(g_rec[i].b - g_rec[i].a) > 1) (*skips)++;
+        d[n++] = g_rec[i].rpm * (1.0 - (double)RATIO[g_rec[i].b - 1] / RATIO[g_rec[i].a - 1]);
+    }
+    for (int i = 1; i < n; i++) for (int j = i; j > 0 && d[j] < d[j - 1]; j--) { double t = d[j]; d[j] = d[j - 1]; d[j - 1] = t; }
+    *drop = n ? (n & 1 ? d[n / 2] : 0.5 * (d[n / 2 - 1] + d[n / 2])) : 0;
+}
+static int run_scores_skipfrac()
+{
+    printf("\n=== SCORES part 10: skip_land_frac, a moderate ramp (fewer, gentler skips) and a full launch (still skips), ATO 33 t ===\n");
+    use_ato();
+    set_param("choice", 1.0f); set_param("choice_objective", 1.0f);
+    float sf_def = 0.3f;
+    for (int j = 0; j < m_trueshift.n_params; j++) if (!strcmp(m_trueshift.params[j].key, "skip_land_frac")) sf_def = m_trueshift.params[j].def;
+    int sk[2]; double dr[2];
+    float fv[2] = { 0.0f, sf_def };
+    g_sf_full = 0; g_sf_ped = 0.5f;
+    for (int f = 0; f < 2; f++) {
+        set_param("skip_land_frac", fv[f]);
+        g_rec_on = 1;
+        sc_do("moderate ramp", {33000, 1, 1, 120, 3, 0.5f}, c_skipfrac, 1);
+        g_rec_on = 0;
+        sf_stats(&sk[f], &dr[f]);
+        printf("  skip_land_frac %.1f: %d skip upshifts, median drop %.0f rpm\n", fv[f], sk[f], dr[f]);
+        if (getenv("SC_SHIFTS")) for (int i = 0; i < g_rec_n; i++) printf("      %6.1f  %d->%d (%s) %.0f rpm\n", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why, g_rec[i].rpm);
+    }
+    sc_check(sk[1] < sk[0] && dr[1] < dr[0] - 1.0, "a moderate-pedal ramp on 33 t skips less and drops less rpm per upshift with the default than with 0");
+    int fsk[2];
+    g_sf_full = 1;
+    for (int f = 0; f < 2; f++) {
+        set_param("skip_land_frac", fv[f]);
+        g_rec_on = 1;
+        sc_do("full launch", {33000, 1, 1, 60, 3, 0.5f}, c_skipfrac, 1);
+        g_rec_on = 0;
+        double d; sf_stats(&fsk[f], &d);
+        printf("  full pedal, skip_land_frac %.1f: %d skip upshifts\n", fv[f], fsk[f]);
+    }
+    sc_check(fsk[1] >= fsk[0] && fsk[1] > 0, "a full-pedal launch still skips as before (the default never skips less)");
+    set_param("skip_land_frac", sf_def);
+    return g_sc_failed;
+}
+
+// ---- part 11: the own speed limiter. At a 95 km/h cap with the pedal at 1.0 the throttle is capped below the pedal, so the
+// demand is what the capped throttle gives (holding the speed): the truck ends in the top gear, not stuck one below.
+static void c_limiter(double t)
+{
+    M.pedal = 1.0f;
+    float kmh = M.v * 3.6f, lim = 95.5f;   // speed_limiter_kmh 95 + the bias
+    g_act[ACT_CRUISE].scale = kmh >= lim ? 0.0f : fmaxf(0.0f, fminf(1.0f, (lim - (kmh + T.accel * 3.6f)) / 1.5f));
+}
+static int run_scores_limiter()
+{
+    printf("\n=== SCORES part 11: the own speed limiter at 95 km/h, pedal 1.0, ATO 33 t flat: the top gear ===\n");
+    use_ato();
+    set_param("choice", 1.0f); set_param("choice_objective", 1.0f);
+    g_rec_on = 1;
+    sc_do("limiter 95", {33000, 88, 11, 45, 3, 0.5f, 0, -1, -1, r_flat0, 0}, c_limiter, 1);
+    g_rec_on = 0;
+    int top = 0;
+    for (int i = 0; i < g_rec_n; i++) if (g_rec[i].b == 12 && g_rec[i].b > g_rec[i].a) top = 1;
+    printf("  end in gear %d at %.0f km/h, reached 12: %s\n", M.gear, M.v * 3.6f, top ? "yes" : "no");
+    if (getenv("SC_SHIFTS")) for (int i = 0; i < g_rec_n; i++) printf("      %6.1f  %d->%d (%s) %.0f rpm\n", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why, g_rec[i].rpm);
+    sc_check(top, "at a 95 km/h cap with the pedal at 1.0 the truck ends in the top gear (12)");
+    return g_sc_failed;
+}
+
+// ---- part 12: the own cruise downshifts when the gear is too weak. With [cruise] force_mode 1 the cruise asks a force, and
+// kickdown_by_wish reads it the same way as the pedal's wish: from 63 km/h in 11 (a step too tall) it downshifts to 10 within
+// seconds and reaches 80 km/h sooner than without the kickdown.
+static double g_ck_t80;
+static void c_ck(double t)
+{
+    if (t <= 0) { g_ck_t80 = -1; g_rec_n = 0; g_pl_t0 = t_now; }
+    c_cforce(t);
+    if (g_ck_t80 < 0 && M.v * 3.6f >= 80) g_ck_t80 = t;
+}
+static int run_scores_cruisekick()
+{
+    printf("\n=== SCORES part 12: the own cruise 83 km/h from 63 in 11, force_mode 1, ATO 33 t flat (kickdown by wish 0 / 1) ===\n");
+    use_ato();
+    set_param("choice", 1.0f); set_param("choice_objective", 1.0f);
+    g_cruise_smooth = 1;
+    g_cf_set = 83;
+    double dn10[2], t80[2];
+    for (int kw = 0; kw < 2; kw++) {
+        set_param("kickdown_by_wish", (float)kw);
+        CF.fm = 1; CF.on = 0; CF.at = -1;
+        g_rec_on = 1;
+        sc_do(kw ? "cruise 83 (kickdown by wish 1)" : "cruise 83 (kickdown by wish 0)", {33000, 63, 11, 90, 3, 0.5f, 0, -1, -1, r_flat0, 1}, c_ck, 1);
+        g_rec_on = 0;
+        dn10[kw] = -1; t80[kw] = g_ck_t80;
+        for (int i = 0; i < g_rec_n; i++) if (g_rec[i].b == 10 && g_rec[i].b < g_rec[i].a) { dn10[kw] = g_rec[i].t - g_pl_t0; break; }
+        char d[16], t[16];
+        snprintf(d, sizeof d, dn10[kw] < 0 ? "-" : "%.1f", dn10[kw]);
+        snprintf(t, sizeof t, t80[kw] < 0 ? "-" : "%.1f", t80[kw]);
+        printf("  kickdown_by_wish %d: first downshift to 10 at %s s, 80 km/h at %s s (end gear %d)\n", kw, d, t, M.gear);
+        if (getenv("SC_SHIFTS")) for (int i = 0; i < g_rec_n; i++) printf("      %6.1f  %d->%d (%s) %.0f rpm\n", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why, g_rec[i].rpm);
+    }
+    sc_check(dn10[1] >= 0 && dn10[1] <= 6, "the cruise's asked force downshifts to 10 within a few seconds (force_mode 1, kickdown_by_wish 1)");
+    sc_check(t80[1] >= 0 && (t80[0] < 0 || t80[1] < t80[0] - 0.5), "it reaches 80 km/h sooner than without the kickdown");
+    set_param("kickdown_by_wish", 1.0f);
+    CF.fm = 0; CF.on = 0; CF.at = -1;
+    g_cruise_smooth = 0;
     return g_sc_failed;
 }
 

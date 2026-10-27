@@ -99,6 +99,8 @@ int game_patch_tail(uintptr_t, void *) { return 0; }
 int game_patch_stop(uintptr_t, float (*)(float, float, float)) { return 0; }
 int low_owner_on() { return 0; }   // the low-speed owner (lowspeed.cpp) is not part of this sim
 float act_request() { return 0; }   // nor the actuator
+static act_wish g_act[ACT_N] = { {0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1},{0,0,1,1,1} };
+const act_wish *act_wishes() { return g_act; }
 int low_owner_wanted() { return 0; }
 int low_start_gear() { return 0; }
 int low_launch_hold() { return 0; }
