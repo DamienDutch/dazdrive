@@ -123,7 +123,7 @@ static param g_params[] = {
     { "own_acc_stop_m", &p_own_stop_m, 6, "own ACC: gap kept at a standstill (m); the wanted gap is this plus time gap x speed" },
     { "own_acc_plan_decel", &p_own_plan, 1.2f, "own ACC: approaching a slower lead is planned with this deceleration (m/s2), so the game's emergency braking (which empties the brake air) is not needed; 0 = off" },
     { "own_acc_brake", &p_own_brake, 0.35f, "own ACC: brake request (0..1) it may use itself when lifting off is not enough, so the game's emergency braking is not needed; 0 = never" },
-    { "own_acc_decel", &p_own_dec, 1.2f, "own ACC: how fast the target may fall (m/s2; faster, up to 8x, when closing in needs more than 0.5 m/s2)" },
+    { "own_acc_decel", &p_own_dec, 1.6f, "own ACC: how fast the target may fall (m/s2; faster, up to 8x, when closing in needs more than 0.5 m/s2)" },
     { "own_acc_accel", &p_own_up, 0.8f, "own ACC: how fast the target may rise (m/s2)" },
     { "aeb", &p_aeb, 1, "1 = own emergency brake assist (AEB): warning tones, then partial braking, then full braking, all ramped; it replaces the game's ACC emergency braking and the game's AEB (both empty the brake air). 0 = the game's" },
     { "aeb_evade_steer", &p_aeb_evade, 0.01f, "AEB: the indicator to one side plus steering that way by this much (share of the full steering range, 0.01 = ~4.5 degrees on a 900-degree wheel; or the truck turning that way at 1.4 deg/s) for 0.3 s = an evasive lane change: a warning or partial braking stands down for 3 s. 0 = off" },
