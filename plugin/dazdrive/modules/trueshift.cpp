@@ -28,7 +28,7 @@
 float g_rpm_by_engine;   // [trueshift] rpm_by_engine (core/rpmspan.h; LowSpeed reads it too)
 
 static float p_eco_ceil, p_mode_char, p_enabled, p_takeover, p_on_kmh, p_off_kmh, p_on_rpm, p_hint_hold, p_min_gap, p_dwell_ud, p_dwell_du,
-    p_max_skip, p_skip_acc, p_skip_wait, p_skip_land_frac, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
+    p_max_skip, p_skip_acc, p_skip_wait, p_skip_land_frac, p_ch_land, p_ch_over, p_hyst, p_kick_pedal, p_kick_rate, p_power_from, p_power_full,
     p_cruise_rpm, p_reserve, p_learn_rpm, p_learn_res, p_learn_km, p_eco_rpm, p_power_rpm, p_eco_reserve, p_power_reserve, p_cc_damp,
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
     p_idle, p_trace, p_lookahead, p_roll, p_roll_cruise, p_roll_cruise_min, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_stop, p_tones, p_crest_band, p_relax,
@@ -51,7 +51,9 @@ static param g_params[] = {
     { "dwell_down_up_s", &p_dwell_du, 2.0f, "after a downshift, no upshift for this long (unless clearly past the upshift point)" },
     { "max_skip", &p_max_skip, 2, "most gears an upshift may skip (0 = never skip)" },
     { "skip_accel", &p_skip_acc, 0.15f, "acceleration (m/s2) the skipped-to gear must still give" },
-    { "skip_land_frac", &p_skip_land_frac, 0.3f, "a skip upshift (more than one gear up) is only taken when the gear it lands in sits at least this share of the way up from the choice floor to the upshift point (0.3 = the skip lands in the top 70 % of the window; 0 = only the pull checks decide, as before). Never at a pedal of 0.9 or more: a hard launch still skips" },
+    { "skip_land_frac", &p_skip_land_frac, 0.0f, "a HARD extra rule on top of the scores (off by default; the scores' landing cost does this job): a skip upshift (more than one gear up) is only taken when the gear it lands in sits at least this share of the way up from the choice floor to the upshift point (0.3 = the skip lands in the top 70 % of the window; 0 = off). Never at a pedal of 0.9 or more: a hard launch still skips" },
+    { "choice_land_weight", &p_ch_land, 6.0f, "choice 1: weight of the landing cost: under load a gear that would sit just above the choice floor costs this much (times the share of the power asked), so the gear one up that lands higher wins. 0 = off" },
+    { "choice_over_weight", &p_ch_over, 1.0f, "choice 1: weight of the cost of revs over the mode's upshift point (it grows with the square of the distance; one quarter of the way from the point to the top of the window costs this much). 0 = off" },
     { "choice", &p_choice, 0, "0 = the gear is chosen by the shift points and rules (upshift and downshift points, reserve, skip checks). 1 = the gear is chosen by scores: of the gears the hard rules allow, the one with the lowest cost of throttle, revs and shift time wins (the hard rules still run first: rev limit, stall, braking, engine brake, kickdown, hints, dwell times). Aims at fewer shifts and more drive time" },
     { "choice_comfort_eco", &p_ch_eco, 0.9f, "choice 1, Eco: the share of its full-throttle force a gear may need for the acceleration asked before it starts to cost a lot (higher = skips as far as the engine can pull)" },
     { "choice_comfort", &p_ch_norm, 0.8f, "choice 1, Normal: the same, a little more careful" },
@@ -1163,6 +1165,9 @@ static gs_cfg score_cfg(int skips, int skips_up, int skips_later, int low_edge, 
     c.floor_idle_frac = p_ch_fl_idle;
     c.cross = p_pw_cross > 0 && pedal >= by_mode(2.0f, 0.95f, 0.8f);   // (Eco: no pedal is that far)
     c.v_cap = v_cap;
+    c.up_pt = S.up_pt;
+    c.w_over = p_ch_over;
+    c.w_land = p_ch_land;
     return c;
 }
 
@@ -2084,6 +2089,8 @@ int ts_start_gear(float thr)
     return launch_pick(T.trailer ? 1 : (n < 4 ? n : 4), clampf(thr, 0, 1), true);
 }
 float ts_idle_rpm() { return idle_rpm(); }
+float ts_up_pt() { return S.up_pt; }
+float ts_choice_floor() { return choice_floor_rpm(); }   // (the simulator reads the mode's upshift point)
 
 // Seconds until TrueShift's next downshift in braking, at this deceleration: the speed falls to the point where the rule that
 // looked last (the engine brake's keep point, the braking rule's floor, the deceleration assist's window) judges the gear, less

@@ -67,6 +67,9 @@ struct gs_cfg {
     float floor_pw;    // > 0: the floor is the lowest rpm with this share of the peak power (gs_power_rpm) instead of plateau + floor, also checked right after an upshift (0 where floor is 0)
     int cross;         // 1 = each gear's window top is the power crossover to the next gear where that lies above the top of the power range (a firm pedal, Power / Normal)
     float v_cap;       // > 0: m/s the route allows ahead; the speeds the demand is followed to (later shifts, the floor's look ahead for a gear up) stop there
+    float up_pt;       // > 0: the mode's upshift point (rpm): revs over it get expensive fast (w_over); 0 = off
+    float w_over;      // weight of that cost (0 = off)
+    float w_land;      // weight of the landing cost: a gear that sits just above the floor under load pays (0 = off)
 };
 
 enum { GS_MAX = 32 };
@@ -230,6 +233,22 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
         t->gas = x * x;
         float xh = fmaxf(0, t->rpm - plateau) / fmaxf(1, o->hi_g[g] - plateau), xl = fmaxf(0, plateau - t->rpm) / fmaxf(1, plateau - idle);
         t->rpmc = c.w_rpm * hold * (xh * xh + u * xl * xl);
+        // landing cost: while the truck is asked to accelerate, a gear that sits just above the floor (the lowest rpm the window gives) pays, in
+        // proportion to the power asked (u) and to how much speed is asked (a_d, from 0.05 to 0.4 m/s2): cruising, holding a speed and coasting
+        // make it nothing (ride 7: the cruise at 83 km/h is meant to sit in 12 at 990 rpm; a climb is the lugging term's and the floor's). The zone is the whole way from the floor up to the upshift point (the
+        // window's top where the caller gives none), so it follows the engine and the mode, not a fixed rpm
+        if (c.w_land > 0 && u > 0) {
+            float fl = r_min > 0 ? r_min : o->lo, top = c.up_pt > 0 ? c.up_pt : o->hi_g[g], zone = fmaxf(1, top - fl);
+            float xf = fminf(1.0f, fmaxf(0, 1 - (t->rpm - fl) / zone));
+            // (a pedal near the floor asks for pull and lets the revs go where they must: a hard launch still skips)
+            t->rpmc += c.w_land * u * gs_smooth(0.05f, 0.4f, a_d) * xf * xf * (c.pull > 0 ? 1 - gs_smooth(0.8f, 0.95f, c.pull) : 1.0f);
+        }
+        // over the upshift point of the mode the revs get dear quickly: holding the gear is fine up to it, not far over it (a quarter of the way
+        // from there to the window's top is the scale: at 1 the cost is w_over, as dear as a shift)
+        if (c.w_over > 0 && c.up_pt > 0 && t->rpm > c.up_pt) {
+            float xo = (t->rpm - c.up_pt) / fmaxf(1, 0.25f * (o->hi_g[g] - c.up_pt));
+            t->rpmc += c.w_over * xo * xo;
+        }
         int later = 0;                                         // shifts this gear needs while the speed rises to v_f
         if (v_f > v * 1.02f) {
             int k = 0;

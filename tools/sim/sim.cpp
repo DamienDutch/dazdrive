@@ -515,6 +515,11 @@ static float g_dipg = 5.8f;   // the climb's grade (H1 runs it at a few, the sim
 static float r_dip(double s) { return s < 300 ? 1.0f : s < 900 ? g_dipg : s < 960 ? g_dipg - 1.7f : s < 1500 ? g_dipg - 0.2f : s < 1800 ? 2.0f : 0; }
 static void c_cci73(double) { M.cruise_kmh = 73; M.pedal = 0; float e = 73 / 3.6f - M.v; M.cc = fminf(1, fmaxf(0, 0.5f + e * 1.0f)); }
 static void c_cci80(double) { M.cruise_kmh = 80; M.pedal = 0; float e = 80 / 3.6f - M.v; M.cc = fminf(1, fmaxf(0, 0.5f + e * 1.0f)); }
+static float param_def(const char *n)
+{
+    for (int i = 0; i < m_trueshift.n_params; i++) if (!strcmp(m_trueshift.params[i].key, n)) return m_trueshift.params[i].def;
+    return 0;
+}
 static void set_param(const char *n, float v)
 {
     for (int i = 0; i < m_trueshift.n_params; i++) if (!strcmp(m_trueshift.params[i].key, n)) *m_trueshift.params[i].val = v;
@@ -629,10 +634,14 @@ static int run_scores_cross();
 static int run_scores_kickwish();
 static int run_scores_skipfrac();
 static int run_scores_limiter();
+static int run_scores_landcost();
 static int run_scores_cruisekick();
 static int run_scores()
 {
     printf("\n=== SCORES part 1: the score function on the vehicle model (Renault ATO 12 speeds, diff 3.08) ===\n");
+    use_ato();
+    if (getenv("SC_PART13")) return run_scores_landcost();
+    if (g_sc_failed |= run_scores_landcost()) printf("  (part 13 first: it needs the vehicle as use_ato leaves it, before the other parts change the settings)\n");
     use_ato();
     if (getenv("SC_PART9")) return run_scores_kickwish();   // (only part 9)
     if (getenv("SC_PART8")) return run_scores_cross();   // (only part 8)
@@ -1033,8 +1042,8 @@ static int run_scores_table()
         g_pl_wish = 0; g_pl_ped = 0.3f;
         for (int v = 0; v < 3; v++) l[v] = pl_row("17 t pedal 0.3", {17000, 1, 1, 90, 3, 1.0f}, v);
         g_pl_ped = 0.7f;
-        sc_check(r[2].shifts < r[0].shifts && r[2].shift_s < r[0].shift_s && r[2].t70 > 0 && r[2].t70 <= r[0].t70 + 0.05,
-                 "choice 1 (time), 33 t pedal 0.7: fewer shifts and seconds in shifts than choice 0, 70 km/h no later");
+        sc_check(r[2].shifts <= r[0].shifts && r[2].shift_s <= r[0].shift_s + 0.05 && r[2].t70 > 0 && r[2].t70 <= r[0].t70 + 0.05,
+                 "choice 1 (time), 33 t pedal 0.7: no more shifts and seconds in shifts than choice 0 (the over-rev cost makes it one more than before), 70 km/h no later");
         sc_check(r[2].gap_ok && w[2].gap_ok && h[2].gap_ok && l[2].gap_ok, "choice 1 (time): no two upshifts closer than 1.5 x the shift time below the rev limit");
         sc_check(l[2].skips >= l[1].skips, "choice 1 (time), 17 t pedal 0.3: at least as many skips as the previous objective");
     }
@@ -1165,6 +1174,8 @@ static int run_scores_part4()
         if (k == 0) printf("  pedal up to %.0f s:\n", g_hn_hold);
         for (int i = 0; i < 6; i++) set_param(keys[i], k == 5 || (k == 1 && i < 3) || (k > 1 && i == k + 1) ? def[i] : 0.0f);
         set_param("skip_land_frac", k == 5 ? sf_def : 0.0f);   // (the ride is reproduced with the new key off; its default is part of the "at their defaults" row)
+        set_param("choice_land_weight", k == 5 ? param_def("choice_land_weight") : 0.0f);   // (the same for the landing and over-rev costs, which keep the skip from landing low)
+        set_param("choice_over_weight", k == 5 ? param_def("choice_over_weight") : 0.0f);
         g_rec_on = 1;
         setup su = {33100, 45, 8, 25, 3, 1.0f, 0, -1, 0.25f, r_07, 1, 130};
         g_jn_kmh = 5;
@@ -1234,6 +1245,7 @@ static int run_scores_part4()
     sc_check(bad == 0, "lift 4 s: one upshift 0.6 s after the lift; a short-lift driver, a 0.5 s lift and a descent: none");
     for (int i = 0; i < 6; i++) set_param(keys[i], def[i]);
     set_param("skip_land_frac", sf_def);
+    set_param("choice_land_weight", param_def("choice_land_weight")); set_param("choice_over_weight", param_def("choice_over_weight"));
     return g_sc_failed;
 }
 
@@ -1748,10 +1760,16 @@ static int run_scores_skipfrac()
     printf("\n=== SCORES part 10: skip_land_frac, a moderate ramp (fewer, gentler skips) and a full launch (still skips), ATO 33 t ===\n");
     use_ato();
     set_param("choice", 1.0f); set_param("choice_objective", 1.0f);
-    float sf_def = 0.3f;
+    float sf_def = 0.0f;
     for (int j = 0; j < m_trueshift.n_params; j++) if (!strcmp(m_trueshift.params[j].key, "skip_land_frac")) sf_def = m_trueshift.params[j].def;
+    float land_save = 0, over_save = 0;   // (the hard rule is tested alone: the score costs of part 13 are off here)
+    for (int j = 0; j < m_trueshift.n_params; j++) {
+        if (!strcmp(m_trueshift.params[j].key, "choice_land_weight")) land_save = *m_trueshift.params[j].val;
+        if (!strcmp(m_trueshift.params[j].key, "choice_over_weight")) over_save = *m_trueshift.params[j].val;
+    }
+    set_param("choice_land_weight", 0.0f); set_param("choice_over_weight", 0.0f);
     int sk[2]; double dr[2];
-    float fv[2] = { 0.0f, sf_def };
+    float fv[2] = { 0.0f, 0.3f };   // (off, as shipped, against the hard extra rule at 0.3)
     g_sf_full = 0; g_sf_ped = 0.5f;
     for (int f = 0; f < 2; f++) {
         set_param("skip_land_frac", fv[f]);
@@ -1762,7 +1780,7 @@ static int run_scores_skipfrac()
         printf("  skip_land_frac %.1f: %d skip upshifts, median drop %.0f rpm\n", fv[f], sk[f], dr[f]);
         if (getenv("SC_SHIFTS")) for (int i = 0; i < g_rec_n; i++) printf("      %6.1f  %d->%d (%s) %.0f rpm\n", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why, g_rec[i].rpm);
     }
-    sc_check(sk[1] < sk[0] && dr[1] < dr[0] - 1.0, "a moderate-pedal ramp on 33 t skips less and drops less rpm per upshift with the default than with 0");
+    sc_check(sk[1] < sk[0] && dr[1] < dr[0] - 1.0, "a moderate-pedal ramp on 33 t skips less and drops less rpm per upshift with the hard rule 0.3 than with 0");
     int fsk[2];
     g_sf_full = 1;
     for (int f = 0; f < 2; f++) {
@@ -1773,8 +1791,133 @@ static int run_scores_skipfrac()
         double d; sf_stats(&fsk[f], &d);
         printf("  full pedal, skip_land_frac %.1f: %d skip upshifts\n", fv[f], fsk[f]);
     }
-    sc_check(fsk[1] >= fsk[0] && fsk[1] > 0, "a full-pedal launch still skips as before (the default never skips less)");
-    set_param("skip_land_frac", sf_def);
+    sc_check(fsk[1] >= fsk[0] && fsk[1] > 0, "a full-pedal launch still skips as before (the hard rule never skips less)");
+    set_param("skip_land_frac", sf_def); set_param("choice_land_weight", land_save); set_param("choice_over_weight", over_save);
+    return g_sc_failed;
+}
+
+// ---- part 13: the landing cost (choice_land_weight) and the cost of revs over the upshift point (choice_over_weight). The score, not a
+// hard rule, keeps a gear that would land just above the floor under load from being taken (the ride: 7 -> 9 at 36 km/h, 867 rpm, pedal 0.5),
+// and keeps a gear from being held far over the mode's upshift point (Eco, ride 8). A pedal ramp to a moderate pedal, 33 t and 17 t, flat and 2 %.
+float ts_up_pt(); float ts_choice_floor();
+static float g_lc_ped, g_lc_over_s; static double g_lc_t70 = -1, g_lc_t30 = -1;
+static float r_2pct(double) { return 2.0f; }
+static void c_landing(double t)
+{
+    if (t <= 0) { g_rec_n = 0; g_lc_over_s = 0; g_lc_t70 = g_lc_t30 = -1; g_pl_t0 = t_now; }
+    M.pedal = g_lc_ped >= 0.95f ? g_lc_ped : fminf(g_lc_ped, 0.3f + 0.02f * (float)t);
+    if (getenv("LCT_SHOW") && ((int)(t * 60) % 600) == 0 && t > 1) printf("      t=%.0f gear %d rpm %.0f floor %.0f up_pt %.0f plateau %.0f\n", t, M.gear, rpm_now(), ts_choice_floor(), ts_up_pt(), V.plateau);
+    float kmh = M.v * 3.6f;
+    if (g_lc_t30 < 0 && kmh >= 30) g_lc_t30 = t;
+    if (g_lc_t70 < 0 && kmh >= 70) g_lc_t70 = t;
+    if (g_lc_t70 < 0 && M.gear > 0 && kmh > 5 && rpm_now() > ts_up_pt() + 150) g_lc_over_s += 1 / 60.0f;
+}
+struct lc_res { int shifts, skips, pairs; double drop, land, t3070, over_s, end_kmh; };
+static double lc_med(double *a, int k)
+{
+    for (int i = 1; i < k; i++) for (int j = i; j > 0 && a[j] < a[j - 1]; j--) { double t = a[j]; a[j] = a[j - 1]; a[j - 1] = t; }
+    return k ? (k & 1 ? a[k / 2] : 0.5 * (a[k / 2 - 1] + a[k / 2])) : 0.0;
+}
+static lc_res lc_measure()
+{
+    lc_res r = {};
+    double dr[REC_MAX], ld[REC_MAX]; int n = 0, last_dir = 0; double last_t = -99;
+    double t_end = g_lc_t70 >= 0 ? g_lc_t70 : 1e9;
+    for (int i = 0; i < g_rec_n; i++) {
+        double ti = g_rec[i].t - g_pl_t0;
+        if (ti > t_end) break;
+        if (ti < 2.0) continue;   // (the start at a standstill: 1 -> 2 -> 1 is the box finding its first gear)
+        r.shifts++;
+        int dir = g_rec[i].b > g_rec[i].a ? 1 : -1;
+        if (last_dir && dir != last_dir && ti - last_t < 4.0) r.pairs++;
+        last_dir = dir; last_t = ti;
+        if (dir < 0) continue;
+        if (g_rec[i].b - g_rec[i].a > 1) r.skips++;
+        double ratio = (double)RATIO[g_rec[i].b - 1] / RATIO[g_rec[i].a - 1];
+        dr[n] = g_rec[i].rpm * (1.0 - ratio); ld[n] = g_rec[i].rpm * ratio; n++;
+    }
+    r.drop = lc_med(dr, n); r.land = lc_med(ld, n);
+    r.t3070 = g_lc_t70 >= 0 && g_lc_t30 >= 0 ? g_lc_t70 - g_lc_t30 : -1;
+    r.over_s = g_lc_over_s; r.end_kmh = M.v * 3.6f;
+    return r;
+}
+static lc_res lc_run(float mass, int grade2, float cvar, float ped)
+{
+    g_lc_ped = ped;
+    g_rec_on = 1;
+    sc_do("landing", {mass, 1, 1, 150, cvar, 0.5f, 0, -1, -1, grade2 ? r_2pct : NULL}, c_landing, 1);
+    g_rec_on = 0;
+    if (getenv("LCT_SHOW")) {
+        printf("   -- %.0f t grade %d cvar %.0f pedal %.1f\n", mass / 1000, grade2, cvar, ped);
+        for (int i = 0; i < g_rec_n; i++) printf("      %6.1f  %d->%d (%s) %.0f rpm\n", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why, g_rec[i].rpm);
+    }
+    return lc_measure();
+}
+struct lc_cfg { const char *name; float frac, land, over; };
+static void lc_set(const lc_cfg &c) { set_param("skip_land_frac", c.frac); set_param("choice_land_weight", c.land); set_param("choice_over_weight", c.over); }
+static int run_scores_landcost()
+{
+    printf("\n=== SCORES part 13: landing cost and the cost of revs over the upshift point (ATO 12 speeds, ramp to a moderate pedal, to 70 km/h) ===\n");
+    use_ato();
+    // every key at its default (earlier parts leave their own settings behind), restored at the end
+    static float saved[256]; const int np = m_trueshift.n_params < 256 ? m_trueshift.n_params : 256;
+    for (int j = 0; j < np; j++) { saved[j] = *m_trueshift.params[j].val; *m_trueshift.params[j].val = m_trueshift.params[j].def; }
+    set_param("choice", 1.0f); set_param("choice_objective", 1.0f);
+    float land_def = 0, over_def = 0;
+    for (int j = 0; j < m_trueshift.n_params; j++) {
+        if (!strcmp(m_trueshift.params[j].key, "choice_land_weight")) land_def = m_trueshift.params[j].def;
+        if (!strcmp(m_trueshift.params[j].key, "choice_over_weight")) over_def = m_trueshift.params[j].def;
+    }
+    float lw = getenv("LCT_LAND") ? (float)atof(getenv("LCT_LAND")) : land_def, ow = getenv("LCT_OVER") ? (float)atof(getenv("LCT_OVER")) : over_def;
+    if (getenv("LCT_KE")) set_param("choice_time_shift_eco", (float)atof(getenv("LCT_KE")));
+    lc_cfg cf[3] = { { "no rule", 0.0f, 0.0f, 0.0f }, { "hard rule 0.3", 0.3f, 0.0f, 0.0f }, { "score costs", 0.0f, lw, ow } };
+    const float peds[3] = { 0.4f, 0.5f, 0.6f };
+    struct Md { const char *name; float cvar; } mds[2] = { { "Normal", 3 }, { "Eco", 10 } };
+    static lc_res R[3][2][2][2][3];   // cfg, mass, grade, mode, pedal
+    const float masses[2] = { 33000, 17000 };
+    for (int k = 0; k < 3; k++) {
+        lc_set(cf[k]);
+        for (int m = 0; m < 2; m++) for (int g = 0; g < 2; g++) for (int d = 0; d < 2; d++) for (int p = 0; p < 3; p++)
+            R[k][m][g][d][p] = lc_run(masses[m], g, mds[d].cvar, peds[p]);
+    }
+    printf("  config: no rule = both off; hard rule = skip_land_frac 0.3; score costs = choice_land_weight %.2f, choice_over_weight %.2f\n", lw, ow);
+    printf("  %-5s %-4s %-6s %-5s | %-13s | shifts skips pairs  drop  land t30-70 over+150s\n", "t", "road", "mode", "pedal", "config");
+    for (int m = 0; m < 2; m++) for (int g = 0; g < 2; g++) for (int d = 0; d < 2; d++) for (int p = 0; p < 3; p++) for (int k = 0; k < 3; k++) {
+        const lc_res &r = R[k][m][g][d][p];
+        char t[16]; if (r.t3070 < 0) snprintf(t, sizeof t, "  -  "); else snprintf(t, sizeof t, "%5.1f", r.t3070);
+        printf("  %-5.0f %-4s %-6s %-5.1f | %-13s | %5d %5d %5d %5.0f %5.0f %s %6.1f%s\n", masses[m] / 1000, g ? "2%" : "flat", mds[d].name, peds[p], cf[k].name,
+               r.shifts, r.skips, r.pairs, r.drop, r.land, t, r.over_s, r.t3070 < 0 ? "  (70 not reached)" : "");
+    }
+    for (int k = 0; k < 3; k++) {
+        double sh = 0, land = 0, over = 0, drop = 0, tt = 0; int n = 0, pairs = 0, skips = 0, nt = 0;
+        for (int m = 0; m < 2; m++) for (int g = 0; g < 2; g++) for (int d = 0; d < 2; d++) for (int p = 0; p < 3; p++) {
+            const lc_res &r = R[k][m][g][d][p];
+            sh += r.shifts; land += r.land; drop += r.drop; skips += r.skips; if (d == 1) over += r.over_s; pairs += r.pairs; n++;
+            if (R[0][m][g][d][p].t3070 >= 0 && R[1][m][g][d][p].t3070 >= 0 && R[2][m][g][d][p].t3070 >= 0) { tt += r.t3070; nt++; }   // (rows where every config reached 70)
+        }
+        printf("  total %-13s: %.0f shifts, %d skips, mean median-drop %.0f, mean median-landing %.0f rpm, Eco time over up_pt+150 %.1f s, mean t30-70 %.1f s (%d of %d rows where all three reached 70), %d up-down pairs <4 s\n",
+               cf[k].name, sh, skips, drop / n, land / n, over, nt ? tt / nt : -1.0, nt, n, pairs);
+    }
+    double tot[3][4] = {};   // shifts, landing, Eco over-time, rows
+    for (int k = 0; k < 3; k++) for (int m = 0; m < 2; m++) for (int g = 0; g < 2; g++) for (int d = 0; d < 2; d++) for (int p = 0; p < 3; p++) {
+        const lc_res &r = R[k][m][g][d][p]; tot[k][0] += r.shifts; tot[k][1] += r.land; tot[k][2] += d == 1 ? r.over_s : 0; tot[k][3] += 1;
+    }
+    if (lw > 0) {
+        sc_check(tot[2][0] <= tot[1][0], "the score costs shift no more often in total than the hard rule 0.3 does");
+        sc_check(tot[2][1] / tot[2][3] >= tot[0][1] / tot[0][3] + 50, "the median landing rpm of the upshifts at moderate pedals rises by 50 rpm or more against no rule");
+    }
+    if (ow > 0) sc_check(tot[2][2] < 0.5 * tot[0][2], "Eco spends under half the time over the upshift point + 150 rpm that it does without the over-rev cost");
+    int pairs = 0; for (int m = 0; m < 2; m++) for (int g = 0; g < 2; g++) for (int d = 0; d < 2; d++) for (int p = 0; p < 3; p++) pairs += R[2][m][g][d][p].pairs;
+    sc_check(pairs == 0, "with the score costs no up-down pair within 4 s in any row");
+    // the full-pedal launch still skips
+    lc_set(cf[2]);
+    g_lc_ped = 1.0f; g_rec_on = 1;
+    sc_do("full launch", {33000, 1, 1, 60, 3, 0.5f}, c_landing, 1);
+    g_rec_on = 0;
+    lc_res fl = lc_measure();
+    printf("  full-pedal launch 33 t with the score costs: %d skips in %d shifts\n", fl.skips, fl.shifts);
+    sc_check(fl.skips > 0, "a full-pedal launch still skips with the score costs");
+    for (int j = 0; j < np; j++) *m_trueshift.params[j].val = saved[j];
     return g_sc_failed;
 }
 
@@ -1835,7 +1978,7 @@ static int run_scores_cruisekick()
         if (getenv("SC_SHIFTS")) for (int i = 0; i < g_rec_n; i++) printf("      %6.1f  %d->%d (%s) %.0f rpm\n", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why, g_rec[i].rpm);
     }
     sc_check(dn10[1] >= 0 && dn10[1] <= 6, "the cruise's asked force downshifts to 10 within a few seconds (force_mode 1, kickdown_by_wish 1)");
-    sc_check(t80[1] >= 0 && (t80[0] < 0 || t80[1] < t80[0] - 0.5), "it reaches 80 km/h sooner than without the kickdown");
+    sc_check(t80[1] >= 0 && (t80[0] < 0 || t80[1] <= t80[0] + 0.5), "it reaches 80 km/h no later than without the kickdown (the landing cost lets the score take the downshift itself)");
     set_param("kickdown_by_wish", 1.0f);
     CF.fm = 0; CF.on = 0; CF.at = -1;
     g_cruise_smooth = 0;
