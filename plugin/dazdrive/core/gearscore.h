@@ -63,6 +63,7 @@ struct gs_cfg {
     int time_obj;      // 1 = an upshift goes to the gear that gains speed soonest (see above), 0 = to the best score
     float a_min;       // time_obj: m/s2 a gear that is short of the demand must still give at full throttle (only when at least this much is asked)
     float k_shift;     // time_obj: a second in a shift counts this many seconds of driving
+    float floor_idle_frac;   // with floor_pw: the floor is at least idle + this share of (plateau - idle) (0 = the power term alone)
     float floor_pw;    // > 0: the floor is the lowest rpm with this share of the peak power (gs_power_rpm) instead of plateau + floor, also checked right after an upshift (0 where floor is 0)
     float v_cap;       // > 0: m/s the route allows ahead; the speeds the demand is followed to (later shifts, the floor's look ahead for a gear up) stop there
 };
@@ -109,6 +110,15 @@ static inline float gs_power_rpm(float share, float idle)
     float want = fminf(share, 1.0f) * pk - 1e-3f;
     for (float r = idle; r <= lim; r += 5) if (curve_factor(&V.eng, r) * r >= want) return r;
     return idle;
+}
+
+// The floor of choice_floor_power*: the higher of the lowest rpm with that share of the peak power and a distance above idle that is a share of
+// the engine's own span (idle + frac x (plateau - idle)), so an engine with a high plateau does not get a floor that sits close to idle.
+// frac 0 = the power term alone. (floor_idle_frac)
+static inline float gs_floor_rpm(float share, float idle, float frac)
+{
+    float r = gs_power_rpm(share, idle);
+    return frac > 0 ? fmaxf(r, idle + frac * fmaxf(0.0f, V.plateau - idle)) : r;
 }
 
 // time_obj: seconds from v0 in gear g (just shifted into) to v_t at the demanded acceleration a_d, capped per gear at full throttle; at the
@@ -171,7 +181,7 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
     // shift (hence the hysteresis too). The caller sets floor 0 where the window must stay low (coasting for a while, engine brake).
     // (floor_pw: the lowest rpm with that share of the peak power instead; a gear up must stand on it right after the shift as well, and
     // the route's cap holds the look ahead of a gear up, so a skip does not rest on a speed the route says the truck will not reach)
-    float r_min = c.floor_pw > 0 ? gs_power_rpm(c.floor_pw, idle) : c.floor > 0 ? plateau + c.floor : 0, v_floor = v + a_d * 3 * c.horizon;
+    float r_min = c.floor_pw > 0 ? gs_floor_rpm(c.floor_pw, idle, c.floor_idle_frac) : c.floor > 0 ? plateau + c.floor : 0, v_floor = v + a_d * 3 * c.horizon;
     float v_floor_up = c.v_cap > 0 ? fminf(v_floor, fmaxf(c.v_cap, 0.5f)) : v_floor;
     // (the hysteresis a gear up must stand above the floor: the plateau floor has it; the power floor is the driver's own number, a gear lands on it as it is)
     const float f_hyst = c.floor_pw > 0 ? 0.0f : c.hyst;

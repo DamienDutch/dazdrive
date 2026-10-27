@@ -1101,6 +1101,26 @@ static int run_scores_part4()
         printf("    (for comparison, the shares 0.725 / 0.775 / 0.825 on this engine: %.0f / %.0f / %.0f rpm)\n", gs_power_rpm(0.725f, id), gs_power_rpm(0.775f, id), gs_power_rpm(0.825f, id));
         sc_check(gs_power_rpm(def[0], id) < gs_power_rpm(def[1], id) && gs_power_rpm(def[1], id) < gs_power_rpm(def[2], id) && gs_power_rpm(def[1] + vd, id) > gs_power_rpm(def[1], id), "the floor rises from Eco to Normal to Power, and while the pedal varies");
     }
+    {   // the floor is the higher of the power term and a distance above idle that is a share of the engine's span (choice_floor_idle_frac)
+        float fr = 0.5f;
+        for (int j = 0; j < m_trueshift.n_params; j++) if (!strcmp(m_trueshift.params[j].key, "choice_floor_idle_frac")) fr = m_trueshift.params[j].def;
+        printf("\n  the floor rpm of choice 1 = max(power term, idle + %.2f x (plateau - idle)), per engine and mode:\n", fr);
+        printf("    %-22s %6s %7s  %-7s %11s %11s %7s\n", "engine", "idle", "plateau", "mode", "power term", "idle term", "floor");
+        struct Eg { const char *name; void (*use)(); } egs[2] = { { "Renault DE13 (ATO)", use_ato }, { "Volvo (2400 Nm)", use_volvo } };
+        float res[2][3];
+        for (int e = 0; e < 2; e++) {
+            egs[e].use(); sc_prime(17000, 1, 45, 8);
+            float id = ts_idle_rpm();
+            for (int i = 0; i < 3; i++) {
+                float pt = gs_power_rpm(def[i], id), it = id + fr * fmaxf(0.0f, V.plateau - id), f = gs_floor_rpm(def[i], id, fr);
+                res[e][i] = f;
+                printf("    %-22s %6.0f %7.0f  %-7s %11.0f %11.0f %7.0f\n", egs[e].name, id, V.plateau, i == 0 ? "Eco" : i == 1 ? "Normal" : "Power", pt, it, f);
+                sc_check(f >= pt - 0.5f && f >= it - 0.5f && (f == pt || f == it), "the floor is the higher of the two terms");
+            }
+        }
+        sc_check(res[0][0] <= res[0][1] && res[0][1] <= res[0][2] && res[1][0] <= res[1][1] && res[1][1] <= res[1][2], "the floor rises from Eco to Normal to Power on both engines");
+        use_ato(); sc_prime(17000, 1, 45, 8);
+    }
     // 1. the hunt of the ride, with the new keys off (as before) and at their defaults
     printf("\n  the ride's hunt: 33.1 t, 0.7 %%, a turn 130 m ahead (5 km/h); in 8 at 45 km/h the engine brake 0.25, an assist brake the telemetry\n"
            "  does not show to 33 km/h, pedal 0.45, then a lift with the engine brake 0.25 (2.5 s after an upshift, else after 7 s; then 10 s)\n");

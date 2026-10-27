@@ -30,7 +30,7 @@ static float p_eco_ceil, p_mode_char, p_enabled, p_takeover, p_on_kmh, p_off_kmh
     p_eb_down, p_eb_light, p_eb_skip, p_m_style, p_m_lug, p_letter, p_start_fix, p_launch_max, p_slip_s, p_launch_torque, p_launch_rpm,
     p_idle, p_trace, p_lookahead, p_roll, p_roll_cruise, p_roll_cruise_min, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_stop, p_tones, p_crest_band, p_relax,
     p_choice, p_ch_eco, p_ch_norm, p_ch_power, p_ch_rpm, p_ch_shift, p_ch_stay, p_ch_stay_pw, p_ch_floor,
-    p_ch_obj, p_ch_amin, p_ch_ts_eco, p_ch_ts_norm, p_ch_ts_pw, p_ch_upwait, p_ch_flip, p_ch_pw_eco, p_ch_pw_norm, p_ch_pw_pw, p_ch_pw_var,
+    p_ch_obj, p_ch_amin, p_ch_ts_eco, p_ch_ts_norm, p_ch_ts_pw, p_ch_upwait, p_ch_flip, p_ch_pw_eco, p_ch_pw_norm, p_ch_pw_pw, p_ch_pw_var, p_ch_fl_idle,
     p_ch_own_brake, p_ch_route_cap, p_lift_up, p_lift_delay;
 
 static param g_params[] = {
@@ -66,6 +66,7 @@ static param g_params[] = {
     { "choice_floor_power_eco", &p_ch_pw_eco, 0.64f, "choice 1, Eco: under load the revs stay at or above the lowest rpm where the engine still gives this share of its peak power (torque times rpm, read from its torque curve), also right after an upshift: the power in hand for the next push. Replaces choice_floor_rpm. 0 = choice_floor_rpm" },
     { "choice_floor_power", &p_ch_pw_norm, 0.69f, "choice 1, Normal: the same" },
     { "choice_floor_power_power", &p_ch_pw_pw, 0.74f, "choice 1, Power: the same" },
+    { "choice_floor_idle_frac", &p_ch_fl_idle, 0.5f, "choice 1: the floor of choice_floor_power* is at least this share of the way from idle up to the start of the torque plateau, so an engine with a high plateau keeps a floor of its own span and not one near idle. 0 = the power share alone" },
     { "choice_floor_power_varied", &p_ch_pw_var, 0.025f, "choice 1: added to the share above while the driver's pedal has been varying over the last 10 s (standard deviation of the pressed pedal over 0.05; lifts do not count): more power in hand for the next push. 0 = off" },
     { "choice_own_brake", &p_ch_own_brake, 1, "choice 1: 1 = the pause of upshifts after a brake (6 s below 60 km/h) also follows the brake requests of the suite itself (deceleration assist, ACC), not only the brake the game reports. 0 = only the game's brake" },
     { "choice_route_cap", &p_ch_route_cap, 1, "choice 1 with the route look-ahead: 1 = the speeds the scores look ahead to stop at what the route allows ahead (bends, junctions), so no upshift is chosen for a speed the truck will not reach before it slows. 0 = off" },
@@ -758,7 +759,7 @@ static void refresh(void *self)
         if (varied != S.varied && p_choice > 0 && p_ch_pw_var > 0) {
             float base = by_mode(p_ch_pw_eco, p_ch_pw_norm, p_ch_pw_pw), share = fminf(1.0f, base + (varied ? p_ch_pw_var : 0.0f));
             if (base > 0 && V.eng_ok)
-                logv(2, "choice floor: the pedal %s (sd %.3f over 10 s): %.0f rpm, %.3f of the peak power", varied ? "varies" : "is steady", sd, gs_power_rpm(share, idle_rpm()), share);
+                logv(2, "choice floor: the pedal %s (sd %.3f over 10 s): %.0f rpm, %.3f of the peak power", varied ? "varies" : "is steady", sd, gs_floor_rpm(share, idle_rpm(), p_ch_fl_idle), share);
         }
         S.varied = varied;
     }
@@ -1075,6 +1076,7 @@ static gs_cfg score_cfg(int skips, int skips_up, int skips_later, int low_edge, 
     c.a_min = p_ch_amin;
     c.k_shift = by_mode(p_ch_ts_eco, p_ch_ts_norm, p_ch_ts_pw);
     c.floor_pw = low_edge ? 0 : floor_share();
+    c.floor_idle_frac = p_ch_fl_idle;
     c.v_cap = v_cap;
     return c;
 }
@@ -1426,7 +1428,7 @@ static int decide_gear(void *self, int *why)
         if (p_lift_up > 0 && coast_p && T.cruise < 0.5f && S.lift_at > 0 && S.lift_used != S.lift_at && now - S.lift_at >= p_lift_delay && cur < n &&
             lift_median() > V.eng.shift_time + 0.5f && grade_pct() > -1.0f && act_request() <= 0 && !ebrake && T.accel > -0.5f && !(jn >= 0 && jn < v * 6)) {
             float vb6 = rk ? route_curve_speed(2.5f, fmaxf(0.3f, v / 12)) : NAN;
-            float fs = floor_share(), fl = fs > 0 ? gs_power_rpm(fs, idle_rpm()) : V.plateau + p_ch_floor;
+            float fs = floor_share(), fl = fs > 0 ? gs_floor_rpm(fs, idle_rpm(), p_ch_fl_idle) : V.plateau + p_ch_floor;
             if (!(vb6 == vb6 && vb6 < v - 0.7f)) {
                 for (int g = cur + 1; g <= n && g <= GS_MAX; g++) {
                     const gs_term &t = so.t[g];
