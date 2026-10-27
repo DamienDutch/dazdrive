@@ -34,7 +34,8 @@ static float p_eco_ceil, p_mode_char, p_enabled, p_takeover, p_on_kmh, p_off_kmh
     p_idle, p_trace, p_lookahead, p_roll, p_roll_cruise, p_roll_cruise_min, p_roll_dec, p_roll_dec_eco, p_roll_min_eco, p_roll_under, p_roll_under_eco, p_roll_under_pw, p_roll_boost, p_calm, p_skip_over, p_kick_dwell, p_load_from, p_launch_fix, p_ret_down, p_air_psi, p_air_rpm, p_no_creep, p_stop, p_tones, p_crest_band, p_relax,
     p_choice, p_ch_eco, p_ch_norm, p_ch_power, p_ch_rpm, p_ch_shift, p_ch_stay, p_ch_stay_pw, p_ch_floor,
     p_ch_obj, p_ch_amin, p_ch_ts_eco, p_ch_ts_norm, p_ch_ts_pw, p_ch_upwait, p_ch_flip, p_ch_pw_eco, p_ch_pw_norm, p_ch_pw_pw, p_ch_pw_var, p_ch_fl_idle, p_pw_cross,
-    p_ch_own_brake, p_ch_route_cap, p_lift_up, p_lift_delay;
+    p_ch_own_brake, p_ch_route_cap, p_lift_up, p_lift_delay,
+    p_kw, p_kr_eco, p_kr_norm, p_kr_pw, p_kl_eco, p_kl_norm, p_kl_pw;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 1, "1 = TrueShift on, 0 = the game's own automatic" },
@@ -81,6 +82,13 @@ static param g_params[] = {
     { "load_down_from", &p_load_from, 0.75f, "on a climb: a gear that needs this share of its full-throttle force to hold the speed (and the speed falls under real throttle) gets its downshift point raised towards the torque plateau (1 = off; a gear that cannot hold it at all downshifts at once anyway)" },
     { "skip_wait_over_rpm", &p_skip_over, 400, "skip_wait_s: how far over the upshift point the revs may build up while waiting for a skip (rpm; never above 85 % of the limit)" },
     { "kick_dwell_s", &p_kick_dwell, 5, "after a kickdown or lugging downshift no upshift for this long, unless clearly past the upshift point (the rpm path, not the rev limit)" },
+    { "kickdown_by_wish", &p_kw, 1, "choice 1 with the wish pedal ([pedal] wish) and choice_objective 1: the kickdown is the driver's dissatisfaction, not a flat pedal. The ratio of the force the pedal wishes to the force this gear gives at full throttle now is held (the gear stays as long as it is 1 or less: the wish pedal just opens the throttle further); over kick_ratio the excess adds up, and past kick_level the gear that can give the wish and scores best is taken, whatever the dwell times say. A fast press halves what is left; right after an upshift only a large shortage counts; a flat pedal with the ratio over kick_ratio kicks down at once. 0 = the kickdown rule of kickdown_pedal and kickdown_rate, as without the wish pedal" },
+    { "kick_ratio_eco", &p_kr_eco, 1.05f, "kickdown_by_wish, Eco: the wished force over the force this gear gives at full throttle, above which the dissatisfaction adds up (1 = the gear just gives the wish; the margin is for the error of the vehicle model)" },
+    { "kick_ratio", &p_kr_norm, 1.05f, "kickdown_by_wish, Normal: the same" },
+    { "kick_ratio_power", &p_kr_pw, 1.05f, "kickdown_by_wish, Power: the same" },
+    { "kick_level_eco", &p_kl_eco, 0.15f, "kickdown_by_wish, Eco: the dissatisfaction (excess over kick_ratio, summed over seconds) at which the kickdown comes. The default is 3 s at a 10 % shortage and 0.4 s at 40 %; the pedal pressed fast halves what is left" },
+    { "kick_level", &p_kl_norm, 0.05f, "kickdown_by_wish, Normal: the same (default: 1 s at a 10 % shortage, 0.14 s at 40 %)" },
+    { "kick_level_power", &p_kl_pw, 0.015f, "kickdown_by_wish, Power: the same (default: 0.3 s at a 10 % shortage, 0.04 s at 40 %)" },
     { "skip_wait_s", &p_skip_wait, 6, "pulling lightly: wait up to this long for the revs to build up so a skip can land (0 = shift one gear at once)" },
     { "skip_relax_rpm", &p_relax, 80, "pulling lightly at low speed: a skip may land up to this much lower (rpm), never under the downshift point plus hysteresis_rpm. Full below pedal 0.40 or under 20 km/h at any pedal, fading out by pedal 0.65 and from 45 to 75 km/h (0 = off)" },
     { "hysteresis_rpm", &p_hyst, 50, "an upshift must land at least this far above the next downshift point" },
@@ -213,6 +221,7 @@ static float g_learn_mass;
     X(W_M_LUGGING, "M: lugging") \
     X(W_UP_WAIT, "up wait") \
     X(W_LIFT_UP, "up on lift") \
+    X(W_WISH_UP, "wish unmet above") \
     X(W_ASSIST_DOWN, "braking assist") \
     /* end */
 enum why_e {
@@ -239,6 +248,12 @@ static struct {
     float pedal_prev;
     double pedal_at;
     double kick_until;
+    float wk_d;             // kickdown_by_wish: the dissatisfaction (excess of the wish over the gear, summed over time)
+    float wk_r;             // and the ratio of now (wished force over the force this gear gives at full throttle); wk_on: the wish pedal gives the throttle this frame
+    int wk_on, wk_fast;     // wk_fast: a fast press has already halved the level
+    double wk_until;        // the kickdown is due (set by the trigger, ends with the shift, 3 s, or the pedal lifting)
+    double wk_retry;        // no new trigger before this time (no gear could give the wish)
+    double wk_pt; float wk_pp;   // the pedal 0.05 s or more ago, for its speed
     int mode;
     int ours;               // above the takeover speed (with hysteresis)
     double ours_at;
@@ -586,6 +601,7 @@ static void ts_reset(int level, const char *why)
     double none = -1e9;
     g_reset_at = sim_s();
     S.hold_until = S.kick_until = 0;
+    S.wk_d = 0; S.wk_on = S.wk_fast = 0; S.wk_until = S.wk_retry = 0; S.wk_pt = 0;
     S.demand_at = S.pedal_at = 0;           // the next dt is "unknown": filters step, no kickdown from a stale pedal
     S.ours_at = S.shift_at = none;          // dwell and take-over timers must not hold a shift back after a pause
     S.top_at = none; S.crest_ref = 0; S.crest_said = 0;  // no "over the top" hold across a teleport
@@ -620,6 +636,37 @@ static void ts_reset(int level, const char *why)
         S.roll_exit = 0;
         g_rolling = 0;
     }
+}
+
+// kickdown_by_wish (choice 1, choice_objective 1, the wish pedal giving the throttle): the kickdown as the driver's dissatisfaction. Once per frame.
+// r = the force the pedal wishes / the force this gear gives at full throttle now. r <= 1: the gear holds (the wish pedal just opens the throttle
+// further). D adds up max(0, r - kick_ratio) x dt, falls when r is under kick_ratio, and a kickdown is due at D >= kick_level. A fast press
+// (over kickdown_rate, per mode) halves what is left of the level, once per press. Right after an upshift (choice_flip_s) only r >= kick_ratio + 0.3
+// may trigger. A flat pedal (kickdown_pedal, per mode) with r over kick_ratio triggers at once: the old rule's last resort. decide_gear takes the gear.
+static void wish_kick_update(int g, float v, float pedal, double dt, double now)
+{
+    if (!(dt > 0)) return;   // (refresh runs more than once per frame: a call without time passed changes nothing)
+    S.wk_on = 0;
+    double pdt = now - S.wk_pt;
+    float rate = 0;
+    if (pdt > 0.05 && pdt < 0.5) rate = (float)((pedal - S.wk_pp) / pdt);
+    if (pdt > 0.05) { S.wk_pp = pedal; S.wk_pt = now; }
+    float fw = p_kw > 0 && p_choice > 0 && p_ch_obj > 0 && S.mode != MODE_M && S.ours && g > 0 && V.eng_ok && !V.electric ? pedal_wish_force(v) : -1.0f;
+    float fg = g > 0 && V.eng_ok ? vehicle_force_at(g, v, 1.0f) : 0.0f;
+    if (!(fw >= 0) || !(fg > 1)) { S.wk_d = 0; S.wk_fast = 0; S.wk_until = 0; return; }
+    const float thr = by_mode(p_kr_eco, p_kr_norm, p_kr_pw), level = fmaxf(0.0f, by_mode(p_kl_eco, p_kl_norm, p_kl_pw));
+    const float r = fw / fg;
+    S.wk_on = 1;
+    S.wk_r = r;
+    if (r > thr) S.wk_d = fminf(2 * level, S.wk_d + (r - thr) * (float)dt);
+    else S.wk_d = fmaxf(0.0f, S.wk_d - level / 1.5f * (float)dt);
+    // a fast press (rate over kickdown_rate) that the gear does not give: half of what is left of the level, once per press
+    if (rate < 0.8f * by_mode(2.5f, p_kick_rate, 1.0f)) S.wk_fast = 0;
+    else if (rate > by_mode(2.5f, p_kick_rate, 1.0f) && r > thr && !S.wk_fast) { S.wk_fast = 1; S.wk_d += 0.5f * fmaxf(0.0f, level - S.wk_d); }
+    if (r > thr && pedal >= by_mode(0.97f, p_kick_pedal, 0.85f)) S.wk_d = fmaxf(S.wk_d, level);
+    if (pedal < 0.3f) S.wk_until = 0;
+    bool after_up = S.shift_dir > 0 && now - S.shift_at < p_ch_flip;
+    if (S.wk_d >= level && r > thr && now >= S.wk_retry && !(after_up && r < thr + 0.3f) && S.wk_until <= now) S.wk_until = now + 3;
 }
 
 static void refresh(void *self)
@@ -796,10 +843,11 @@ static void refresh(void *self)
     }
 
     // Kickdown: the pedal pressed past kickdown_pedal quickly. Armed for 3 s
-    // (cleared by the kickdown shift itself or by lifting below 0.8).
+    // (cleared by the kickdown shift itself or by lifting below 0.8). With kickdown_by_wish and the wish pedal on the wish decides instead
+    wish_kick_update(g, v, pedal, dt, now);
     double pdt = now - S.pedal_at;
     if (pdt > 0.05) {
-        if (pdt < 0.5) {
+        if (pdt < 0.5 && !S.wk_on) {
             float rate = (float)((pedal - S.pedal_prev) / pdt);
             float kp = by_mode(0.97f, p_kick_pedal, 0.85f), kr = by_mode(2.5f, p_kick_rate, 1.0f);
             if (pedal >= kp && S.pedal_prev < kp && rate >= kr) S.kick_until = now + 3;
@@ -808,7 +856,7 @@ static void refresh(void *self)
         S.pedal_at = now;
     }
     if (pedal < 0.8f) S.kick_until = 0;
-    if (S.kick_until > now) S.demand = 1;
+    if (S.kick_until > now || S.wk_until > now) S.demand = 1;
 
     learn_fade(v * (float)dt);
     // A stop ends the test of the last upshift: a hint after it is about the new launch (Damien 11-10, 1302-1311 s:
@@ -1156,7 +1204,7 @@ static int decide_gear(void *self, int *why)
     // lift-off by the pedal itself: the game's throttle reads 0.08 at pedal 0 (24-10, 1831 s), which hid the coast and the junction check
     int coast_p = (T.cruise > 0.5f ? thr : clampf(T.in_thr, 0, 1)) < 0.05f;
     double since = now - S.shift_at;
-    int kick = S.kick_until > now;
+    int kick = S.kick_until > now || S.wk_until > now;
     S.up_pt = up_pt(cur);
     S.dn_pt = dn_pt(cur);
     S.floor_rpm = 0;
@@ -1175,7 +1223,7 @@ static int decide_gear(void *self, int *why)
     if (rpm < idle_rpm() + ioff(120) && cur > 1) { *why = W_STALL; return pick_down(cur, v, eco_dn(1) + 300); }
 
     // not right after a launch shift (ts4o: 1->3 by the game at 10 km/h with the pedal floored, then 3->2->3)
-    if (kick && rpm < V.eng.range[R_POWER][0] + 100 && cur > 1 && since > 2.0 && clutch_seen() < 0.1f && v * 3.6f > 15) {
+    if (kick && !S.wk_on && rpm < V.eng.range[R_POWER][0] + 100 && cur > 1 && since > 2.0 && clutch_seen() < 0.1f && v * 3.6f > 15) {
         int l = pick_down(cur, v, pw_mid() + 100);
         // never into a gear that is at its upshift point a moment later (ts3a: 3->2->3 at 13 km/h)
         while (l < cur && rpm_at(l, v) > V.eng.range[R_POWER][1] - 100) l++;
@@ -1426,6 +1474,29 @@ static int decide_gear(void *self, int *why)
         }
         // (no skipping with the pedal off, and no skip up on a climb of 1.5 % and more (the upshift path: 2 %): the gear skipped to had no pull later)
         gs_eval(&so, cur, n, v, need, f_hold, coast_p, score_cfg(coast_p ? 0 : skips, coast_p || grade > 0.015f ? 0 : skips, grade > 0.015f ? 0 : skips_free, ebrake || (coast_p && S.demand < 0.05f), coast_p, clampf(T.in_thr, 0, 1), v_cap));
+        // kickdown_by_wish: the kickdown is due (wish_kick_update). Of the lower gears the window and the floor let in that can give more than
+        // this one, the best score, whatever the dwell times say (the stall rule and the limiter came before, and the window keeps the revs under
+        // the limit). Nothing to take: no new trigger for a second
+        if (S.wk_on && S.wk_until > now && since > 0.3 && clutch_seen() < 0.1f) {
+            int kg = 0;
+            float fc = vehicle_force_at(cur, v, 1.0f), bs = -1e30f;
+            for (int g2 = cur - 1; g2 >= 1; g2--) {
+                const gs_term &t = so.t[g2];
+                if (!t.g || !t.ok || !(vehicle_force_at(g2, v, 1.0f) > fc * 1.02f) || t.rpm > so.hi_g[g2] - 200) continue;   // (not into a gear that is out of the window's top in a second or two)
+                if (t.score > bs) { bs = t.score; kg = g2; }
+            }
+            if (kg) {
+                *why = W_KICKDOWN;
+                static double said;
+                if (now - said > 0.5 || now < said) {
+                    said = now;
+                    logv(2, "kickdown by wish %d->%d: the pedal wishes %.0f N, gear %d gives %.0f N at full throttle (ratio %.2f, dissatisfaction %.3f, level %.3f); gear %d gives %.0f N (%.0f km/h, pedal %.2f)",
+                         cur, kg, f_wish, cur, fc, S.wk_r, S.wk_d, by_mode(p_kl_eco, p_kl_norm, p_kl_pw), kg, vehicle_force_at(kg, v, 1.0f), v * 3.6f, T.in_thr);
+                }
+                return kg;
+            }
+            S.wk_until = 0; S.wk_d = 0; S.wk_retry = now + 1;
+        }
         int w = so.best;
         // lift_upshift: the pedal off for lift_up_delay_s, and this driver's lifts usually outlast the shift: the gear up the scores prefer
         // now, not when the pedal comes back (one per lift). Also a gear up that only its shift cost keeps out. Not on a descent, not while
@@ -1501,6 +1572,8 @@ static int decide_gear(void *self, int *why)
                 else if (p_ch_obj > 0 && S.shift_dir < 0 && since < p_ch_flip && rpm < so.hi - 100) ret = cur, why_v = W_ANTI_HUNT_UP;
                 else if (p_ch_obj > 0 && p_ch_upwait > 0 && S.shift_dir > 0 && !forced && since < fmaxf(1.5f, p_ch_upwait) * V.eng.shift_time &&
                          rpm < so.hi - 100) ret = cur, why_v = W_UP_WAIT;
+                // (kickdown_by_wish: no upshift into a gear that would not give the wish: the kickdown would take it back a moment later)
+                else if (S.wk_on && !forced && f_wish >= 0 && f_wish > by_mode(p_kr_eco, p_kr_norm, p_kr_pw) * vehicle_force_at(w, v, 1.0f)) ret = cur, why_v = W_WISH_UP;
                 else if (!forced && !steady_up && w != lift_g) {
                     ret = cur, why_v = W_HOLD;
                     // which of the steady conditions failed (for the veto line below)
@@ -1678,7 +1751,7 @@ static void note_gear_change(void *self)
     S.shift_dir = g > prev ? 1 : -1;
     S.shift_at = now;
     S.last_gear = g;
-    if (S.cmd_why == W_KICKDOWN) S.kick_until = 0;
+    if (S.cmd_why == W_KICKDOWN) { S.kick_until = 0; S.wk_until = 0; S.wk_d = 0; }
     if (g < prev && g > 0 && (S.cmd_why == W_KICKDOWN || S.cmd_why == W_LUGGING)) S.kd_at = now;
     int hint = prev > 0 && g > 0 && g != S.commanded && S.ours;
     int why = hint ? W_HINT : g == S.commanded ? S.cmd_why : W_GAME;
