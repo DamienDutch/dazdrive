@@ -597,6 +597,25 @@ static float lat_scale(float v_ms)
     return r > 4.0f / 3.25f ? 4.0f / 3.25f : r;
 }
 
+// How far the route stays straight: the distance (m) up to which the heading of the route (chords of two samples, 50 m) stays within
+// max_turn radians of the heading right now. The whole length of the profile when it never leaves it; -1 when there is no route.
+float route_straight_m(float max_turn)
+{
+    if (!R.ok || R.n < 5) return -1;
+    float h0 = NAN;
+    for (int i = 2; i < R.n; i++) {
+        float dx = R.x[i] - R.x[i - 2], dz = R.z[i] - R.z[i - 2];
+        if (dx * dx + dz * dz < 1) continue;
+        float h = atan2f(dx, dz);
+        if (h0 != h0) { h0 = h; continue; }
+        float d = h - h0;
+        while (d > 3.14159265f) d -= 6.2831853f;
+        while (d < -3.14159265f) d += 6.2831853f;
+        if (fabsf(d) > max_turn) return (float)((i - 1) * STEP);
+    }
+    return (float)((R.n - 1) * STEP);
+}
+
 float route_bend_speed(float a_lat, float a_dec)
 {
     if (!R.ok || R.n < 5) return NAN;

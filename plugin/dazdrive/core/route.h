@@ -16,6 +16,7 @@ float route_valley_m(float max_d);      // a dip: distance to the lowest point w
 float route_junction_m();                        // distance to the EXIT node of the next prefab (junction/roundabout) on the route; -1 if none
 int route_junction_known(float dist);            // is the prefab whose exit is dist m ahead one of the junctions read? 1 yes, 0 no, -1 we are inside it
 void route_junction_dump(char *buf, size_t n);   // what the junction reading holds, for a log line
+float route_straight_m(float max_turn);             // how far ahead the route's heading stays within max_turn rad of the heading now (m); -1 if there is no route
 float route_bend_speed(float a_lat, float a_dec);   // m/s allowed now for the road's own bends ahead (no junctions); NAN if unknown
 float route_curve_speed(float a_lat, float a_dec, float a_dec_jn = -1);  // a_dec_jn: junctions planned with this (< 0 = a_dec)  // m/s allowed now for the bends ahead; NAN if unknown
 
