@@ -637,6 +637,7 @@ static int run_scores_skipfrac();
 static int run_scores_limiter();
 static int run_scores_landcost();
 static int run_scores_cruisekick();
+static int run_scores_holdcap();
 static int run_scores()
 {
     printf("\n=== SCORES part 1: the score function on the vehicle model (Renault ATO 12 speeds, diff 3.08) ===\n");
@@ -645,6 +646,7 @@ static int run_scores()
     if (g_sc_failed |= run_scores_landcost()) printf("  (part 13 first: it needs the vehicle as use_ato leaves it, before the other parts change the settings)\n");
     use_ato();
     if (getenv("SC_PART9")) return run_scores_kickwish();   // (only part 9)
+    if (getenv("SC_PART14")) return run_scores_holdcap();   // (only part 14)
     if (getenv("SC_PART8")) return run_scores_cross();   // (only part 8)
     if (getenv("SC_PART7")) return run_scores_engine();   // (only part 7)
     if (getenv("SC_PART6")) return run_scores_approach();   // (only part 6; SC_VERBOSE=1 with -v prints the module log)
@@ -744,6 +746,7 @@ static int run_scores()
     r |= run_scores_skipfrac();
     r |= run_scores_limiter();
     r |= run_scores_cruisekick();
+    r |= run_scores_holdcap();
     return r | g_sc_failed;
 }
 
@@ -1983,6 +1986,51 @@ static int run_scores_cruisekick()
     set_param("kickdown_by_wish", 1.0f);
     CF.fm = 0; CF.on = 0; CF.at = -1;
     g_cruise_smooth = 0;
+    return g_sc_failed;
+}
+
+// ---- part 13: a held gear may not rev past the upshift point (ride 8: 13 s in 9 at 1510 rpm, up_pt 1230).
+// The junction hold (both choices) and the choice-1 'lifting' hold keep the gear only up to up_pt + hysteresis;
+// past that the normal choice upshifts. A truck that is actually braking for the junction still holds its gear.
+static void c_hc_junction(double t)   // 61 km/h in 9, pedal 0.17, a junction 70 m ahead whose speed is lower
+{
+    if (t <= 0) { g_rec_n = 0; g_pl_t0 = t_now; }
+    M.pedal = 0.17f;
+}
+static void c_hc_lift(double t)   // 61 km/h in 9, full pedal (the takeover dwell holds 9), then lift 0.99 -> 0.17
+{
+    if (t <= 0) { g_rec_n = 0; g_pl_t0 = t_now; }
+    M.pedal = t < 1.5 ? 0.99f : 0.17f;
+}
+static void c_hc_brake(double t)   // 61 km/h in 9, actually braking for the junction
+{
+    if (t <= 0) { g_rec_n = 0; g_pl_t0 = t_now; }
+    M.pedal = 0;
+    M.brake = 0.25f;
+}
+static double hc_first_up()   // seconds from the scenario start to the first upshift (-1 = none)
+{
+    for (int i = 0; i < g_rec_n; i++) if (g_rec[i].b > g_rec[i].a) return g_rec[i].t - g_pl_t0;
+    return -1;
+}
+static int run_scores_holdcap()
+{
+    printf("\n=== SCORES part 14: a held gear may not rev past the upshift point (Eco, ATO 33 t, gear 9 at 61 km/h ~ 1510 rpm) ===\n");
+    use_ato();
+    double up_jn, up_lift, up_brake;
+    g_jn_kmh = 30;
+    // The junction hold is the early return before the choice branch, so choice 0 shows it cleanly (no takeover dwell, no
+    // 'junction soon' veto yet at 70 m). The lift hold is choice 1 only.
+    g_rec_on = 1; sc_do("junction ahead", {33000, 61, 9, 8, 10, 0.5f, 0, -1, -1, r_flat0, 1, 70, 0.17f}, c_hc_junction, 0); g_rec_on = 0; up_jn = hc_first_up();
+    if (getenv("SC_SHIFTS")) { printf("  junction:"); for (int i = 0; i < g_rec_n; i++) printf("  %.1f %d->%d(%s)", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why); printf("\n"); }
+    g_rec_on = 1; sc_do("lift from 0.99", {33000, 61, 9, 8, 10, 0.5f, 0, -1, -1, r_flat0, 0, 0, 0.99f}, c_hc_lift, 1); g_rec_on = 0; up_lift = hc_first_up();
+    if (getenv("SC_SHIFTS")) { printf("  lift:"); for (int i = 0; i < g_rec_n; i++) printf("  %.1f %d->%d(%s)", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why); printf("\n"); }
+    g_rec_on = 1; sc_do("braking for the junction", {33000, 61, 9, 8, 10, 0.5f, 0, -1, -1, r_flat0, 1, 70, 0.17f}, c_hc_brake, 0); g_rec_on = 0; up_brake = hc_first_up();
+    if (getenv("SC_SHIFTS")) { printf("  braking:"); for (int i = 0; i < g_rec_n; i++) printf("  %.1f %d->%d(%s)", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why); printf("\n"); }
+    printf("  first upshift: junction %.1f s, lift %.1f s, braking %s\n", up_jn, up_lift, up_brake < 0 ? "none" : "UP");
+    sc_check(up_jn >= 0 && up_jn <= 2.0, "a junction ahead no longer holds a gear revved past up_pt + hysteresis (upshift within ~2 s)");
+    sc_check(up_lift >= 0 && up_lift <= 4.0, "a lift no longer holds a gear revved past up_pt + hysteresis (upshift within ~2 s of the lift)");
+    sc_check(up_brake < 0, "a truck braking for the junction keeps its gear");
     return g_sc_failed;
 }
 
