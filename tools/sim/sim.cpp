@@ -8,6 +8,7 @@
 #include "core/route.h"
 #include "core/vehicle.h"
 #include "core/gearscore.h"
+#include "core/rpmspan.h"
 #include <math.h>
 #include <initializer_list>
 #include <stdarg.h>
@@ -233,7 +234,8 @@ float curve_factor(const engine_info *e, float rpm)
     return e->curve[e->n_curve-1][1];
 }
 
-static float rpm_now() { return M.gear > 0 ? M.v / RADIUS * RATIO[M.gear-1] * DIFF * 9.5493f : (TORQUE < 1000 ? 750 : 600); }
+static float g_idle_sim = 600;   // the idle of the engine of the sim (SCORES part 7 has one with 700)
+static float rpm_now() { return M.gear > 0 ? M.v / RADIUS * RATIO[M.gear-1] * DIFF * 9.5493f : (TORQUE < 1000 ? 750 : g_idle_sim); }
 
 // hooks: capture the stubs
 static window_fn s_decide; static gear_fn s_choose, s_start; static void (*s_tail)(void *);
@@ -303,7 +305,7 @@ static void tick(double dt, int stats)
     if (g_rst_every > 0 && fmod(t_now, g_rst_every) < dt) sim_reset(g_rst_level, "sim");
     T.sim_time = (scs_timestamp_t)(t_now * 1e6);
     float rpm = rpm_now();
-    float idle = TORQUE < 1000 ? 750 : 600;
+    float idle = TORQUE < 1000 ? 750 : g_idle_sim;
     if (rpm < idle) rpm = idle;   // clutch slips below idle
     T.rpm = rpm; T.speed = M.v; T.in_thr = M.pedal; T.eff_thr = M.wish_on ? M.wish_thr : fmaxf(M.pedal, M.cc); g_pedal_mapped = M.wish_on;
     T.in_brake = M.brake; T.eff_brake = M.brake; T.cruise = M.cruise_kmh / 3.6f;
@@ -606,10 +608,12 @@ static int run_scores_table();
 static int run_scores_part4();
 static int run_scores_cruise();
 static int run_scores_approach();
+static int run_scores_engine();
 static int run_scores()
 {
     printf("\n=== SCORES part 1: the score function on the vehicle model (Renault ATO 12 speeds, diff 3.08) ===\n");
     use_ato();
+    if (getenv("SC_PART7")) return run_scores_engine();   // (only part 7)
     if (getenv("SC_PART6")) return run_scores_approach();   // (only part 6; SC_VERBOSE=1 with -v prints the module log)
     if (getenv("SC_PART4")) return run_scores_part4();   // (only part 4, for a quick look; its numbers may differ a little from the full run)
     gs_out o; gs_out o2;
@@ -701,6 +705,7 @@ static int run_scores()
     r |= run_scores_part4();
     r |= run_scores_cruise();   // (last: its runs move the clock too)
     r |= run_scores_approach();
+    r |= run_scores_engine();
     return r | g_sc_failed;
 }
 
@@ -1437,6 +1442,71 @@ static int run_scores_approach()
         g_ap_cut_from = 1e9f; g_ap_v0 = 70; g_ap_v1 = 83;
     }
     g_cruise_smooth = 0;
+    return g_sc_failed;
+}
+
+// ---- part 7: [trueshift] rpm_by_engine. The fixed rpm margins of the shift rules by the engine's own span (core/rpmspan.h), on today's curve
+// (idle 600, plateau 900: inside the fitted band, so nothing may change) and on an engine with a plateau at 1300 and idle 700 (the same box on
+// a 1.4 x longer axle), with the key 0 and 1: the margins, a pull-away at a light pedal and braking to a stop
+static void c_p30r(double t) { if (t <= 0) g_rec_n = 0; c_p30(t); }   // (the shifts of the wash run before it are not the scenario's)
+static void use_hp()
+{
+    use_ato();
+    float c[8][2] = { {0,0},{800,0.55f},{1100,0.90f},{1300,0.98f},{1600,0.93f},{1850,0.72f},{2050,0.45f},{2250,0} };
+    float g[4][2] = { {1750,2100},{950,1700},{1150,1500},{1450,1850} };
+    memcpy(CURVE, c, sizeof c); memcpy(RANGES, g, sizeof g);
+    LIMIT = 2100; DIFF = 4.3f; T.diff = DIFF; g_idle_sim = 700;
+}
+static int run_scores_engine()
+{
+    printf("\n=== SCORES part 7: rpm_by_engine 0 / 1 on today's curve (idle 600, plateau 900) and on a high-plateau engine (idle 700, plateau 1300) ===\n");
+    struct Eg { const char *name; void (*use)(); float idle; } egs[2] = { { "today's curve", use_ato, 600 }, { "plateau 1300", use_hp, 700 } };
+    char sig[2][2][1200] = {};   // per engine and key: everything the scenarios gave, to compare the keys on today's curve
+#define P7(...) do { if (show) printf(__VA_ARGS__); } while (0)
+    for (int e = 0; e < 2; e++) {
+        // pass 0 is a warm-up (the module keeps some state across a reset, so a first run differs from a second one with the same key); passes 1 and 2 are
+        // the keys 0 and 1 from the same start
+        for (int pass = 0; pass < 3; pass++) {
+            int key = pass == 2, show = pass > 0;
+            egs[e].use();
+            set_param("choice", 1.0f); set_param("idle_rpm", egs[e].idle); set_param("rpm_by_engine", (float)key);
+            t_now = 5000; sim_reset(RESET_HARD, "sim: next engine");
+            sc_prime(17000, 1, 45, 8);
+            float id = egs[e].idle;
+            P7("\n  %s, rpm_by_engine %d (idle %.0f, plateau %.0f, factor %.2f)\n", egs[e].name, key, id, V.plateau, rs_k(id));
+            P7("    margins: stall idle+120 -> %.0f, idle+250 -> %.0f, idle+350 -> %.0f, plateau-100 -> %.0f | m_lug 1000 -> %.0f, air_charge 1200 -> %.0f, engine-brake light 1100 -> %.0f (brake range %.0f-%.0f) | LowSpeed hand-off +150 -> %.0f\n",
+                   id + rs_off(id, 120), id + rs_off(id, 250), id + rs_off(id, 350), V.plateau - rs_off(id, 100), rs_abs(id, 1000), rs_abs(id, 1200), rs_brake(1100), V.eng.range[R_BRAKE][0], V.eng.range[R_BRAKE][1], id + rs_off(id, 150));
+            char *sg = sig[e][pass > 0 ? key : 0]; int k = 0;
+            k += snprintf(sg + k, 1200 - k, "m %.0f %.0f %.0f %.0f %.0f %.0f %.0f|", id + rs_off(id, 120), id + rs_off(id, 250), id + rs_off(id, 350), V.plateau - rs_off(id, 100), rs_abs(id, 1000), rs_abs(id, 1200), rs_brake(1100));
+            P7("    pull-away, pedal 0.3, 90 s:    mass   shifts hunts shift s mean rpm  t50  gears\n");
+            for (float mass : { 20000.0f, 36000.0f }) {
+                g_rec_on = 1;
+                sc_do("pull-away", {mass, 1, 1, 90, 3.0f}, c_p30r, 1);
+                g_rec_on = 0;
+                char seq[160] = ""; int q = 0;
+                for (int i = 0; i < g_rec_n && q < (int)sizeof seq - 10; i++) q += snprintf(seq + q, sizeof seq - q, "%s%d", i ? ">" : "1>", g_rec[i].b);
+                P7("                                  %5.0f t %6d %5d %7.1f %8.0f %5.1f  %s\n", mass / 1000, sc_last.shifts, sc_last.hunts, sc_last.shift_s, sc_last.rpm, sc_last.t50, seq);
+                k += snprintf(sg + k, 1200 - k, "p%.0f %d %d %.1f %.0f %.1f %s|", mass, sc_last.shifts, sc_last.hunts, sc_last.shift_s, sc_last.rpm, sc_last.t50, seq);
+            }
+            P7("    braking to a stop from 70 km/h:  load                shifts stall lowest rpm  gears\n");
+            struct St { const char *name; float mass, brake; } st[2] = { { "17 t brake 0.2", 17000, 0.2f }, { "33 t brake 1.0", 33000, 1.0f } };
+            for (auto &sx : st) {
+                g_st_brake = sx.brake; g_st_coast = 0; g_st_unseen = 0;
+                g_rec_on = 1;
+                sc_do(sx.name, {sx.mass, 70, sc_gear_for(70, V.plateau + 250), 40, 3, 1.0f}, c_stop, 1);
+                g_rec_on = 0;
+                int stall = 0;
+                for (int i = 0; i < g_rec_n; i++) if (!strcmp(g_rec[i].why, "stall")) stall++;
+                char seq[160] = ""; int q = 0;
+                for (int i = 0; i < g_rec_n && q < (int)sizeof seq - 10; i++) q += snprintf(seq + q, sizeof seq - q, i ? ">%d" : "%d>%d", i ? g_rec[i].b : g_rec[i].a, g_rec[i].b);
+                P7("                                  %-26s %6d %5d %9.0f  %s\n", sx.name, g_rec_n, stall, g_st_rpm_min, seq);
+                k += snprintf(sg + k, 1200 - k, "s%.0f %d %d %.0f %s|", sx.mass, g_rec_n, stall, g_st_rpm_min, seq);
+            }
+        }
+    }
+    set_param("rpm_by_engine", 0.0f); use_ato(); g_idle_sim = 600; set_param("idle_rpm", 600);
+    sc_check(!strcmp(sig[0][0], sig[0][1]), "rpm_by_engine 1 on today's curve (idle 600, plateau 900): the margins, every shift and every rpm of the pull-aways and stops are the same as with 0");
+    sc_check(strcmp(sig[1][0], sig[1][1]) != 0, "rpm_by_engine 1 on the plateau-1300 engine: the margins follow its span");
     return g_sc_failed;
 }
 
