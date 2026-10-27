@@ -387,9 +387,10 @@ static void auto_hold(char *g, float dt)
     case AH_OFF:
         AH.r = AH.r > 0 ? fmaxf(0, AH.r - 3 * dt) : 0;   // fade out, ~0.2 s
         // (or by the lever: the retarder / engine brake on, or the assist's brake still posted; at 0.5 km/h, not at the low-speed
-        // owner's standstill: no pedal holds the truck meanwhile, and on a climb the assist has let go before it stands)
+        // owner's standstill: no pedal holds the truck meanwhile, and on a climb the assist has let go before it stands;
+        // not behind the stop assist that lets go at the standstill, [decel] stop_assist 1)
         if (!blocked && ((ah_stopped(kmh) && T.in_brake > 0.1f) ||
-                         (p_ah_lever > 0 && kmh < 0.5f && (T.retarder > 0 || T.motor_brake || act_wishes()[ACT_DECEL].brake > 0)))) {
+                         (p_ah_lever > 0 && kmh < 0.5f && (T.retarder > 0 || T.motor_brake || (act_wishes()[ACT_DECEL].brake > 0 && !g_sa_nohold))))) {
             AH.st = AH_HOLD; AH.roll_m = 0;
             logv(2, "Auto Hold: holding at %.1f%% (mass %.0f kg, request %.2f)", grade, V.mass, h);
         }

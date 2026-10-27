@@ -219,7 +219,7 @@ static void sim_reset(int level, const char *why)   // as core/telemetry.cpp ses
     act_reset(level, why);
 }
 
-struct tick_rec { int state, would_gear, gear; float would_clutch, would_brake, kmh; };
+struct tick_rec { int state, would_gear, gear; float would_clutch, would_brake, kmh; int assist; };   // assist: g_low_assist (the stop assist of Decel starts on its edge)
 static tick_rec rec[60 * 60];        // what the owner would command, per tick of a scenario
 static int n_rec;
 static int trans[64], n_trans;       // the state changes of a run, in order
@@ -238,7 +238,7 @@ static void tick(double dt = 1.0 / 60)
     vehicle_frame();
     if (real_chain) { m_trueshift.frame(); m_creep.frame(); }
     m_lowspeed.frame();
-    if (n_rec < (int)(sizeof rec / sizeof rec[0])) rec[n_rec++] = { g_low.state, g_low.would_gear, M.gear, g_low.would_clutch, g_low.would_brake, (float)(fabs(M.v) * 3.6) };
+    if (n_rec < (int)(sizeof rec / sizeof rec[0])) rec[n_rec++] = { g_low.state, g_low.would_gear, M.gear, g_low.would_clutch, g_low.would_brake, (float)(fabs(M.v) * 3.6), g_low_assist };
     if (g_low.state != last_state) {
         if (n_trans < 64) trans[n_trans++] = g_low.state;
         if (verbose) printf("   [%7.2f] %s  %.2f km/h gear %d: %s\n", t_now, low_state_name(g_low.state), fabs(M.v) * 3.6, M.gear, g_low.reason);
@@ -378,6 +378,18 @@ static void s1_stop(float brake)
         check(gear_const && rec[o].would_gear == sg, "S1 %.2f: the gear to ask for changes after the point (start gear %d, at the point %d)", brake, sg, rec[o].would_gear);
         printf("   brake %.2f: one STOPPING, clutch opens at %.2f km/h (start gear %d, expected %.2f), gear to ask for %d until the stop (the truck itself changes gear %d time(s) meanwhile), ends %s\n",
                brake, rec[o].kmh, sg, want, rec[o].would_gear, plant_changes, low_state_name(g_low.state));
+    }
+    // the stop assist's trigger (g_low_assist): on from the opening of the clutch with both pedals free until the stop, never with the brake pedal
+    {
+        bool before_off = true, after_on = true, any = false;
+        for (int i = 0; i < n_rec; i++) {
+            if (rec[i].assist) any = true;
+            if (rec[i].state != LOW_STOPPING) continue;
+            if (o < 0 || i < o) before_off = before_off && !rec[i].assist;
+            else after_on = after_on && rec[i].assist;
+        }
+        (void)before_off; (void)after_on;
+        check(!any, "S1 %.2f: the stop assist flag is on with the brake pedal", brake);
     }
     check(g_low.state == LOW_STOPPED_HELD, "S1 %.2f: ends in %s", brake, low_state_name(g_low.state));
     check(g_low.would_gear == sg && g_low.would_clutch == 1, "S1 %.2f: at rest it would have gear %d clutch %.1f", brake, g_low.would_gear, g_low.would_clutch);
@@ -980,6 +992,31 @@ static void s5_gap()
 
 // S6: a stop from 30 km/h under a brake of 0.15 and 0.5, at three masses: the real plant (the game's stop rule on the owner's threshold)
 static int s6_open_gear;
+// The stop assist's trigger (g_low_assist, the owner only) with both pedals free: the brake pedal is let go of at 14 km/h and the truck slows on its own to the
+// clutch's opening; the flag is off until the opening, on from it to the standstill, and off again at the end.
+static void s6_free()
+{
+    own_world(8, 30, 0, 36000);
+    M.gear = gear_for(30, 1300); M.rpm = rpm_of(M.gear, M.v); M.target = M.gear;
+    for (int i = 0; i < 60 * 55; i++) {
+        if (i == 60) g_brake = 0.15f;
+        if (i > 60 && fabs(M.v) * 3.6 < 14) g_brake = 0;
+        tick();
+        if (i > 60 && M.v == 0 && g_low.since_s > 1) break;
+    }
+    int o = first_open();
+    bool before_off = true, after_on = true;
+    for (int i = 0; i < n_rec; i++) {
+        if (rec[i].state != LOW_STOPPING) continue;
+        if (o < 0 || i < o) before_off = before_off && !rec[i].assist;
+        else after_on = after_on && rec[i].assist;
+    }
+    check(o > 0, "S6 free: the clutch never opens");
+    check(before_off && after_on, "S6 free: the stop assist flag is not off before the opening and on from it");
+    check(!rec[n_rec - 1].assist, "S6 free: the stop assist flag is still on at the end (%s)", low_state_name(g_low.state));
+    printf("   pedals free: the stop assist flag on from the opening at %.2f km/h to the stop, off at the end\n", o > 0 ? rec[o].kmh : -1.0f);
+}
+
 static void s6(float brake, float mass_t)
 {
     own_world(8, 30, 0, mass_t * 1000);
@@ -1196,6 +1233,7 @@ int main(int argc, char **argv)
     printf("== S6 stop from 30 km/h: the clutch opens at the start gear's idle point, derived from the mass\n");
     int gears[6], n = 0;
     for (float b : { 0.15f, 0.5f }) for (float m : { 18.0f, 25.0f, 36.0f }) { s6(b, m); gears[n++] = s6_open_gear; }
+    s6_free();
     bool moves = false;
     for (int i = 1; i < 3; i++) moves = moves || gears[i] != gears[0];
     check(moves, "S6: the start gear is %d, %d and %d at 18, 25 and 36 t: the open point does not move with the mass", gears[0], gears[1], gears[2]);

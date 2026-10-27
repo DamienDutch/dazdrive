@@ -508,6 +508,7 @@ static void ls_frame()
     low_step(in);
     low_command(in);
     if (p_owner > 0) low_publish(in);
+    g_low_assist = p_owner > 0 && g_low.state == LOW_STOPPING && g_latch && g_assist == 1;   // the stop assist (modules/decel.cpp) starts on its edge
     static double csv_at;
     if (g_csv && now - csv_at >= 0.1) {
         csv_at = now;
@@ -524,7 +525,7 @@ static void ls_frame()
 static void ls_reset(int level, const char *why)
 {
     g_fresh = 1;
-    g_latch = g_assist = 0;   // derived again too: a stop that is already under the start gear's idle point opens the clutch at once
+    g_latch = g_assist = 0; g_low_assist = 0;   // derived again too: a stop that is already under the start gear's idle point opens the clutch at once
     g_o_pre = g_o_back = g_o_holding = g_rest_free = 0;
     g_o_sg = g_o_fix = g_o_hold = g_o_handed = 0; g_fixed = 0; g_cand = 0; g_o_force = NAN;
     if (p_owner > 0) act_brake(ACT_LOW, 0);
@@ -556,7 +557,7 @@ static void ls_start()
 static void ls_stop()
 {
     // the hooks stay in place after a shutdown: nothing of ours may keep acting on stale state
-    g_o_on = g_o_pre = g_o_back = g_o_holding = g_o_sg = g_o_fix = g_o_hold = g_o_handed = 0; g_o_force = NAN;
+    g_o_on = g_o_pre = g_o_back = g_o_holding = g_o_sg = g_o_fix = g_o_hold = g_o_handed = 0; g_o_force = NAN; g_low_assist = 0;
     if (p_owner > 0) act_brake(ACT_LOW, 0);
     if (g_csv) fflush(g_csv);
 }

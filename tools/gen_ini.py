@@ -114,7 +114,7 @@ SECTION_INTRO = {
     "creep": "Crawl / maneuver mode (slipping clutch in 1, 2 and R). Off in the standard preset.",
     "pedal": "The accelerator pedal as a wish for power. Off: the pedal asks a share of the engine's torque, as always.",
     "lowspeed": "Low-speed owner for stopping, standing and pulling away. Not wired in yet: both settings stay off.",
-    "decel": "Deceleration assist for the retarder and engine-brake lever: the service brake adds what the lever's target deceleration needs. Off in the standard preset.",
+    "decel": "Deceleration assist for the retarder and engine-brake lever: the service brake adds what the lever's target deceleration needs (off in the standard preset). Also the stop assist: a gentle stop when you lift off at low speed and the gearbox opens the clutch (stop_assist, on by default).",
 }
 
 

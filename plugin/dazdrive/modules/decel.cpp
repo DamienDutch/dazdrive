@@ -52,10 +52,11 @@
 // takes a lower gear that puts the engine into its own brake range (modules/trueshift.cpp, assist_down) earlier than its own rules do.
 #include "../core/suite.h"
 #include "../core/vehicle.h"
+#include "../core/rpmspan.h"
 #include <math.h>
 #include <string.h>
 
-static float p_enabled, p_tmin, p_tmax, p_tcurve, p_jerk, p_max, p_soften, p_ramp, p_pre, p_dsa;
+static float p_enabled, p_tmin, p_tmax, p_tcurve, p_jerk, p_max, p_soften, p_ramp, p_pre, p_dsa, p_sa, p_sad;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 0, "1 = while a retarder or engine-brake step is held and both pedals are free, the service brake adds what is missing to reach that step's target deceleration (bridges the gearbox shifts, helps at low speed and with a heavy load). 0 = off" },
@@ -68,6 +69,8 @@ static param g_params[] = {
     { "ramp_s", &p_ramp, 1.0f, "most seconds the game's retarder takes to build back up after a gearbox shift. The service brake hands over at the rate the jerk limit allows (a small difference takes a fraction of a second, a large one longer, never more than this), so the deceleration does not jump when the clutch closes; in the shift the brake alone holds the target. Needs [core] retarder_hook = 1. 0 = the retarder comes back as the game has it" },
     { "pre_blend", &p_pre, 1, "1 = when the gearbox is about to shift down while braking, the retarder's share is handed to the service brake before the clutch opens, at the jerk limit, so the deceleration holds through the shift. The retarder's side needs [core] retarder_hook = 1 and ramp_s above 0; without it only the service brake rises ahead of the shift, by a small amount. 0 = the brake takes over when the clutch opens" },
     { "downshift_assist", &p_dsa, 1, "1 = while the service brake is needed to reach the target, the gearbox shifts down earlier when a lower gear puts the engine into its own engine-brake rpm range (never near the top of the range or over the rpm limit): the retarder and the engine brake work through the lower gear before the service brake does. 0 = the gear is chosen as without the assist" },
+    { "stop_assist", &p_sa, 1, "What happens when you lift off at low speed and the gearbox opens the clutch by itself (no throttle, no brake, no retarder or engine-brake lever, no cruise): 0 = the truck rolls on in neutral, as in the game. 1 = the service brake slows it gently to a standstill and lets go there. 2 = the same, and Auto Hold holds the truck at the standstill (needs Auto Hold and its lever setting). The throttle or the brake pedal ends it at once. Works with the deceleration assist on or off" },
+    { "stop_assist_decel", &p_sad, 0.5f, "deceleration (m/s2) of the stop assist; it eases off along the way to the standstill. Keep it under 0.7, the level below which a car's regenerative braking does not light the brake lights" },
 };
 
 // Constants of the controller (physics of the measurements, not preferences).
@@ -429,6 +432,172 @@ static void decel_tick(const decel_in &in)
     act_brake(ACT_DECEL, D.u);
 }
 
+// ---------------------------------------------------------------- Stop assist ([decel] stop_assist)
+// Lifting off at low speed, the box opens the clutch at the start gear's idle point and the truck coasts on in neutral (~0.07 m/s2: it
+// rolls at walking pace for a long time). The stop assist finishes that stop: the service brake slows the truck at stop_assist_decel
+// to a standstill and, with stop_assist 2, Auto Hold takes over there. It shares the controller of the lever assist (the measured
+// deceleration, a feedforward from the brake's gain with a PI on the request, the taper along a = sqrt(2 j v)) but is a feature of its
+// own: it works with [decel] enabled 0, and it leaves D, the lever assist's state, alone.
+// Trigger = the event, no km/h figure: the box opened the clutch by itself with both pedals free (no throttle, no brake, no lever, no
+// cruise, not reversing, not paused, not crawling, not eco-roll). With [lowspeed] owner=1 that is the owner's own state (g_low_assist,
+// which knows its open point). Without it the assist derives it: the clutch comes open from a gear whose driveline sits at the box's stop
+// threshold (idle + 150 rpm; the stock 0.8 idle is lower still), and stays open for longer than a gearbox shift takes (a downshift at
+// low revs opens it too, but closes it again within about a second).
+// Before the brake comes on, the deceleration of the coast is measured (the grade is in it): the brake only adds what the target needs
+// over it. The request is capped (SA_MAX): where the target cannot be reached (a steep descent) the driver is left to it, once logged.
+// Ends at once on the throttle, the brake pedal, the lever, the cruise, reverse, a pause, another brake owner, or the clutch closing in a
+// gear. At the standstill stop_assist 1 lets go (and Auto Hold is kept from taking the brake over, g_sa_nohold); stop_assist 2 keeps a
+// small request until Auto Hold's has risen to it, as the lever's stop does.
+static const float SA_MAX = 0.3f;        // most request the stop assist asks (~1.8 m/s2 at the nominal brake: a gentle stop never needs more)
+static const float SA_OPEN_RPM = 250;    // rpm over idle (by the engine's span) the last gear's driveline may sit at when the clutch opens: the box's stop threshold plus a margin for the model
+static const float SA_SHIFT_PAD = 0.4f;  // s over the shift time the clutch has to stay open before it counts as a stop (not a shift)
+static const float SA_STOP_V = 0.03f;    // m/s, standing for the stop assist (the taper reaches 0 at 0.0225)
+static const float SA_HAND_REQ = 0.03f;  // request kept at a standstill for Auto Hold to take over (the taper has run out by then)
+static const float SA_CAP_S = 1.2f;      // s at the cap and far short of the target: left to the driver
+enum { SA_OFF, SA_ARMED, SA_PEND, SA_RUN, SA_HAND };
+static struct {
+    int st;                 // SA_OFF = not armed (waits for the clutch to be closed in a gear again)
+    float hv[64]; double ht[64], clk; int hn, hi;   // the speed samples (as D's)
+    float a, bad_s;         // measured deceleration (m/s2, + = slowing), seconds without a usable one
+    int lastg; float lastv; // the gear and speed while the clutch was last closed in a gear
+    float t_pend;           // s the clutch has been open (derived trigger)
+    float a0;               // the coast's deceleration at the start (grade included)
+    float ref, refm, lvl, u, k, ff;   // reference, its delayed copy, level, request, request per m/s2, share of the feedforward
+    float v0, t_run, tgt0, cap_s, hand_s, lvl_max;
+    int mode, posted, capped;
+} SA;
+
+static void sa_log(const char *why, float v)
+{
+    if (SA.st != SA_RUN && SA.st != SA_HAND) return;
+    logv(2, "Decel: stop assist %d from %.1f km/h, target %.2f m/s2, coast %.2f, request up to %.2f; mean %.2f m/s2 over %.1f s; ended at %.1f km/h: %s",
+         SA.mode, SA.v0 * 3.6f, SA.tgt0, SA.a0, SA.lvl_max, SA.t_run > 0 ? (SA.v0 - v) / SA.t_run : 0.0f, SA.t_run, v * 3.6f, why);
+}
+
+// To the next state (OFF = disarmed, ARMED = may start at the next opening); our request and the Auto Hold block go with it.
+static void sa_to(int st)
+{
+    if (SA.posted) { act_brake(ACT_DECEL, 0); SA.posted = 0; }
+    g_sa_nohold = 0;
+    SA.u = SA.lvl = 0; SA.cap_s = SA.hand_s = 0;
+    SA.st = st;
+}
+
+static void sa_frame(float dt)
+{
+    int mode = p_sa >= 1.5f ? 2 : p_sa >= 0.5f ? 1 : 0;
+    if (mode == 0 || !act_hooked()) { if (SA.st != SA_OFF) sa_to(SA_OFF); return; }
+    if (!(dt > 0 && dt < 0.5f)) { if (dt != 0) SA.hn = 0; return; }   // paused or a hitch: the speed history is broken (a request in force stays)
+    float v = fabsf(T.speed);
+    // the measured deceleration, as the lever assist has it (the speed's fall over the last 0.3 s)
+    int ok = 0;
+    if (T.speed == T.speed) {
+        SA.clk += dt;
+        SA.hi = (SA.hi + 1) % 64; SA.hv[SA.hi] = v; SA.ht[SA.hi] = SA.clk;
+        if (SA.hn < 64) SA.hn++;
+        for (int i = 1; i < SA.hn; i++) {
+            int j = (SA.hi - i + 64) % 64;
+            float span = (float)(SA.clk - SA.ht[j]);
+            if (span >= DC_WIN) { float raw = (SA.hv[j] - v) / span; if (fabsf(raw) < 30.0f) { SA.a = raw; ok = 1; } break; }
+        }
+    }
+    SA.bad_s = ok ? 0 : SA.bad_s + dt;
+    const act_wish *w = act_wishes();
+    float other = 0;   // another owner's brake (Auto Hold's own is not one: it is the hand-over)
+    for (int o = 0; o < ACT_N; o++) if (o != ACT_DECEL && o != ACT_HOLD) other = fmaxf(other, w[o].brake);
+    float cl = clutch_seen();
+    int closed = cl < DC_CLOSED && T.gear > 0, opened = cl > DC_OPEN || T.gear == 0;
+    int manual = T.shifter[0] && strcmp(T.shifter, "automatic") && strcmp(T.shifter, "arcade");
+    // the pedals and the rest that must be free
+    int free = !(T.in_thr > DC_PEDAL) && !(T.in_brake > DC_PEDAL) && !T.retarder && !T.motor_brake && T.cruise <= 0.1f && !g_crawl_on && T.gear >= 0 &&
+               T.dgear >= 0 && T.engine_on && !T.paused && !T.parking_brake && !g_rolling && !(other > 0) && !manual && !V.electric && !g_truck_unsupported && !D.on;
+    if (closed) {
+        SA.lastg = T.gear; SA.lastv = v;
+        sa_log("the clutch closed", v);
+        sa_to(SA_ARMED);
+        return;
+    }
+    if (SA.st == SA_ARMED || SA.st == SA_PEND) {
+        if (!opened) return;                                          // (a shift's clutch between the two thresholds, or no gear to speak of)
+        if (!free) { sa_to(SA_OFF); return; }                         // opened with a pedal, the lever, the cruise ...: not a stop of this kind
+        if (!(T.speed > 0)) return;
+        int go = 0;
+        if (low_owner_on()) go = g_low_assist;                        // the owner knows its open point
+        else if (SA.st == SA_ARMED) {
+            float idle = ts_idle_rpm(), r = SA.lastg > 0 ? vehicle_rpm_at(SA.lastg, SA.lastv) : 0;
+            if (idle > 200 && idle < 2000 && r > 0 && r <= idle + rs_off(idle, SA_OPEN_RPM)) { SA.st = SA_PEND; SA.t_pend = 0; }
+        } else {
+            SA.t_pend += dt;
+            go = SA.t_pend >= fmaxf(V.eng_ok ? V.eng.shift_time : 1.2f, 0.5f) + SA_SHIFT_PAD;
+        }
+        if (!go || v < SA_STOP_V) return;
+        SA.st = SA_RUN; SA.mode = mode; SA.v0 = v; SA.t_run = 0; SA.cap_s = SA.hand_s = 0; SA.capped = 0; SA.lvl_max = 0;
+        SA.a0 = fminf(fmaxf(SA.a, -2.0f), 0.5f);
+        SA.ref = SA.refm = fmaxf(SA.a0, 0);
+        SA.k = 1.0f / DC_G_NOM; SA.ff = DC_FF_FIRST;
+        if (g_brake_learn > 0) {   // the brake's gain from the vehicle model, once it is confident
+            float g = vehicle_brake_gain();
+            if (g == g && g >= 2.0f && g <= 12.0f) { SA.k = 1.0f / g; SA.ff = DC_FF_PRIOR; }
+        }
+        SA.tgt0 = fminf(fmaxf(p_sad, 0.1f), 0.69f);
+        float cap0 = fminf(p_max > 0 ? fminf(p_max, 1.0f) : 0.0f, SA_MAX);
+        SA.lvl = fminf(SA.k * SA.ff * fmaxf(SA.ref - SA.a0, 0.0f), cap0);
+        SA.u = 0;
+    }
+    if (SA.st != SA_RUN && SA.st != SA_HAND) return;
+    // ---- running
+    SA.t_run += dt;
+    const char *end = NULL;
+    if (!free) end = "pedal, lever, cruise or another brake";
+    else if (SA.bad_s > DC_BAD_S) end = "no usable speed";
+    else if (T.speed < 0) end = "rolling backwards";
+    else if (v > SA.v0 + 0.5f) end = "speeding up";
+    if (end) { sa_log(end, v); sa_to(SA_OFF); return; }
+    float cap = fminf(p_max > 0 ? fminf(p_max, 1.0f) : 0.0f, SA_MAX);
+    float jerk = fmaxf(p_jerk, 0.1f), jt = DC_TAPER_J * jerk, rlim = jerk * SA.k;
+    int standing = !(v > SA_STOP_V);
+    cruise_info cu;
+    cruise_info_get(&cu);
+    if (SA.st == SA_RUN && standing) {
+        if (SA.mode == 2 && cu.lever_take > 0) { SA.st = SA_HAND; SA.hand_s = 0; g_sa_nohold = 0; }   // Auto Hold arms on the request at a standstill
+        else {
+            static bool told;
+            if (SA.mode == 2 && !told) { told = true; logline("Decel: stop_assist 2 needs Auto Hold with [cruise] auto_hold_lever: the stop is released at the standstill"); }
+            sa_log("stopped", v); sa_to(SA_OFF); return;
+        }
+    }
+    if (SA.st == SA_HAND) {   // standing: a small request stays until Auto Hold's has risen to it (or to what it will hold), as the lever's stop does
+        SA.hand_s += dt;
+        if (SA.hand_s >= DC_HAND_S || cu.lever_take <= 0 || w[ACT_HOLD].brake >= fminf(SA_HAND_REQ, cu.lever_take) - 1e-3f) { sa_log("handed to Auto Hold", v); sa_to(SA_OFF); return; }
+        act_brake(ACT_DECEL, SA_HAND_REQ); SA.posted = 1;
+        return;
+    }
+    g_sa_nohold = 1;   // Auto Hold arms on the posted request below 0.5 km/h: not yet (stop_assist 2 lets it at the standstill, stop_assist 1 never)
+    // reference: the target, tapered toward the standstill along a = sqrt(2 j v) led by the brake's lag, slewed at the taper's jerk
+    float tgt = fminf(SA.tgt0, fmaxf(sqrtf(2.0f * jt * v) - jt * DC_LAG_S, 0.0f));
+    float ref0 = SA.ref;
+    SA.ref += SA.ref < tgt ? fminf(jt * dt, tgt - SA.ref) : -fminf(jt * dt, SA.ref - tgt);
+    SA.refm += dt / (DC_REFM_S + dt) * (SA.ref - SA.refm);
+    float e = SA.refm - SA.a;
+    int starved = SA.u > 0.02f && act_request() < 0.5f * SA.u;
+    // the feedforward moves the level with the reference (the rise and the taper), the PI takes what is left
+    SA.lvl = fminf(fmaxf(SA.lvl + (SA.ref - ref0) * SA.k * SA.ff, 0.0f), cap);
+    float di = fminf(fmaxf(DC_KI * e, -rlim), starved ? 0.0f : rlim) * dt;
+    if (!((SA.lvl >= cap && di > 0) || (SA.lvl <= 0 && di < 0))) SA.lvl += di;
+    SA.lvl = fminf(fmaxf(SA.lvl, 0.0f), cap);
+    float want = fminf(fmaxf(SA.lvl + DC_KP * e, 0.0f), cap);
+    SA.u = fminf(fmaxf(want, SA.u - rlim * dt), SA.u + rlim * dt);
+    SA.lvl_max = fmaxf(SA.lvl_max, SA.u);
+    // the target out of reach (a steep descent): at the cap and far short of the target for a while = left to the driver
+    if (SA.u >= cap - 1e-3f && SA.a < 0.6f * SA.ref) SA.cap_s += dt; else SA.cap_s = 0;
+    if (SA.cap_s > SA_CAP_S) {
+        static bool told;
+        if (!told) { told = true; logline("Decel: stop assist cannot reach %.2f m/s2 here (request capped at %.2f, %.2f m/s2 measured): left to the driver", SA.tgt0, cap, SA.a); }
+        sa_log("the target is out of reach", v); sa_to(SA_OFF); return;
+    }
+    act_brake(ACT_DECEL, SA.u); SA.posted = 1;
+}
+
 static void de_frame()
 {
     static double last;
@@ -436,6 +605,7 @@ static void de_frame()
     decel_in in;
     in.dt = (float)(now - last);
     last = now;
+    sa_frame(in.dt);   // the stop assist: its own feature, with or without the lever assist
     if (p_enabled <= 0 || !act_hooked()) { if (D.on) decel_off(); soft_off(); g_decel_need = 0; return; }
     const act_wish *w = act_wishes();
     in.speed = T.speed; in.thr = T.in_thr; in.brake = T.in_brake; in.clutch = clutch_seen();   // our own clutch (crawl, smooth start) counts
@@ -465,29 +635,35 @@ static void de_frame()
 static void de_reset(int level, const char *)
 {
     D.on = 0; D.lvl = D.u = D.pre = 0; D.gap = 0; D.gap_s = 0; D.blind = 0; D.bad_s = 0; D.hn = 0; D.a = 0; D.y = D.ya = 0;
+    sa_to(SA_OFF); SA.hn = 0; SA.a = 0;
     if (level >= RESET_LOAD) { D.k_known = D.k_fix = D.k_prior = 0; D.k = 1.0f / DC_G_NOM; }
     act_brake(ACT_DECEL, 0);
     soft_off();
     g_decel_need = 0;
 }
 
-static char g_status[160] = "off (ini)";
+static char g_status[240] = "off (ini)";
 static const char *de_status() { return g_status; }
 
 static void de_start()
 {
-    if (p_enabled <= 0) return;
+    int sa = p_sa >= 1.5f ? 2 : p_sa >= 0.5f ? 1 : 0;
+    if (p_enabled <= 0) {
+        if (sa) snprintf(g_status, sizeof g_status, "lever assist off; stop assist %d: %.2f m/s2%s", sa, fminf(fmaxf(p_sad, 0.1f), 0.69f), act_hooked() ? "" : " (no actuator hook)");
+        return;
+    }
     p_max = p_max > 0 ? fminf(p_max, 1.0f) : 0;   // a request is 0..1 (and a NaN from the ini is none)
     if (!(p_jerk >= 0.1f)) p_jerk = 0.1f;         // the slews divide and multiply by it
     snprintf(g_status, sizeof g_status, "on: %.1f-%.1f m/s2, jerk %.1f m/s3, max brake %.2f%s%s%s%s%s", p_tmin, p_tmax, p_jerk, p_max,
              p_soften > 0 && g_retarder_hook >= 0.5f ? ", soften" : "", p_ramp > 0 && g_retarder_hook >= 0.5f ? ", ramp" : "",
              p_pre > 0 ? ", pre-blend" : "", p_dsa > 0 ? ", downshift assist" : "", act_hooked() ? "" : " (no actuator hook)");
+    if (sa) { size_t l = strlen(g_status); snprintf(g_status + l, sizeof g_status - l, "; stop assist %d: %.2f m/s2", sa, fminf(fmaxf(p_sad, 0.1f), 0.69f)); }
     static bool told;
     if (p_soften > 0 && g_retarder_hook < 0.5f && !told) { told = true; logline("Decel: soften is on but [core] retarder_hook is 0: the game's retarder stays as it is, the service brake only adds"); }
     static bool told_ramp;
     if (p_ramp > 0 && g_retarder_hook < 0.5f && !told_ramp) { told_ramp = true; logline("Decel: ramp_s is on but [core] retarder_hook is 0: after a shift the retarder comes back as the game has it, the brake goes back at once"); }
 }
 
-static void de_stop() { act_brake(ACT_DECEL, 0); soft_off(); g_decel_need = 0; }
+static void de_stop() { act_brake(ACT_DECEL, 0); soft_off(); g_decel_need = 0; sa_to(SA_OFF); }
 
 module m_decel = { "decel", "Decel", g_params, sizeof g_params / sizeof g_params[0], de_start, de_frame, NULL, de_stop, de_reset, de_status };

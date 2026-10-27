@@ -151,6 +151,9 @@ extern volatile float g_clutch_ours;  // the clutch value Creep puts on the driv
 static inline float clutch_seen() { float c = g_clutch_ours; return c == c ? c : T.eff_clutch; }  // what the drivetrain sees: use instead of T.eff_clutch for 'is the clutch closed'
 extern volatile float g_pcc_need_kmh;  // TrueShift: extra speed over the set speed the next climb on the route needs (NAN = unknown)
 extern volatile float g_decel_need;    // Decel: the service brake request (0..1) the assist needs besides the lever's retarder and engine brake, 0 = none (or downshift_assist 0); TrueShift shifts down earlier for it
+// The stop assist ([decel] stop_assist, modules/decel.cpp): inline variables, so every build that includes this header has them (no definition elsewhere).
+inline volatile int g_sa_nohold;       // Decel: the stop assist is braking a stop that is released at the standstill (stop_assist 1): Auto Hold must not take that brake over
+inline volatile int g_low_assist;      // LowSpeed ([lowspeed] owner=1): the box opened the clutch by itself with both pedals free and the stop is not finished: 1 (the stop assist starts on its edge)
 // PCC bands written in km/h are meant for a set speed of 70 km/h and scale with it (Scania's band is a percentage of the set speed):
 // calmer at 60, roomier at 90. 1 when the cruise is off.
 static inline float band_scale(float set_ms)

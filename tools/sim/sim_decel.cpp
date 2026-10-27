@@ -38,6 +38,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stdlib.h>
+#include <vector>
 
 telemetry T;
 char g_dir[MAX_PATH];
@@ -83,7 +84,8 @@ uintptr_t game_scan(const char *) { return 0; }
 int game_patch_clutch_floor(uintptr_t, clutch_floor *) { return 0; }
 int game_patch_cf0_if(uintptr_t, int, const unsigned char *) { return 0; }
 char *game_actor_safe() { return NULL; }
-void cruise_info_get(cruise_info *o) { memset(o, 0, sizeof *o); }   // no Auto Hold here: the assist lets go at a standstill
+static cruise_info g_ci;   // what Auto Hold would say (zero: none, the lever assist lets go at a standstill)
+void cruise_info_get(cruise_info *o) { *o = g_ci; }
 static float g_radius = 0.5f;
 float wheel_radius() { return g_radius; }
 
@@ -262,6 +264,7 @@ static res run(const sc &s)
     if (s.engine_only) { T.retarder = T.retarder_steps = 0; T.motor_brake = 1; }
     T.in_thr = s.thr; T.in_brake = s.brk; T.cruise = s.cruise ? 10.0f : 0;
     for (auto &p : g_params) *p.val = p.def;
+    p_sa = 0;   // (these runs are about the lever; the stop assist has its own section below)
     p_enabled = (float)s.enabled;
     D = decltype(D)();
     g_brake_learn = (float)s.learn;
@@ -464,6 +467,7 @@ static gres run_g(const gsc &s)
     else { T.retarder = (unsigned)s.step; T.retarder_steps = (unsigned)s.n; }
     g_mass_kg = s.mass_t * 1000; g_radius = G_RADIUS;
     for (auto &p : g_params) *p.val = p.def;
+    p_sa = 0;   // (these runs are about the lever; the stop assist has its own section below)
     p_enabled = (float)s.dec_on; p_pre = (float)s.pre; p_dsa = (float)s.dsa;
     if (s.ramp_s >= 0) p_ramp = s.ramp_s;
     D = decltype(D)();
@@ -637,6 +641,125 @@ static void geared_init()
     m_trueshift.start();
 }
 
+
+// ---- the stop assist ([decel] stop_assist): a lift-off at low speed, the box opens the clutch at the stop threshold and the truck coasts on in
+// neutral. The plant: the truck coasts in gear 1 (engine drag 0.6 m/s2 x 18 / mass) to the speed where gear 1 sits at idle + 150 rpm (the stop
+// threshold), the box goes to neutral there (clutch open, gear 0) and the truck coasts at 0.07 m/s2; the grade pulls with 9.81 x grade; the
+// service brake has a gain of 6 m/s2 per request x the scenario's factor behind a 0.15 s lag (the same at every mass, as above). The stop assist runs
+// with [decel] enabled 0 (the feature is its own). Auto Hold is a stand-in here (arms below 0.5 km/h on the posted request unless g_sa_nohold,
+// the request up 3/s to 0.6, as cruise.cpp does); sim_cruise has the real one.
+struct sasc {
+    float mass_t = 18, grade = 0, gain = 1, lift_kmh = 30, sad = 0, coast_scale = 1;
+    int mode = 1, learn = 0, ah = 1;
+    double thr_t = -1, brk_t = -1, lever_t = -1;   // a pedal / the lever this long after the assist started (-1 = never)
+    double open_s = -1;                            // the box opens the clutch at this time whatever the speed (-1 = at the stop threshold)
+    float thr_v = 0.3f, brk_v = 0.3f;
+    int cruise = 0, rev = 0, owner_flag = 0;
+};
+struct sares {
+    int started, stopped;
+    double t_open, t_start, t_stop, t_cancel;
+    float v_open, v_start, mean, a_main, a_tail, jerk_main, jerk_tail, req_max, roll_m, req_after_cancel, req_late, hold_end, tgt_seen;
+};
+static sares run_sa(const sasc &s)
+{
+    sares r; memset(&r, 0, sizeof r);
+    r.t_open = r.t_start = r.t_stop = r.t_cancel = -1; r.req_after_cancel = -1;
+    geared_init();
+    rng = 12345;
+    memset(&T, 0, sizeof T);
+    T.engine_on = 1; T.air_psi = 120; T.fwd_gears = 12; T.diff = G_DIFF; T.wheels = 4; T.gear = 1; T.dgear = 1;
+    for (int i = 0; i < 12; i++) T.ratio[i] = G_RATIO[i];
+    g_mass_kg = s.mass_t * 1000; g_radius = G_RADIUS;
+    for (auto &p : g_params) *p.val = p.def;
+    p_enabled = 0; p_sa = (float)s.mode;
+    if (s.sad > 0) p_sad = s.sad;
+    D = decltype(D)(); SA = decltype(SA)();
+    g_ci = cruise_info(); g_sa_nohold = 0; g_low_assist = 0; g_crawl_on = 0; g_rolling = 0;
+    g_brake_learn = (float)s.learn;
+    V.mass = s.mass_t * 1000; V.mass_ok = 1; V.rpm_k = 1; V.eng_ok = 1; V.eng.shift_time = GB_SHIFT_S; V.electric = 0;
+    if (s.learn) { T.trailer = 0; vehicle_brake_prime(0, 6.0f * s.gain * V.mass, 0.02f, 8); }
+    memset(buf, 0, sizeof buf);
+    for (int o = 0; o < ACT_N; o++) { act_brake(o, 0); act_retarder_scale(o, 1); }
+    g_ret_scale = 1.0f; s_ret_in = 0;
+    s_req_ours = 0; s_dec_was = 0; s_br_at = 0; s_hooked = 1;
+    s_aeb_was = s_hill_was = s_hold_was = 0;
+    t_now = 0;
+    float idle = ts_idle_rpm();
+    float v_open = (idle + 150) / 9.5493f * G_RADIUS / (G_RATIO[0] * G_DIFF);   // m/s, gear 1 at the stop threshold
+    r.v_open = v_open * 3.6f;
+    float v = s.lift_kmh / 3.6f, y = 0, grav = 9.81f * s.grade / 100, hist[10] = { 0 }, x = 0, x_stop = 0, xmin = 0, xmax = 0;
+    double frame_at = 0, stop_at = -1;
+    bool opened = false, got_cancel = false;
+    int ah_on = 0; float ah_r = 0;
+    std::vector<float> ta, aa, ja;   // time, deceleration and jerk while the assist brakes (judged afterwards: the last 0.5 s is the taper)
+    for (long step = 0; t_now < 400; step++) {
+        double t = t_now;
+        if (!opened && (v <= v_open || (s.open_s >= 0 && t >= s.open_s))) { opened = true; r.t_open = t; T.gear = 0; T.dgear = 0; T.eff_clutch = 1; if (s.owner_flag) g_low_assist = 1; }
+        bool started = SA.st == SA_RUN || SA.st == SA_HAND;
+        if (started && r.t_start < 0) { r.t_start = t; r.v_start = v * 3.6f; r.started = 1; }
+        if (opened && s.cruise) T.cruise = 10.0f;
+        if (opened && s.rev) { T.gear = -1; T.dgear = -1; }
+        if (r.t_start >= 0) {
+            if (s.lever_t >= 0 && t >= r.t_start + s.lever_t) { T.retarder = 1; T.retarder_steps = 4; if (r.t_cancel < 0) r.t_cancel = t; }
+            if (s.thr_t >= 0 && t >= r.t_start + s.thr_t) { T.in_thr = s.thr_v; if (r.t_cancel < 0) r.t_cancel = t; }
+            if (s.brk_t >= 0 && t >= r.t_start + s.brk_t) { T.in_brake = s.brk_v; if (r.t_cancel < 0) r.t_cancel = t; }
+        }
+        // the plant
+        y += (cur_req() - y) * (float)(DT / LAG_S);
+        float bd = 6.0f * s.gain * y, res = opened ? 0.07f * s.coast_scale : 0.6f * 18 / s.mass_t, dv;
+        if (v > 1e-6f) dv = -(res + bd + grav);
+        else if (v < -1e-6f) dv = (res + bd) - grav;
+        else if (fabsf(grav) > res + bd) dv = (grav > 0 ? -1 : 1) * (fabsf(grav) - res - bd);
+        else dv = 0;
+        float a = v > 0 ? -dv : 0;   // + = slowing
+        if (t >= frame_at) {
+            frame_at += 0.02;
+            T.speed = v + NOISE * gauss();
+            de_frame();
+        }
+        act_brake_write(buf);
+        if (s.ah) {   // Auto Hold, as a stand-in
+            g_ci.lever_take = 0.6f;
+            if (!ah_on && fabsf(v) * 3.6f < 0.5f && act_wishes()[ACT_DECEL].brake > 0 && !g_sa_nohold) ah_on = 1;
+            if (ah_on) { ah_r = fminf(0.6f, ah_r + 3.0f * (float)DT); act_brake(ACT_HOLD, ah_r); }
+        }
+        float jerk = (a - hist[step % 10]) / 0.1f;
+        hist[step % 10] = a;
+        r.req_max = fmaxf(r.req_max, act_wishes()[ACT_DECEL].brake);   // (ours, not Auto Hold's)
+        if (started && v > 0.0f && step > 10) { ta.push_back((float)t); aa.push_back(a); ja.push_back(jerk); }
+        if (r.t_cancel >= 0 && !got_cancel && t >= r.t_cancel + 0.04) { got_cancel = true; r.req_after_cancel = cur_req(); }
+        float pv = v;
+        v += dv * (float)DT;
+        if (pv > 0 && v < 0) v = 0;   // the brake stops it at zero
+        x += v * (float)DT;
+        t_now += DT;
+        if (stop_at < 0 && opened && r.started && v <= 0.03f) { /* the assist's own standstill; the truck may roll on after it */ stop_at = t_now; r.t_stop = t_now; r.stopped = 1; x_stop = xmin = xmax = x; }
+        if (stop_at >= 0) {
+            xmin = fminf(xmin, x); xmax = fmaxf(xmax, x);
+            if (t_now > stop_at + 4.5) r.req_late = fmaxf(r.req_late, cur_req());
+            if (t_now > stop_at + 5.0) break;
+        }
+        if (got_cancel && t_now > r.t_cancel + 1.0) break;
+        if (opened && !r.started && t_now > r.t_open + 6.0) break;   // never started
+        if (verbose && step % 20 == 0 && opened) printf("   t=%6.2f v=%6.3f km/h a=%5.2f req=%.3f y=%.3f meas=%.2f ref=%.2f lvl=%.3f st=%d nohold=%d\n", t_now, v * 3.6f, a, cur_req(), y, SA.a, SA.ref, SA.lvl, SA.st, g_sa_nohold);
+    }
+    if (r.started && r.stopped) {
+        r.mean = (r.v_start / 3.6f) / (float)(r.t_stop - r.t_start);
+        r.roll_m = fmaxf(x_stop - xmin, xmax - x_stop);   // either way: back uphill, on downhill
+        for (size_t i = 0; i < ta.size(); i++) {
+            bool tail = ta[i] > r.t_stop - 0.5;
+            (tail ? r.a_tail : r.a_main) = fmaxf(tail ? r.a_tail : r.a_main, aa[i]);
+            (tail ? r.jerk_tail : r.jerk_main) = fmaxf(tail ? r.jerk_tail : r.jerk_main, fabsf(ja[i]));
+        }
+    } else if (r.started) {
+        for (size_t i = 0; i < ta.size(); i++) { r.a_main = fmaxf(r.a_main, aa[i]); r.jerk_main = fmaxf(r.jerk_main, fabsf(ja[i])); }
+    }
+    r.hold_end = ah_r > 0 ? cur_req() : 0;
+    r.tgt_seen = SA.tgt0;
+    return r;
+}
+
 static int fails;
 static bool bits_one(float f) { return f == 1.0f; }
 static void check(bool ok, const char *what, char *why, size_t n)
@@ -663,6 +786,12 @@ int main(int argc, char **argv)
         for (int i = 0; i < r.n_shift; i++) printf("   shift %2d>%2d at %5.1f s, %4.1f km/h (%s)%s, open %.2f s, rpm after %.0f\n", r.sh[i].from, r.sh[i].to, r.sh[i].t_open, r.sh[i].kmh, r.sh[i].why, r.sh[i].pre ? ", hand-over ahead" : "", r.sh[i].t_close - r.sh[i].t_open, r.sh[i].rpm_after);
         printf("   decel - target over %d judged downshifts: before %+.2f/%+.2f in %+.2f/%+.2f after %+.2f/%+.2f jerk %.1f; the %d with a hand-over ahead: before %+.2f/%+.2f in %+.2f/%+.2f after %+.2f/%+.2f\n",
                r.n_dn, r.bf_lo, r.bf_hi, r.in_lo, r.in_hi, r.af_lo, r.af_hi, r.af_jerk, r.n_pre, r.pf_lo, r.pf_hi, r.pi_lo, r.pi_hi, r.pa_lo, r.pa_hi);
+        return 0;
+    }
+    if (argc == 5 && !strcmp(argv[1], "-s")) {   // one stop assist scenario with the trace: -s mass_t grade_pct mode
+        sasc s; s.mass_t = (float)atof(argv[2]); s.grade = (float)atof(argv[3]); s.mode = atoi(argv[4]); verbose = 1;
+        sares r = run_sa(s);
+        printf("start %.1f km/h +%.1f s after the opening, stop at %.1f s, mean %.2f, moved %.3f m\n", r.v_start, r.t_start - r.t_open, r.t_stop, r.mean, r.roll_m);
         return 0;
     }
     int nrun = 0, nfail = 0;
@@ -961,6 +1090,77 @@ int main(int argc, char **argv)
             printf("  decel off | %d shifts, no assist shift, no brake  %s%s\n", r.n_shift, why[0] ? "FAIL: " : "ok", why);
             if (why[0]) fails++;
         }
+    }
+    {   // ---- the stop assist
+        printf("\nstop assist ([decel] enabled 0: the feature is its own): lift-off at 30 km/h in gear 1, the box opens the clutch at idle + 150 rpm (%.1f km/h) and the truck coasts on at 0.07 m/s2.\n"
+               "per line: assist start (km/h) and time after the opening, mean deceleration to the standstill (target %.2f, asserted +-0.15), highest deceleration outside / inside the last 0.5 s (taper)\n"
+               "(outside asserted <= 0.7), highest jerk outside / inside the last 0.5 s (outside asserted <= the jerk limit %.1f), highest request, truck moved after the standstill (m), request 4.5 s after it\n",
+               [] { geared_init(); return (ts_idle_rpm() + 150) / 9.5493f * G_RADIUS / (G_RATIO[0] * G_DIFF) * 3.6f; }(), 0.5f, 4.0f);
+        int nrun = 0, nfail = 0;
+        auto line = [&](const char *name, const sasc &s, const sares &r, const char *why) {
+            printf("%-34s mode %d | ", name, s.mode);
+            if (!r.started) printf("no assist (request max %.2f)", r.req_max);
+            else printf("start %.1f km/h +%.1f s, mean %.2f, a %.2f / %.2f, jerk %.1f / %.1f, req max %.3f, moved %.3f m, req %.3f", r.v_start, r.t_start - r.t_open, r.mean, r.a_main, r.a_tail, r.jerk_main, r.jerk_tail, r.req_max, r.roll_m, r.req_late);
+            printf("  %s%s\n", why[0] ? "FAIL: " : "ok", why);
+            nrun++; if (why[0]) nfail++;
+        };
+        for (int learn = 0; learn < 2; learn++)
+            for (float gain : { 0.6f, 1.0f, 1.5f }) {
+                if (learn && gain != 1.0f && gain != 0.6f) continue;
+                for (float m : { 18.0f, 36.0f })
+                    for (float g : { 0.0f, 2.0f, -2.0f }) {
+                        char nm[80]; snprintf(nm, sizeof nm, "%2.0f t %+.0f%% brake x%.1f%s", m, g, gain, learn ? " learned" : "");
+                        for (int mode = 0; mode < 3; mode++) {
+                            sasc s; s.mass_t = m; s.grade = g; s.gain = gain; s.learn = learn; s.mode = mode;
+                            sares r = run_sa(s);
+                            char why[200] = "";
+                            if (mode == 0) {
+                                check(!r.started && r.req_max == 0 && g_sa_nohold == 0, "stop_assist 0 braked", why, sizeof why);
+                            } else {
+                                check(r.started, "no assist", why, sizeof why);
+                                check(r.stopped, "no stop", why, sizeof why);
+                                check(fabsf(r.mean - 0.5f) <= 0.15f, "mean deceleration outside 0.5 +- 0.15", why, sizeof why);
+                                check(r.a_main <= 0.7f, "deceleration over 0.7 outside the taper", why, sizeof why);
+                                check(r.jerk_main <= 4.0f, "jerk over the limit", why, sizeof why);
+                                if (mode == 1) check(r.req_late == 0, "request left after the stop", why, sizeof why);
+                                else check(r.roll_m <= 0.05f && r.req_late > 0, "not held / rolled more than 0.05 m", why, sizeof why);
+                                if (mode == 1 && g == 0) check(r.roll_m <= 0.05f, "rolled more than 0.05 m on the flat", why, sizeof why);
+                            }
+                            line(nm, s, r, why);
+                        }
+                    }
+            }
+        {   // the driver and the rest end it at once; nothing starts with the cruise on, in reverse, paused
+            struct { const char *name; sasc s; int expect_start; } cases[] = {
+                { "throttle tap 1 s in", [] { sasc s; s.thr_t = 1.0; return s; }(), 1 },
+                { "brake pedal 1 s in", [] { sasc s; s.brk_t = 1.0; return s; }(), 1 },
+                { "retarder lever 1 s in", [] { sasc s; s.lever_t = 1.0; return s; }(), 1 },
+                { "throttle tap 1 s in, mode 2", [] { sasc s; s.thr_t = 1.0; s.mode = 2; return s; }(), 1 },
+                { "cruise on", [] { sasc s; s.cruise = 1; return s; }(), 0 },
+                { "reverse", [] { sasc s; s.rev = 1; return s; }(), 0 },
+            };
+            for (auto &c : cases) {
+                sares r = run_sa(c.s);
+                char why[200] = "";
+                check(r.started == c.expect_start, c.expect_start ? "no assist" : "started", why, sizeof why);
+                if (c.expect_start) check(r.req_after_cancel == 0, "request 0.04 s after the pedal / lever", why, sizeof why);
+                else check(r.req_max == 0, "braked", why, sizeof why);
+                printf("%-34s mode %d | %s, request 0.04 s after %.3f, max %.3f  %s%s\n", c.name, c.s.mode, r.started ? "started" : "no assist", r.req_after_cancel, r.req_max, why[0] ? "FAIL: " : "ok", why);
+                nrun++; if (why[0]) nfail++;
+            }
+        }
+        {   // a descent where 0.5 m/s2 cannot be reached: capped, left to the driver (one log line)
+            sasc s; s.lift_kmh = 4.0f; s.grade = -15.0f; s.open_s = 0.1;
+            sares r = run_sa(s);
+            char why[200] = "";
+            check(r.started, "no assist", why, sizeof why);
+            check(r.req_max <= 0.3f + 1e-3f, "request over the cap", why, sizeof why);
+            check(SA.st == SA_OFF, "not let go", why, sizeof why);
+            printf("%-34s mode %d | start %.1f km/h, request max %.3f (cap 0.30), state %d (0 = let go)  %s%s\n", "-15% (out of reach)", s.mode, r.v_start, r.req_max, SA.st, why[0] ? "FAIL: " : "ok", why);
+            nrun++; if (why[0]) nfail++;
+        }
+        printf("%d stop assist scenarios, %d failed\n", nrun, nfail);
+        fails += nfail;
     }
     printf("%s\n", fails ? "decel sim: FAILED" : "decel sim: all asserts passed");
     return fails ? 1 : 0;
