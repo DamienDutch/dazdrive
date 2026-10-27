@@ -190,6 +190,48 @@ def lane(lines):
             print(f"  {s:8.1f}  {t[:190]}")
 
 
+def traffic(folder, lines):
+    section("Traffic probe")
+    tl = [(s, t) for s, t in lines if t.startswith("Traffic:")]
+    if not tl:
+        print("  not on ([traffic] probe=0)")
+        return
+    for s, t in tl[:3]:
+        print(f"  {s:8.1f}  {t[:220]}")
+    if len(tl) > 3:
+        print(f"  ... {len(tl) - 3} more; last:")
+        print(f"  {tl[-1][0]:8.1f}  {tl[-1][1][:220]}")
+    path = os.path.join(folder, "traffic.csv")
+    if not os.path.exists(path):
+        return
+    frame = defaultdict(list)   # PV/PT: the game's own position of our truck/trailer against the SDK (should be near 0)
+    kinds, hdg_back = Counter(), 0
+    with open(path, newline="") as f:
+        for r in csv.DictReader(f):
+            kinds[r["kind"]] += 1
+            try:
+                if r["kind"] in ("PV", "PT"):
+                    frame[r["kind"]].append(float(r["dist"]))
+                elif r["kind"] == "A" and r["hdg"] and abs(float(r["hdg"])) > 150:
+                    hdg_back += 1
+            except ValueError:
+                pass
+    print("  rows: " + ", ".join(f"{k} {v}" for k, v in kinds.items()) + f"; AI heading near +-180 (oncoming?): {hdg_back}")
+    for k, xs in frame.items():
+        print(f"  {k} offset from the SDK: p50 {pct(xs, 50):.2f} m, p90 {pct(xs, 90):.2f} m ({len(xs)} rows)")
+
+
+def track(folder):
+    path = os.path.join(folder, "track.csv")
+    if not os.path.exists(path):
+        return
+    section("Track (for the offline map test)")
+    with open(path, newline="") as f:
+        rows = list(csv.DictReader(f))
+    lim = Counter(r["limit_kmh"] for r in rows)
+    print(f"  {len(rows)} points (1/s); limits seen: " + ", ".join(f"{k} km/h x{v}" for k, v in sorted(lim.items(), key=lambda kv: float(kv[0] or 0))))
+
+
 def events(lines):
     section("Events")
     c = Counter()
@@ -224,6 +266,8 @@ def main():
     stop_assist(lines)
     brakes(lines)
     lane(lines)
+    traffic(folder, lines)
+    track(folder)
     events(lines)
 
 
