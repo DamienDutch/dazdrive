@@ -27,7 +27,7 @@
 #include <math.h>
 #include <string.h>
 
-static float p_herm;
+static float p_herm, p_bind_a;
 static float p_sg_rearm, p_ah_park, p_pc_travel, p_jn_signal, p_jn_coast, p_jn_over, p_jn_hand_kmh, p_jn_hand_m, p_own_lim, p_own_bias, p_eco_cap, p_pc_eco, p_pc_pw, p_pc_from, p_crest_heavy, p_os_cap, p_acc_fast_from, p_acc_fast_full, p_acc_fast_k, p_acc_calm, p_limiter, p_acc_up, p_acc_letter, p_ess, p_ess_dec, p_ess_off, p_ess_kmh, p_curve_lat, p_hill, p_hill_pct, p_hill_s, p_sg, p_sg_auto, p_descent, p_curve, p_curve_brake, p_min_set, p_isa, p_isa_off, p_isa_hold, p_predict, p_min_kmh, p_enabled, p_gap_s, p_gap_m, p_gap_l, p_min_m, p_max_m, p_smooth, p_step_tap, p_step_hold, p_hold_s, p_hold_rate, p_ret_off, p_res_lim, p_isa_ahead, p_isa_probe, p_junc, p_junc_lat, p_rb_kmh, p_junc_deg, p_rb_ratio, p_jn_dec, p_cv_coast, p_cv_brake, p_ah, p_ah_req, p_ah_lever, p_ah_gentle, p_ah_hard, p_ah_max, p_own_acc, p_own_brake, p_own_plan, p_own_gain, p_own_stop_m, p_own_dec, p_own_up, p_acc_cross, p_smart_kmh, p_desc_kmh, p_band_up, p_band_s, p_trace, p_aeb, p_aeb_manual, p_aeb_warn_s, p_aeb_part_s, p_aeb_full_s, p_aeb_part_dec, p_aeb_max_dec, p_aeb_kmh, p_aeb_evade, p_aeb_mode, p_aeb_margin, p_aeb_warn_dec, p_aeb_full_frac;
 static float p_rb_curves;  // roundabout_curves
 static float p_jn_margin, p_jn_cancel_s, p_approach_s;  // junctions: brake only to the junction speed + margin; cancel the cruise this many seconds before it
@@ -140,6 +140,7 @@ static param g_params[] = {
     { "trace", &p_trace, 1, "1 = write cruise.csv (10 per second while cruise is on or Auto Hold holds) for analysis" },
     { "approach_s", &p_approach_s, 2.5f, "own cruise throttle: the throttle eases off when the truck would reach the set speed within about this many seconds at the speed it is gaining now (also on a descent), so it arrives without overshooting. Eco 1.2x, Power 0.6x. 0 = off" },
     { "smooth", &p_smooth, 1, "1 = own smooth cruise throttle (no bursts after shifts; Eco gentle, Power keen), 0 = the game's" },
+    { "ahead_accel", &p_bind_a, 0.12f, "a bend, junction or roundabout ahead that the truck will have to slow down for soon: the cruise does not chase the set speed hard up to it and then cut. It gains speed at about this acceleration (m/s2) at most, only up to the speed from which it can still coast down to the bend or junction (the grade of the road up to it counts), then follows the slowing plan. Lower = a calmer approach, 0 = off (the target is the speed the plan allows now, as before)" },
     { "approach_by_mode", &p_app_mode, 1, "own cruise throttle: 1 = the approach to the set speed (more than 2.5 km/h under it) asks only a share of the pull the truck has to spare at this speed (what a full wish could give over what holding the speed takes), the share the mode has (approach_share_eco, approach_share, approach_share_power): about the same pull in every mode (0.9 / 0.95 / 1.0), the modes differ in rpm and shifting. A truck that does not gain speed is given more, and a climb is held at whatever it takes. 0 = the throttle follows the deficit up to full, as before. Not with a vehicle ahead (ACC)" },
     { "approach_share_eco", &p_app_sh_eco, 0.9f, "approach_by_mode, Eco: the share (0-1) of the pull to spare that the approach to the set speed asks. Lower = a slower, softer approach. Default close to the other modes: they pull up about equally hard, the difference lives in rpm and shifting" },
     { "approach_share", &p_app_sh, 0.95f, "approach_by_mode, Normal: the share (0-1) of the pull to spare that the approach to the set speed asks. Lower = a slower, softer approach" },
@@ -721,6 +722,25 @@ static float approach_ceiling(int md, float e, float acc_kmhs, float dt, int shi
     return s_app_ceil = fminf(1.0f, fmaxf(0.0f, (fh + share * fmaxf(0.0f, full - fh)) / fg));
 }
 
+// The coast deceleration over the next d meters: gravity of the mean grade the route has there on top of base (the grade of the truck now
+// when the route does not reach that far). Ride 8 (27-10): the grade of now at the foot of a climb planned a junction 290 m ahead as if the
+// whole road climbed, and at the top of it as if the climb went on.
+static float coast_over(float base, float d, float lo, float hi)
+{
+    float gm = d >= 10 ? route_grade(0, d) : NAN;
+    if (gm != gm) gm = pitch_grade();
+    return fminf(hi, fmaxf(lo, base + 0.0981f * gm));
+}
+// The speed (m/s) the cruise may chase while a slower speed lies ahead: env is the speed the coast plan allows now (along the road it falls as
+// env(s)^2 = env^2 - 2 a_c s) and the truck gains at a_g. The two meet where v^2 + 2 a_g s = env^2 - 2 a_c s: that speed is the
+// highest the truck can reach and still follow the plan down by coasting. Faster would be a burst followed by a cut. No fixed distance: far
+// from the bend env is large and the result is above the set speed. env at or under the speed of now (already slowing): env itself.
+static float ahead_cap(float v, float env, float a_c)
+{
+    if (!(env == env) || p_bind_a <= 0 || env <= v || !(a_c > 0)) return env;
+    return sqrtf((a_c * v * v + p_bind_a * env * env) / (p_bind_a + a_c));
+}
+
 static float cruise_body(void *ga, float dt, float pedal, float stock)
 {
     char *g = (char *)ga;
@@ -763,10 +783,17 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
         // harder"): the throttle comes off early on a gentle plan (coast), the brakes only on a firm plan (bend_kmh below)
         // the coast deceleration the plan counts on depends on the slope (Damien 25-10: 83 -> 38 km/h without gas up a 2-4 % hill, 1217-1243 s):
         // gravity adds 0.098 m/s2 per % uphill and takes it away downhill
-        float coast_a = fminf(1.0f, fmaxf(0.1f, p_cv_coast + 0.0981f * pitch_grade()));
+        float v_ms = fmaxf(fabsf(T.speed), 5.0f);
+        float coast_a = fminf(1.0f, fmaxf(0.1f, p_cv_coast + 0.0981f * pitch_grade())), coast_b = coast_a;
         // bends only: junctions reach the throttle and the brake through vj below, after the gas-pedal, turn-signal and margin filters
         // (25-10: "braked without reason" at 2437 s was a 90-degree junction 600 m ahead planned here as a "bend", unfiltered)
-        float vb = route_bend_speed(a_lat, coast_a);
+        // the grade the truck coasts on is the road up to the bend, not the road under it now: plan with the mean grade over 8, 16 and 32 s of
+        // road and take the lowest speed (a climb that ends before the bend does not count, a descent that goes on does)
+        float vb = NAN;
+        for (float sec : { 8.0f, 16.0f, 32.0f }) {
+            float ca = coast_over(p_cv_coast, v_ms * sec, 0.1f, 1.0f), vi = route_bend_speed(a_lat, ca);
+            if (vi == vi && (vb != vb || vi < vb)) { vb = vi; coast_b = ca; }
+        }
         s_bend_coast_kmh = vb * 3.6f;
         float vb_brake = route_bend_speed(a_lat, p_cv_brake);
         static double said;
@@ -776,6 +803,11 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
         }
         route_junction_t ji = {};
         float vj = junc_on() ? route_junction_speed(coast_a, &ji) : NAN;
+        float coast_j = coast_a;
+        if (vj == vj) {   // again with the grade over the road to that junction
+            coast_j = coast_over(p_cv_coast, ji.dist_m, 0.1f, 1.0f);
+            vj = route_junction_speed(coast_j, &ji);
+        }
         // You step on the gas for a junction we are slowing for: you go another way than the route (Damien 12-10: a petrol station with
         // 3-4 side entrances, the route turned there, he drove straight on and we braked to 20 for each). Leave junctions and roundabouts alone
         // for 6 s (Damien 12-10: first 12); the bends of the road itself still count.
@@ -855,11 +887,11 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
             jn_kmh = ji.limit_ms * 3.6f;
             jn_need = (v * v - ji.limit_ms * ji.limit_ms) / (2 * fmaxf(dd, 6.0f));
         }
-        if (vb == vb) target = fminf(target, vb * 3.6f);
+        if (vb == vb) target = fminf(target, ahead_cap(v_ms, vb, coast_b) * 3.6f);
         if (vb_brake == vb_brake) bend_kmh = vb_brake * 3.6f;  // the brakes (below) follow the firm plan
         // the junction profile is a target too (ts4w 532-553 s: no lead, set 83, braking 0.1-0.15 for a 95° turn while
         // our throttle sat at 1.0, because only the brake knew about the junction)
-        if (vj == vj && vj > 0) target = fminf(target, vj * 3.6f);
+        if (vj == vj && vj > 0) target = fminf(target, ahead_cap(v_ms, vj, coast_j) * 3.6f);
         // and no gas toward a junction or roundabout we have to slow down for anyway: the plan above allows speeds above ours far
         // from the entry, so the throttle came on and the brakes right after (Damien 12-10: "gas, then brake")
         // from 400 m (30 s) out, not 150 m: entering a town at 42 km/h the throttle came on towards a roundabout 400 m ahead (35 km/h plan) up to 51 km/h,
@@ -867,9 +899,9 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
         if (vj == vj && ji.limit_ms > 0 && kmh > ji.limit_ms * 3.6f + 1 && ji.dist_m < fmaxf(400.0f, 30 * kmh / 3.6f)) {
             // Gas only while the truck can still coast down to the junction speed (not a blanket no-gas from 400 m: 25-10, two roundabouts
             // close together on a 70 road: 30 km/h all the way) and never faster than the junction speed + junction_approach_over_kmh
-            float jn_coast = fminf(0.8f, fmaxf(0.05f, p_jn_coast + 0.0981f * pitch_grade()));
-            float v_env = sqrtf(ji.limit_ms * ji.limit_ms + 2 * jn_coast * fmaxf(ji.dist_m - (ji.roundabout ? 15 : 8), 0.0f)) * 3.6f;
-            float v_ok = fminf(v_env, ji.limit_ms * 3.6f + p_jn_over);
+            float jn_coast = coast_over(p_jn_coast, ji.dist_m, 0.05f, 0.8f);
+            float v_env = sqrtf(ji.limit_ms * ji.limit_ms + 2 * jn_coast * fmaxf(ji.dist_m - (ji.roundabout ? 15 : 8), 0.0f));
+            float v_ok = fminf(ahead_cap(v_ms, v_env, jn_coast) * 3.6f, ji.limit_ms * 3.6f + p_jn_over);
             target = fminf(target, kmh >= v_ok - 2 ? kmh : v_ok);
         }
     }
