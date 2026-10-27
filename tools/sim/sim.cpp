@@ -629,6 +629,7 @@ static int run_scores_cross();
 static int run_scores_kickwish();
 static int run_scores_skipfrac();
 static int run_scores_limiter();
+static int run_scores_cruisekick();
 static int run_scores()
 {
     printf("\n=== SCORES part 1: the score function on the vehicle model (Renault ATO 12 speeds, diff 3.08) ===\n");
@@ -732,6 +733,7 @@ static int run_scores()
     r |= run_scores_kickwish();
     r |= run_scores_skipfrac();
     r |= run_scores_limiter();
+    r |= run_scores_cruisekick();
     return r | g_sc_failed;
 }
 
@@ -1797,6 +1799,46 @@ static int run_scores_limiter()
     printf("  end in gear %d at %.0f km/h, reached 12: %s\n", M.gear, M.v * 3.6f, top ? "yes" : "no");
     if (getenv("SC_SHIFTS")) for (int i = 0; i < g_rec_n; i++) printf("      %6.1f  %d->%d (%s) %.0f rpm\n", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why, g_rec[i].rpm);
     sc_check(top, "at a 95 km/h cap with the pedal at 1.0 the truck ends in the top gear (12)");
+    return g_sc_failed;
+}
+
+// ---- part 12: the own cruise downshifts when the gear is too weak. With [cruise] force_mode 1 the cruise asks a force, and
+// kickdown_by_wish reads it the same way as the pedal's wish: from 63 km/h in 11 (a step too tall) it downshifts to 10 within
+// seconds and reaches 80 km/h sooner than without the kickdown.
+static double g_ck_t80;
+static void c_ck(double t)
+{
+    if (t <= 0) { g_ck_t80 = -1; g_rec_n = 0; g_pl_t0 = t_now; }
+    c_cforce(t);
+    if (g_ck_t80 < 0 && M.v * 3.6f >= 80) g_ck_t80 = t;
+}
+static int run_scores_cruisekick()
+{
+    printf("\n=== SCORES part 12: the own cruise 83 km/h from 63 in 11, force_mode 1, ATO 33 t flat (kickdown by wish 0 / 1) ===\n");
+    use_ato();
+    set_param("choice", 1.0f); set_param("choice_objective", 1.0f);
+    g_cruise_smooth = 1;
+    g_cf_set = 83;
+    double dn10[2], t80[2];
+    for (int kw = 0; kw < 2; kw++) {
+        set_param("kickdown_by_wish", (float)kw);
+        CF.fm = 1; CF.on = 0; CF.at = -1;
+        g_rec_on = 1;
+        sc_do(kw ? "cruise 83 (kickdown by wish 1)" : "cruise 83 (kickdown by wish 0)", {33000, 63, 11, 90, 3, 0.5f, 0, -1, -1, r_flat0, 1}, c_ck, 1);
+        g_rec_on = 0;
+        dn10[kw] = -1; t80[kw] = g_ck_t80;
+        for (int i = 0; i < g_rec_n; i++) if (g_rec[i].b == 10 && g_rec[i].b < g_rec[i].a) { dn10[kw] = g_rec[i].t - g_pl_t0; break; }
+        char d[16], t[16];
+        snprintf(d, sizeof d, dn10[kw] < 0 ? "-" : "%.1f", dn10[kw]);
+        snprintf(t, sizeof t, t80[kw] < 0 ? "-" : "%.1f", t80[kw]);
+        printf("  kickdown_by_wish %d: first downshift to 10 at %s s, 80 km/h at %s s (end gear %d)\n", kw, d, t, M.gear);
+        if (getenv("SC_SHIFTS")) for (int i = 0; i < g_rec_n; i++) printf("      %6.1f  %d->%d (%s) %.0f rpm\n", g_rec[i].t - g_pl_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why, g_rec[i].rpm);
+    }
+    sc_check(dn10[1] >= 0 && dn10[1] <= 6, "the cruise's asked force downshifts to 10 within a few seconds (force_mode 1, kickdown_by_wish 1)");
+    sc_check(t80[1] >= 0 && (t80[0] < 0 || t80[1] < t80[0] - 0.5), "it reaches 80 km/h sooner than without the kickdown");
+    set_param("kickdown_by_wish", 1.0f);
+    CF.fm = 0; CF.on = 0; CF.at = -1;
+    g_cruise_smooth = 0;
     return g_sc_failed;
 }
 

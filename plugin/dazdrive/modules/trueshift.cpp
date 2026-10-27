@@ -663,6 +663,12 @@ static void wish_kick_update(int g, float v, float pedal, double dt, double now)
     if (pdt > 0.05 && pdt < 0.5) rate = (float)((pedal - S.wk_pp) / pdt);
     if (pdt > 0.05) { S.wk_pp = pedal; S.wk_pt = now; }
     float fw = p_kw > 0 && p_choice > 0 && p_ch_obj > 0 && S.mode != MODE_M && S.ours && g > 0 && V.eng_ok && !V.electric ? pedal_wish_force(v) : -1.0f;
+    // (the own cruise with [cruise] force_mode 1 asks a force too: the same kickdown when its force is what this gear cannot give, cruise on and the pedal off)
+    int cc_wish = 0;
+    if (!(fw >= 0) && p_kw > 0 && p_choice > 0 && p_ch_obj > 0 && S.mode != MODE_M && S.ours && g > 0 && V.eng_ok && !V.electric) {
+        fw = cruise_wish_force(v);
+        if (fw >= 0) cc_wish = 1;
+    }
     float fg = g > 0 && V.eng_ok ? vehicle_force_at(g, v, 1.0f) : 0.0f;
     if (!(fw >= 0) || !(fg > 1)) { S.wk_d = 0; S.wk_fast = 0; S.wk_until = 0; return; }
     const float thr = by_mode(p_kr_eco, p_kr_norm, p_kr_pw), level = fmaxf(0.0f, by_mode(p_kl_eco, p_kl_norm, p_kl_pw));
@@ -671,11 +677,13 @@ static void wish_kick_update(int g, float v, float pedal, double dt, double now)
     S.wk_r = r;
     if (r > thr) S.wk_d = fminf(2 * level, S.wk_d + (r - thr) * (float)dt);
     else S.wk_d = fmaxf(0.0f, S.wk_d - level / 1.5f * (float)dt);
-    // a fast press (rate over kickdown_rate) that the gear does not give: half of what is left of the level, once per press
-    if (rate < 0.8f * by_mode(2.5f, p_kick_rate, 1.0f)) S.wk_fast = 0;
-    else if (rate > by_mode(2.5f, p_kick_rate, 1.0f) && r > thr && !S.wk_fast) { S.wk_fast = 1; S.wk_d += 0.5f * fmaxf(0.0f, level - S.wk_d); }
-    if (r > thr && pedal >= by_mode(0.97f, p_kick_pedal, 0.85f)) S.wk_d = fmaxf(S.wk_d, level);
-    if (pedal < 0.3f) S.wk_until = 0;
+    if (!cc_wish) {   // (the pedal-only rules: the cruise has no press, no flat pedal to measure, and its throttle is not a lift)
+        // a fast press (rate over kickdown_rate) that the gear does not give: half of what is left of the level, once per press
+        if (rate < 0.8f * by_mode(2.5f, p_kick_rate, 1.0f)) S.wk_fast = 0;
+        else if (rate > by_mode(2.5f, p_kick_rate, 1.0f) && r > thr && !S.wk_fast) { S.wk_fast = 1; S.wk_d += 0.5f * fmaxf(0.0f, level - S.wk_d); }
+        if (r > thr && pedal >= by_mode(0.97f, p_kick_pedal, 0.85f)) S.wk_d = fmaxf(S.wk_d, level);
+        if (pedal < 0.3f) S.wk_until = 0;
+    }
     bool after_up = S.shift_dir > 0 && now - S.shift_at < p_ch_flip;
     if (S.wk_d >= level && r > thr && now >= S.wk_retry && !(after_up && r < thr + 0.3f) && S.wk_until <= now) S.wk_until = now + 3;
 }
