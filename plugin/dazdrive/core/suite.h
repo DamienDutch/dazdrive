@@ -150,6 +150,7 @@ enum LaneState { LANE_OFF, LANE_WAIT_SLOW, LANE_WAIT_NO_CRUISE, LANE_WAIT_INDICA
 extern volatile float g_clutch_ours;  // the clutch value Creep puts on the drivetrain (launch or crawl), NAN when the game's own applies
 static inline float clutch_seen() { float c = g_clutch_ours; return c == c ? c : T.eff_clutch; }  // what the drivetrain sees: use instead of T.eff_clutch for 'is the clutch closed'
 extern volatile float g_pcc_need_kmh;  // TrueShift: extra speed over the set speed the next climb on the route needs (NAN = unknown)
+extern volatile float g_decel_need;    // Decel: the service brake request (0..1) the assist needs besides the lever's retarder and engine brake, 0 = none (or downshift_assist 0); TrueShift shifts down earlier for it
 // PCC bands written in km/h are meant for a set speed of 70 km/h and scale with it (Scania's band is a percentage of the set speed):
 // calmer at 60, roomier at 90. 1 when the cruise is off.
 static inline float band_scale(float set_ms)
@@ -226,6 +227,7 @@ float low_stop_rpm(float idle, float thr, float brake, int gear);   // the stop 
 int ts_start_gear(float thr);   // TrueShift: the start gear by physics (mass, grade, engine) for this pedal, whether or not TrueShift has the truck; 0 = unknown
 int ts_stop_hooked();            // TrueShift: the game's stop threshold hook is in (the owner's clutch-open point needs it)
 float ts_idle_rpm();            // TrueShift: the idle rpm (learned at a standstill, else the ini's; not the game's engine figure Creep reads)
+float ts_brake_down_eta(float decel);   // TrueShift: seconds until its next downshift in braking at this deceleration (m/s2, > 0), from the speed falling to the point the braking rules have set; NAN = none expected
 int ts_mode();                  // TrueShift: the driving mode (MODE_ECO / MODE_NORMAL / MODE_POWER) of an automatic truck it can read; -1 = manual box, M, or an unsupported truck
 // Pedal (modules/pedal.cpp): the wish pedal. The driver's pedal p becomes a wish for power; the throttle that delivers it in the gear
 // the truck is in. Returns 1 and the throttle in *out where it applies, else 0 and *out = p (pass-through: the old pedal path).
