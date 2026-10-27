@@ -207,6 +207,7 @@ static float g_learn_mass;
     X(W_M_LUGGING, "M: lugging") \
     X(W_UP_WAIT, "up wait") \
     X(W_LIFT_UP, "up on lift") \
+    X(W_ASSIST_DOWN, "braking assist") \
     /* end */
 enum why_e {
 #define X(id, text) id,
@@ -295,10 +296,10 @@ static struct {
     float lift_prev;        // the pedal of the last update (for that)
     double lift_used;       // lift_at of the lift that already had its upshift (one per lift)
     // the braking downshift rules as decide_gear last looked at them (ts_brake_down_eta reads them): the rule's rpm threshold, the
-    // seconds of speed the shift loses before the rule judges (the engine brake keep point, the braking rule, the downshift point)
-    double bd_at, bd_after;   // when the rule looked, and not before
-    int bd_gear;
-    float bd_floor, bd_lead;
+    // seconds of speed the shift loses before the rule judges (rule 1: the engine brake keep point, 2: braking, 3: the deceleration assist's cap)
+    double bd_at, bd_after, ad_at, ad_after;   // when the rule looked, and not before
+    int bd_gear, ad_gear;
+    float bd_floor, bd_lead, ad_cap, ad_lead;
 } S;
 
 // The driver's lifts (pedal off from a pull until the pedal again, a brake or a standstill), for lift_upshift: the last LIFT_N of the
@@ -579,7 +580,7 @@ static void ts_reset(int level, const char *why)
     S.demand_at = S.pedal_at = 0;           // the next dt is "unknown": filters step, no kickdown from a stale pedal
     S.ours_at = S.shift_at = none;          // dwell and take-over timers must not hold a shift back after a pause
     S.top_at = none; S.crest_ref = 0; S.crest_said = 0;  // no "over the top" hold across a teleport
-    S.bd_at = none;               // no braking downshift is expected across a break
+    S.bd_at = S.ad_at = none;               // no braking downshift is expected across a break
     S.blocked_log_at = 0;
     S.gap_since = 0;                        // a pause in the gap state is not a stuck shift (the timer starts again)
     S.pedal_prev = clampf(T.in_thr, 0, 1);
@@ -1085,6 +1086,26 @@ static float dn_point(int cur, float v, float thr, float f_res, float *base)
     return dn_eff;
 }
 
+// The deceleration assist's downshift (see decide_gear): the lowest gear (one or two below cur) that lands, at the speed the shift ends at, inside the
+// engine's brake range (rpm from its lower end up to the cap: a fifth of the range's width under the top, and 88 % of the rpm limit);
+// cur if none does. *cap = that cap (rpm).
+static int assist_down(int cur, float v, float *cap)
+{
+    float lo = V.eng.range[R_BRAKE][0], hi = V.eng.range[R_BRAKE][1];
+    *cap = fminf(hi - 0.2f * (hi - lo), V.eng.rpm_limit * 0.88f);   // (under the 0.9 of the limit where an upshift is vetoed while slowing: no flip back up)
+    if (!(hi > lo) || !(*cap > lo)) return cur;
+    // (the speed at the end of a shift of the length the engine says, not the longer one the braking rule takes to be on the low side:
+    // here the top is what matters, and the clutch is open as long as that)
+    float v_e = fmaxf(0.5f, v - fmaxf(0.0f, -T.accel) * V.eng.shift_time);
+    int best = cur;
+    for (int l = cur - 1; l >= 1 && l >= cur - (p_eb_skip > 0 ? 2 : 1); l--) {
+        float r = rpm_at(l, v_e);
+        if (r > *cap) break;
+        if (r >= lo) best = l;
+    }
+    return best;
+}
+
 static int decide_gear(void *self, int *why)
 {
     *why = W_NONE;
@@ -1180,6 +1201,19 @@ static int decide_gear(void *self, int *why)
     if (top_ok) { S.top_at = now; S.top_floor = top_floor / 3.6f; }
     // ... and over the top: the profile no longer sees the last meters of the climb, the filtered pull lags behind
     int top_over = !top_ok && now - S.top_at < 4 && now >= S.top_at && v > S.top_floor && !(rk && route_max_grade(0, v * 4) > 1.0f);
+
+    // Deceleration assist ([decel] downshift_assist): while its service brake is needed to reach the lever's target, the order is the
+    // retarder, then a lower gear, then the service brake. A lower gear puts the engine into its own brake range, where the engine
+    // brake and the retarder (through the lower gear's ratio) do more than at the rpm of now. The lowest gear whose rpm after the shift
+    // is inside the range, short of its top by a fifth of its width and of the rpm limit (88 %), is taken at once (two gears when that
+    // lands inside the range too and ebrake_skip allows it).
+    if (g_decel_need > 0 && coast_p && (T.retarder > 0 || T.motor_brake) && cur > 1) {
+        float cap = 0;
+        S.ad_at = now; S.ad_gear = cur; S.ad_lead = V.eng.shift_time; S.ad_after = S.shift_at + p_min_gap;
+        int l = assist_down(cur, v, &cap);
+        S.ad_cap = cap;
+        if (l < cur && since > p_min_gap) { *why = W_ASSIST_DOWN; return l; }
+    }
 
     // Engine brake / retarder: keep the rpm up, more for a stronger stage; the
     // full brake range when the game's "downshift with engine brake" is on.
@@ -1877,7 +1911,7 @@ int ts_start_gear(float thr)
 float ts_idle_rpm() { return idle_rpm(); }
 
 // Seconds until TrueShift's next downshift in braking, at this deceleration: the speed falls to the point where the rule that
-// looked last (the engine brake's keep point, the braking rule's floor, the downshift point) judges the gear, less
+// looked last (the engine brake's keep point, the braking rule's floor, the deceleration assist's window) judges the gear, less
 // the speed the shift itself loses; 0 = due now (or waiting only for the dwell), NAN = no such rule is looking.
 float ts_brake_down_eta(float decel)
 {
@@ -1890,6 +1924,15 @@ float ts_brake_down_eta(float decel)
     if (S.bd_gear == cur && now - S.bd_at < 0.3 && now >= S.bd_at) {
         float t = (v - (S.bd_floor / per + decel * S.bd_lead)) / decel;
         eta = fmaxf(fmaxf(t, 0.0f), (float)(S.bd_after - now));
+    }
+    if (S.ad_gear == cur && now - S.ad_at < 0.3 && now >= S.ad_at && S.ad_cap > 0) {
+        for (int l = cur - 1; l >= 1 && l >= cur - (p_eb_skip > 0 ? 2 : 1); l--) {
+            float pl = rpm_at(l, 1.0f);
+            if (!(pl > 0)) continue;
+            float t = (v - (S.ad_cap / pl + decel * S.ad_lead)) / decel;
+            t = fmaxf(fmaxf(t, 0.0f), (float)(S.ad_after - now));
+            if (!(eta <= t)) eta = t;
+        }
     }
     return eta;
 }

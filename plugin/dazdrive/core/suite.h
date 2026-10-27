@@ -150,6 +150,7 @@ enum LaneState { LANE_OFF, LANE_WAIT_SLOW, LANE_WAIT_NO_CRUISE, LANE_WAIT_INDICA
 extern volatile float g_clutch_ours;  // the clutch value Creep puts on the drivetrain (launch or crawl), NAN when the game's own applies
 static inline float clutch_seen() { float c = g_clutch_ours; return c == c ? c : T.eff_clutch; }  // what the drivetrain sees: use instead of T.eff_clutch for 'is the clutch closed'
 extern volatile float g_pcc_need_kmh;  // TrueShift: extra speed over the set speed the next climb on the route needs (NAN = unknown)
+extern volatile float g_decel_need;    // Decel: the service brake request (0..1) the assist needs besides the lever's retarder and engine brake, 0 = none (or downshift_assist 0); TrueShift shifts down earlier for it
 // PCC bands written in km/h are meant for a set speed of 70 km/h and scale with it (Scania's band is a percentage of the set speed):
 // calmer at 60, roomier at 90. 1 when the cruise is off.
 static inline float band_scale(float set_ms)

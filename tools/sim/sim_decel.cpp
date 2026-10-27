@@ -52,6 +52,7 @@ volatile int g_pedal_mapped;
 volatile int g_lcx;
 volatile float g_overspeed_cap = 5;
 volatile float g_pcc_need_kmh = NAN;
+volatile float g_decel_need;
 int g_log_level = 2;
 incident_ctx g_inc = { 0, 0, 0, NAN, NAN };
 double g_incident_mb = 0;
@@ -453,7 +454,7 @@ static gres run_g(const gsc &s)
     else { T.retarder = (unsigned)s.step; T.retarder_steps = (unsigned)s.n; }
     g_mass_kg = s.mass_t * 1000; g_radius = G_RADIUS;
     for (auto &p : g_params) *p.val = p.def;
-    p_enabled = (float)s.dec_on; p_pre = (float)s.pre;
+    p_enabled = (float)s.dec_on; p_pre = (float)s.pre; p_dsa = (float)s.dsa;
     if (s.ramp_s >= 0) p_ramp = s.ramp_s;
     D = decltype(D)();
     for (int i = 0; i < m_trueshift.n_params; i++) *m_trueshift.params[i].val = m_trueshift.params[i].def;
@@ -463,6 +464,7 @@ static gres run_g(const gsc &s)
     g_ret_scale = 1.0f; s_ret_in = s.hook != 0;
     s_req_ours = 0; s_dec_was = 0; s_br_at = 0; s_hooked = 1;
     s_aeb_was = s_hill_was = s_hold_was = 0;
+    g_decel_need = 0;
     t_now = 0;
     vehicle_reset(RESET_HARD);
     m_trueshift.reset(RESET_HARD, "sim");
@@ -583,7 +585,7 @@ static gres run_g(const gsc &s)
         }
         if (g_ret_scale < 0.5f && !in_gap && !neutral && D.rt < 0 && D.on) { off_run += (float)DT; r.ret_off_s = fmaxf(r.ret_off_s, off_run); }
         else off_run = 0;
-        if (verbose && step_i % vstep == 0) printf("   t=%5.2f v=%5.1f g=%2d rpm=%4.0f a=%5.2f ret=%4.2f bd=%4.2f eb=%4.2f req=%.3f lvl=%.3f ph=%.2f k=%.2f kr=%.2f kb=%.3f eta=%5.2f %s\n", t, v * 3.6f, GB.gear, rpm, a, ret, bd, eb, cur_req(), D.lvl, D.ph, g_ret_scale, D.kr, D.k, D.on ? ts_brake_down_eta(fmaxf(D.a, 0)) : NAN, in_gap ? "gap" : neutral ? "neutral" : "");
+        if (verbose && step_i % vstep == 0) printf("   t=%5.2f v=%5.1f g=%2d rpm=%4.0f a=%5.2f ret=%4.2f bd=%4.2f eb=%4.2f req=%.3f lvl=%.3f ph=%.2f k=%.2f kr=%.2f kb=%.3f eta=%5.2f need=%.2f %s\n", t, v * 3.6f, GB.gear, rpm, a, ret, bd, eb, cur_req(), D.lvl, D.ph, g_ret_scale, D.kr, D.k, D.on ? ts_brake_down_eta(fmaxf(D.a, 0)) : NAN, g_decel_need, in_gap ? "gap" : neutral ? "neutral" : "");
         // the truck
         prev_v = v;
         v -= a * (float)DT;
@@ -828,6 +830,7 @@ int main(int argc, char **argv)
     }
     {   // ---- the geared plant: A (the build-up), B (the hand-over ahead of a shift), C (the earlier downshift)
         geared_init();
+        const float lo = G_RANGES[0][0], hi = G_RANGES[0][1];
         printf("geared plant (TrueShift for real; the retarder through the gear ratio, an engine brake rising with the rpm), 60 km/h to a stop, lever held, a shift is a 1.1 s gap:\n");
         printf("B: pre_blend 0 against 1 (downshift_assist 0). decel - target (m/s2) lowest/highest in the 0.8 s before the clutch opens, while it is open, in the 1.0 s after it\n"
                "closes, over the downshifts above 12 km/h from 2 s on that had a hand-over ahead (n of m); asserted for pre_blend 1: in the shift within +-0.30; before and after within +-0.40 (the loop's own tracking: the first gap's guess of the brake's gain\n"
@@ -868,7 +871,8 @@ int main(int argc, char **argv)
             rt_a[i] = r.rt_n ? r.rt_sum / (float)r.rt_n : -1; bu_a[i] = r.bu_n ? r.bu_sum / (float)r.bu_n : -1;
             char why[120] = "";
             check(r.n_dn >= 1 && r.af_jerk <= p_jerk, "jerk after the close over the limit", why, sizeof why);
-            printf("  %-20s %2.0f t | jerk-limited %.2f s, factor settled in %.2f s (%d closings) | after the close %+.2f/%+.2f, jerk %.1f  %s%s\n", ar[i].name, ar[i].mass, rt_a[i], bu_a[i], r.bu_n, r.af_lo, r.af_hi, r.af_jerk,
+            char sb[24]; if (bu_a[i] >= 0) snprintf(sb, sizeof sb, "%.2f s", bu_a[i]); else snprintf(sb, sizeof sb, "n/a (stops first)");
+            printf("  %-20s %2.0f t | jerk-limited %.2f s, factor settled in %s (%d closings above 12 km/h) | after the close %+.2f/%+.2f, jerk %.1f  %s%s\n", ar[i].name, ar[i].mass, rt_a[i], sb, r.bu_n, r.af_lo, r.af_hi, r.af_jerk,
                    why[0] ? "FAIL: " : "ok", why);
             if (why[0]) fails++;
         }
@@ -878,6 +882,36 @@ int main(int argc, char **argv)
             // the flat plant above holds the pair that differs by a set margin)
             check(rt_a[0] > 0 && rt_a[1] >= rt_a[0], "the large hand-over was built up faster than the small one", why, sizeof why);
             printf("  the small hand-over took %.2f s, the large one %.2f s  %s%s\n", rt_a[0], rt_a[1], why[0] ? "FAIL: " : "ok", why);
+            if (why[0]) fails++;
+        }
+        printf("C: downshift_assist 0 against 1, step 2 of 4, both gear choices. Service brake: its integral over the stop (request x s); engine brake range %.0f-%.0f rpm, rpm limit %.0f;\n"
+               "asserted: the integral lower with the assist, the rpm after an assist shift inside %.0f..%.0f (never above the range's top less a tenth of its width), the engine never over the limit, no\n"
+               "up-down pair within 4 s, a stop in both:\n", lo, hi, G_LIMIT, lo, hi - 0.1f * (hi - lo));
+        for (int ch = 0; ch < 2; ch++) for (float mass : { 18.0f, 36.0f }) {
+            gsc g; g.mass_t = mass; g.step = 2; g.choice = ch;
+            gsc g0 = g; g0.dsa = 0;
+            gres r0 = run_g(g0), r1 = run_g(g);
+            char why[200] = "";
+            check(r1.brake_int < r0.brake_int, "the service brake's integral is not lower", why, sizeof why);
+            check(r1.n_assist >= 1, "no downshift by the assist", why, sizeof why);
+            check(r1.assist_rpm_hi <= hi - 0.1f * (hi - lo) && r1.assist_rpm_lo >= lo * 0.9f, "rpm after an assist shift outside the range", why, sizeof why);
+            check(r1.rpm_max <= G_LIMIT && r1.rpm_max < hi, "the engine went over the limit / the range's top", why, sizeof why);
+            check(r1.n_hunt == 0, "hunting (an up-down pair within 4 s)", why, sizeof why);
+            check(r1.t_stop > 0 && r0.t_stop > 0 && r1.t_stop < r0.t_stop + 1.5f, "no stop / a much longer one", why, sizeof why);
+            printf("  choice %d, %2.0f t | brake integral %.2f -> %.2f (%.0f %%), stop %.1f -> %.1f s | %d shifts (%d by the assist, rpm after %.0f..%.0f), max rpm %.0f, hunts %d  %s%s\n",
+                   ch, mass, r0.brake_int, r1.brake_int, 100.0f * (r1.brake_int / r0.brake_int - 1.0f), r0.t_stop, r1.t_stop, r1.n_shift, r1.n_assist, r1.assist_rpm_lo, r1.assist_rpm_hi, r1.rpm_max, r1.n_hunt,
+                   why[0] ? "FAIL: " : "ok", why);
+            if (why[0]) fails++;
+        }
+        {   // decel off: TrueShift is on its own, nothing of the assist reaches it
+            gsc g; g.mass_t = 36; g.step = 2; g.dec_on = 0;
+            gres r = run_g(g);
+            gsc g2 = g; g2.dsa = 0; g2.pre = 0;
+            gres r2 = run_g(g2);
+            char why[100] = "";
+            check(r.n_assist == 0 && r.brake_int == 0 && g_decel_need == 0, "the assist acted with decel off", why, sizeof why);
+            check(r.n_shift == r2.n_shift && r.t_stop == r2.t_stop, "decel off differs with the keys at 0", why, sizeof why);
+            printf("  decel off | %d shifts, no assist shift, no brake  %s%s\n", r.n_shift, why[0] ? "FAIL: " : "ok", why);
             if (why[0]) fails++;
         }
     }

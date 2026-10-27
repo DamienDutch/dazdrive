@@ -47,12 +47,15 @@
 // jerk limit, the factor following the brake model, so the clutch opens on a brake that already holds the target. It unwinds the same
 // way when the shift does not come, and is given up after a while when it is ready and nothing happens. Without the hook (or with
 // ramp_s 0) only the brake rises ahead of the shift, by a small amount (the retarder stays: more would overshoot).
+// Downshift assist (downshift_assist): the order is the retarder, then a lower gear, then the service brake. While the brake is needed (its level outside
+// the gaps over DC_NEED, 1.5 s after the lever was pulled, when the retarder has built up) g_decel_need tells TrueShift, which then
+// takes a lower gear that puts the engine into its own brake range (modules/trueshift.cpp, assist_down) earlier than its own rules do.
 #include "../core/suite.h"
 #include "../core/vehicle.h"
 #include <math.h>
 #include <string.h>
 
-static float p_enabled, p_tmin, p_tmax, p_tcurve, p_jerk, p_max, p_soften, p_ramp, p_pre;
+static float p_enabled, p_tmin, p_tmax, p_tcurve, p_jerk, p_max, p_soften, p_ramp, p_pre, p_dsa;
 
 static param g_params[] = {
     { "enabled", &p_enabled, 0, "1 = while a retarder or engine-brake step is held and both pedals are free, the service brake adds what is missing to reach that step's target deceleration (bridges the gearbox shifts, helps at low speed and with a heavy load). 0 = off" },
@@ -64,6 +67,7 @@ static param g_params[] = {
     { "soften", &p_soften, 1, "1 = when the step alone brakes harder than its target (a light truck), the game's retarder is made weaker until the target holds; full again when the lever is released. Needs [core] retarder_hook = 1. 0 = the retarder stays as the game has it" },
     { "ramp_s", &p_ramp, 1.0f, "most seconds the game's retarder takes to build back up after a gearbox shift. The service brake hands over at the rate the jerk limit allows (a small difference takes a fraction of a second, a large one longer, never more than this), so the deceleration does not jump when the clutch closes; in the shift the brake alone holds the target. Needs [core] retarder_hook = 1. 0 = the retarder comes back as the game has it" },
     { "pre_blend", &p_pre, 1, "1 = when the gearbox is about to shift down while braking, the retarder's share is handed to the service brake before the clutch opens, at the jerk limit, so the deceleration holds through the shift. The retarder's side needs [core] retarder_hook = 1 and ramp_s above 0; without it only the service brake rises ahead of the shift, by a small amount. 0 = the brake takes over when the clutch opens" },
+    { "downshift_assist", &p_dsa, 1, "1 = while the service brake is needed to reach the target, the gearbox shifts down earlier when a lower gear puts the engine into its own engine-brake rpm range (never near the top of the range or over the rpm limit): the retarder and the engine brake work through the lower gear before the service brake does. 0 = the gear is chosen as without the assist" },
 };
 
 // Constants of the controller (physics of the measurements, not preferences).
@@ -102,6 +106,8 @@ static const float DC_PRE_HYS = 0.3f;    // s, a hand-over under way holds while
 static const float DC_PRE_OVS = 0.2f;    // m/s2, without the retarder hook the brake is raised ahead of a shift by this much at most (the retarder stays)
 static const float DC_PRE_MIN = 0.1f;    // m/s2, a smaller share of the retarder is not worth preparing
 static const float DC_PRE_HOLD_S = 1.5f; // s, a hand-over complete this long and no shift: given up (until the prediction clears)
+static const float DC_NEED = 0.05f;      // request, the service brake that counts as needed for downshift_assist
+static const float DC_NEED_S = 1.5f;     // s, the lever has been held this long (the retarder has built up) before the need counts
 static const float DC_RAMP_TAIL = 0.6f;  // s, a build-up ends this long after its level did at the latest (four lags of the brake)
 static const float DC_RAMP_MIN = 0.05f;  // s, the shortest build-up after a shift (a few frames: a hand-over of nothing is done at once)
 
@@ -156,6 +162,7 @@ static struct {
     float pbs;            // pre-blend: that share as the retarder's factor follows it (through the brake's lag)
     float pb_s;           // pre-blend: seconds the complete hand-over has been held
     int pb_lock;          // the hold ran out: no new hand-over until the prediction clears
+    float on_s;           // seconds the assist has been working (the retarder builds up over ~1 s after the lever is pulled: its shortfall then is no need)
 } D;
 
 // The target deceleration of a lever step, 1..n of n steps.
@@ -269,9 +276,10 @@ static void decel_tick(const decel_in &in)
         return;
     }
     if (!D.on) {   // starting: the reference starts at what the truck does now and climbs at the jerk limit, as the retarder builds up
-        D.on = 1; D.rg = 0; D.rt = -1; D.lvl = D.u = D.pre = 0; D.gap = 0; D.gap_s = 0; D.blind = 0; D.hand_s = 0; D.ph = D.pbs = D.pb_s = 0; D.pb_lock = 0;
+        D.on = 1; D.rg = 0; D.rt = -1; D.lvl = D.u = D.pre = 0; D.gap = 0; D.gap_s = 0; D.blind = 0; D.hand_s = 0; D.ph = D.pbs = D.pb_s = 0; D.pb_lock = 0; D.on_s = 0;
         D.ref = D.refm = fmaxf(D.a, 0);
     }
+    D.on_s += dt;
     int step = in.retarder > 0 ? (int)in.retarder : 1;   // an engine brake alone counts as the first step (of however many)
     int n = in.retarder > 0 ? (in.steps > step ? in.steps : step) : (in.steps > 1 ? in.steps : 2);
     D.step = step; D.n = n;
@@ -419,7 +427,7 @@ static void de_frame()
     decel_in in;
     in.dt = (float)(now - last);
     last = now;
-    if (p_enabled <= 0 || !act_hooked()) { if (D.on) decel_off(); soft_off(); return; }
+    if (p_enabled <= 0 || !act_hooked()) { if (D.on) decel_off(); soft_off(); g_decel_need = 0; return; }
     const act_wish *w = act_wishes();
     in.speed = T.speed; in.thr = T.in_thr; in.brake = T.in_brake; in.clutch = clutch_seen();   // our own clutch (crawl, smooth start) counts
     in.gear = T.gear; in.retarder = T.retarder; in.steps = (int)T.retarder_steps; in.motor_brake = T.motor_brake;
@@ -435,6 +443,11 @@ static void de_frame()
     in.eta = in.pre && D.on ? ts_brake_down_eta(fmaxf(D.a, 0)) : NAN;
     bool was = D.on, soft_was = D.kr < 1;
     decel_tick(in);
+    // downshift_assist: the service brake the lever needs besides the retarder, as the gearbox sees it (the level of before a gap while
+    // one runs, without what a hand-over ahead of a shift has added)
+    float need = 0;
+    if (p_dsa > 0 && D.on && D.on_s > DC_NEED_S) { float lv = D.gap || D.rt >= 0 ? D.pre : fmaxf(D.lvl - D.k * D.ph, 0); need = lv > DC_NEED ? lv : 0; }
+    g_decel_need = need;
     if (D.on != was) logv(1, "Decel: %s (step %d of %d, target %.2f m/s2, %.0f km/h)", D.on ? "on" : "off", D.step, D.n, D.tgt, fabsf(T.speed) * 3.6f);
     if ((D.kr < 1) != soft_was) logv(1, "Decel: retarder %s (step %d of %d, target %.2f m/s2, measured %.2f, %.0f km/h)", D.kr < 1 ? "softened" : "back to the game's own", D.step, D.n, D.tgt, D.a, fabsf(T.speed) * 3.6f);
 }
@@ -446,6 +459,7 @@ static void de_reset(int level, const char *)
     if (level >= RESET_LOAD) { D.k_known = D.k_fix = 0; D.k = 1.0f / DC_G_NOM; }
     act_brake(ACT_DECEL, 0);
     soft_off();
+    g_decel_need = 0;
 }
 
 static char g_status[160] = "off (ini)";
@@ -456,15 +470,15 @@ static void de_start()
     if (p_enabled <= 0) return;
     p_max = p_max > 0 ? fminf(p_max, 1.0f) : 0;   // a request is 0..1 (and a NaN from the ini is none)
     if (!(p_jerk >= 0.1f)) p_jerk = 0.1f;         // the slews divide and multiply by it
-    snprintf(g_status, sizeof g_status, "on: %.1f-%.1f m/s2, jerk %.1f m/s3, max brake %.2f%s%s%s%s", p_tmin, p_tmax, p_jerk, p_max,
+    snprintf(g_status, sizeof g_status, "on: %.1f-%.1f m/s2, jerk %.1f m/s3, max brake %.2f%s%s%s%s%s", p_tmin, p_tmax, p_jerk, p_max,
              p_soften > 0 && g_retarder_hook >= 0.5f ? ", soften" : "", p_ramp > 0 && g_retarder_hook >= 0.5f ? ", ramp" : "",
-             p_pre > 0 ? ", pre-blend" : "", act_hooked() ? "" : " (no actuator hook)");
+             p_pre > 0 ? ", pre-blend" : "", p_dsa > 0 ? ", downshift assist" : "", act_hooked() ? "" : " (no actuator hook)");
     static bool told;
     if (p_soften > 0 && g_retarder_hook < 0.5f && !told) { told = true; logline("Decel: soften is on but [core] retarder_hook is 0: the game's retarder stays as it is, the service brake only adds"); }
     static bool told_ramp;
     if (p_ramp > 0 && g_retarder_hook < 0.5f && !told_ramp) { told_ramp = true; logline("Decel: ramp_s is on but [core] retarder_hook is 0: after a shift the retarder comes back as the game has it, the brake goes back at once"); }
 }
 
-static void de_stop() { act_brake(ACT_DECEL, 0); soft_off(); }
+static void de_stop() { act_brake(ACT_DECEL, 0); soft_off(); g_decel_need = 0; }
 
 module m_decel = { "decel", "Decel", g_params, sizeof g_params / sizeof g_params[0], de_start, de_frame, NULL, de_stop, de_reset, de_status };
