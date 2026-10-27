@@ -464,14 +464,16 @@ static struct {
     float a0;               // the coast's deceleration at the start (grade included)
     float ref, refm, lvl, u, k, ff;   // reference, its delayed copy, level, request, request per m/s2, share of the feedforward
     float v0, t_run, tgt0, cap_s, hand_s, lvl_max;
+    float lit_s;            // s of the run with the brake lights on (the game decides them; the log says whether ours lit them)
     int mode, posted, capped;
 } SA;
 
 static void sa_log(const char *why, float v)
 {
     if (SA.st != SA_RUN && SA.st != SA_HAND) return;
-    logv(2, "Decel: stop assist %d from %.1f km/h, target %.2f m/s2, coast %.2f, request up to %.2f; mean %.2f m/s2 over %.1f s; ended at %.1f km/h: %s",
-         SA.mode, SA.v0 * 3.6f, SA.tgt0, SA.a0, SA.lvl_max, SA.t_run > 0 ? (SA.v0 - v) / SA.t_run : 0.0f, SA.t_run, v * 3.6f, why);
+    logv(2, "Decel: stop assist %d from %.1f km/h, target %.2f m/s2, coast %.2f, request up to %.2f; mean %.2f m/s2 over %.1f s (brake lights on %.0f %% of it); ended at %.1f km/h: %s",
+         SA.mode, SA.v0 * 3.6f, SA.tgt0, SA.a0, SA.lvl_max, SA.t_run > 0 ? (SA.v0 - v) / SA.t_run : 0.0f, SA.t_run,
+         SA.t_run > 0 ? 100 * SA.lit_s / SA.t_run : 0.0f, v * 3.6f, why);
 }
 
 // To the next state (OFF = disarmed, ARMED = may start at the next opening); our request and the Auto Hold block go with it.
@@ -531,7 +533,7 @@ static void sa_frame(float dt)
             go = SA.t_pend >= fmaxf(V.eng_ok ? V.eng.shift_time : 1.2f, 0.5f) + SA_SHIFT_PAD;
         }
         if (!go || v < SA_STOP_V) return;
-        SA.st = SA_RUN; SA.mode = mode; SA.v0 = v; SA.t_run = 0; SA.cap_s = SA.hand_s = 0; SA.capped = 0; SA.lvl_max = 0;
+        SA.st = SA_RUN; SA.mode = mode; SA.v0 = v; SA.t_run = 0; SA.cap_s = SA.hand_s = 0; SA.capped = 0; SA.lvl_max = 0; SA.lit_s = 0;
         SA.a0 = fminf(fmaxf(SA.a, -2.0f), 0.5f);
         SA.ref = SA.refm = fmaxf(SA.a0, 0);
         SA.k = 1.0f / DC_G_NOM; SA.ff = DC_FF_FIRST;
@@ -547,6 +549,7 @@ static void sa_frame(float dt)
     if (SA.st != SA_RUN && SA.st != SA_HAND) return;
     // ---- running
     SA.t_run += dt;
+    if (T.light_brake) SA.lit_s += dt;
     const char *end = NULL;
     if (!free) end = "pedal, lever, cruise or another brake";
     else if (SA.bad_s > DC_BAD_S) end = "no usable speed";

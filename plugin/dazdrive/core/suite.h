@@ -110,6 +110,7 @@ struct telemetry {
     float in_steer;    // steering input -1..1, + = left (counterclockwise)
     float yaw;         // yaw rate, rotations per second, + = turning left
     int gear, dgear, motor_brake, parking_brake, engine_on, trailer, paused, air_warning;
+    int light_brake;   // the brake lights are on (the game's own decision, whatever asked for the brake)
     unsigned retarder, retarder_steps;
     scs_value_dplacement_t place;
     scs_value_fvector_t acc;
