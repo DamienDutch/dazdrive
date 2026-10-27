@@ -1378,7 +1378,7 @@ static int run_scores_approach()
     }
     g_ap_gr = 0;
     printf("  (2) the driver's full pedal from 30 to 70 km/h (window: until 70 km/h)\n");
-    printf("      %-46s %-12s %10s %7s %6s %6s %6s %7s  %s\n", "variant", "load", "to 70 km/h", "shifts", "rpm pk", "rpm av", "kJ", "kJ 60 s", "gears");
+    printf("      %-64s %-12s %10s %7s %6s %6s %6s %7s  %s\n", "variant", "load", "to 70 km/h", "shifts", "rpm pk", "rpm av", "kJ", "kJ 60 s", "gears");
     for (int ld = 0; ld < 2; ld++) {
         float mass = ld ? 17000.0f : 33000.0f; char lb[24]; snprintf(lb, sizeof lb, "%.0f t flat", mass / 1000);
         for (int vi = 0; vi < 2; vi++) {
@@ -1390,7 +1390,7 @@ static int run_scores_approach()
             k += snprintf(gs, sizeof gs, "%d", sc_gear_for(30, 1100));
             for (int j = 0; j < g_rec_n && k < 140; j++) if (g_pl_t70 >= 0 && g_rec[j].t - g_pl_t0 <= g_pl_t70 + 0.5) { k += snprintf(gs + k, sizeof gs - k, ">%d@%.0f", g_rec[j].b, g_rec[j].t - g_pl_t0); n++; }
             char t70[12]; if (g_pl_t70 >= 0) snprintf(t70, sizeof t70, "%.1f s", g_pl_t70); else snprintf(t70, sizeof t70, "never");
-            printf("      %-46s %-12s %10s %7d %6.0f %6.0f %6.0f %7.0f  %s\n", vi ? "full pedal = 100 % power at this speed (test only)" : "today: full pedal = full throttle in this gear", lb, t70, n, EN.pk, EN.rt > 0 ? EN.rs / EN.rt : 0, EN.kj, EN.kj60, gs);
+            printf("      %-64s %-12s %10s %7d %6.0f %6.0f %6.0f %7.0f  %s\n", vi ? "blend_from 1 (default): flat pedal = 100 % power at this speed" : "blend_from 0.85: flat pedal = full throttle in this gear", lb, t70, n, EN.pk, EN.rt > 0 ? EN.rs / EN.rt : 0, EN.kj, EN.kj60, gs);
         }
     }
     g_cf_app = 0;

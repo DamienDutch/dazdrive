@@ -12,7 +12,7 @@
 //                else the engine's peak power); force F = min(P_wish * eta / v, q_f * F_cap), F_cap = the force the
 //                start gear pulls at the speed of its torque plateau (what the truck itself can put on the road at walking pace)
 //  5. throttle   gas = F / (the force this gear gives at full throttle at this speed), 0..1 (1 where the gear cannot deliver the wish)
-//  6. blend      above blend_from the wish fades into the plain pedal, and at a flat pedal the gas is 1 (kickdown)
+//  6. blend      above blend_from the wish fades into the plain pedal, and at a flat pedal the gas is 1 (kickdown). blend_from 1 = no blend at all
 // Everything else leaves the pedal alone (pass-through): the clutch slipping or open, the low-speed range, reverse and neutral, an
 // electric or manual box, a vehicle model that is not valid, and whatever other owner drives the throttle (cruise, ACC, AEB, Auto Hold).
 #include "../core/suite.h"
@@ -25,7 +25,7 @@ static float p_wish, p_blend, p_kick_rate, p_kick, p_kick_s, p_exp_eco, p_exp_no
 
 static param g_params[] = {
     { "wish", &p_wish, 0, "1 = the pedal is a wish for power: the throttle is what delivers it in the gear the truck is in, so the same pedal gives the same push at the same speed in any gear. 0 = the pedal asks a share of the engine's torque, as before. Not with the cruise on, not while the clutch slips, not at pulling-away speed, not in reverse" },
-    { "blend_from", &p_blend, 0.85f, "above this pedal the wish fades into the plain pedal, and a flat pedal is full throttle (kickdown)" },
+    { "blend_from", &p_blend, 1.0f, "above this pedal the wish fades into the plain pedal, and a flat pedal is full throttle. 1 = no blend: the pedal is the wish all the way, and a flat pedal asks the most power the truck can give at this speed (the throttle is 1 where this gear cannot give it, so the gear choice can shift down)" },
     { "kick_rate", &p_kick_rate, 1.5f, "Power: a pedal that rises faster than this (fraction per second), from nearly released to the middle, gets a little extra for a moment (kick)" },
     { "kick", &p_kick, 0.15f, "Power: the extra wish of that kick (a fraction of the full wish; the total never exceeds 1). 0 = no kick" },
     { "kick_s", &p_kick_s, 0.4f, "Power: how long the kick lasts (seconds), fading out" },
@@ -161,7 +161,7 @@ int pedal_wish(float p, float dt, int other, float *out)
     // per truck: the engine's power per tonne against curve_ref_kw_t, sqrt, x0.8 ... x1.0 (a 40 t truck with 350 kW: x0.85, 17 t: x1.0)
     expo *= S.truck_k;   // set at a standstill only (truck_curve)
     float rise = md == MODE_ECO ? p_rise_eco : md == MODE_POWER ? p_rise_pw : p_rise_norm;
-    float bl = fminf(0.999f, fmaxf(0.0f, p_blend));
+    float bl = fminf(1.0f, fmaxf(0.0f, p_blend));   // 1 = no blend
     float q = powf(p, expo > 0 ? expo : 1.0f);
     S.q_f = p >= bl || p >= 1.0f || q <= S.q_f ? q : fminf(q, S.q_f + fmaxf(rise, 0.0f) * dt);
 
@@ -185,9 +185,12 @@ int pedal_wish(float p, float dt, int other, float *out)
     S.w = gas;
 
     // 6: from blend_from up the wish fades into the plain pedal (never down from the wish: a gear that needs more than the pedal
-    // keeps asking for it), and a flat pedal is full throttle
-    if (p > bl) gas += fmaxf(0.0f, p - gas) * (p - bl) / (1.0f - bl);
-    if (p >= 1.0f) gas = 1.0f;
+    // keeps asking for it), and a flat pedal is full throttle. blend_from 1: none of that; the wish is the whole pedal range, the throttle
+    // is already 1 wherever the gear cannot give the wish
+    if (bl < 1.0f) {
+        if (p > bl) gas += fmaxf(0.0f, p - gas) * (p - bl) / (1.0f - bl);
+        if (p >= 1.0f) gas = 1.0f;
+    }
     if (!(gas == gas)) { follow(p); return 0; }
     *out = gas;
     S.on_at = sim_s(); S.pref = pref; S.fcap = fcap;
