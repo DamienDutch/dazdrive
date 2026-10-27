@@ -23,7 +23,9 @@
 // with them, a simplification), the new gear adds a step of 0.1 m/s2 at 18 t (F/m, not scaled, none in a gap). Asserted with
 // the ramp, per closing above 12 km/h for 1.0 s after it: the deceleration within the target + 0.3 (less what the gap was already
 // over it as the clutch closed: the gap's own error, not the ramp's), its jerk within jerk_limit; printed against the same run
-// with ramp_s 0 (before). The hook off: the run is the one with ramp_s 0, no factor posted.
+// with ramp_s 0 (before). The build-up is jerk-limited (ramp_s is only its upper bound): printed per row are the length the module gave
+// it (hand-over over jerk_limit) and the time the retarder factor needed for 95 % of its way; a small hand-over (light truck, first step)
+// must get a clearly shorter one than a large one (heavy truck, last step). The hook off: the run is the one with ramp_s 0, no factor posted.
 // Jerk is the difference of the plant's true deceleration over 0.1 s. Outside the assert: the edges the retarder makes by itself (the
 // shift's fall and recovery, the pull's build-up, the fade); they are printed (edge) next to the assist-off figure.
 // Build+run: tools/sim/run_decel.sh [-v]
@@ -136,6 +138,8 @@ struct res {
     float rel_hi, rel_lo, rel_jerk;   // ramp: the deceleration's highest and lowest against the target and the largest jerk, 1.0 s after a closing (above 12 km/h)
     float rel_gap, rel_rise; // the most a gap was over the target as the clutch closed, and the highest against the target less that excess of its gap
     int rels;                // how many closings were judged so
+    float bu_sum; int bu_n;  // ramp: the build-up after a closing = seconds until the retarder factor has made 95 % of its way (mean over the closings that moved it)
+    float rt_sum; int rt_n;  // ramp: the length the jerk limit gave the build-up (the module's own figure, D.rT), mean over the closings
 };
 
 static char buf[0x200];
@@ -173,6 +177,16 @@ static res run(const sc &s)
     bool pressed = false;
     float k_prev = 1, dk_last = 0;
     double rel_judged = -1;
+    bool rt_got = false;
+    float bu_f[120]; int bu_i = 0;   // the retarder factor, every tick of the 1.0 s after a closing
+    auto bu_end = [&]() {            // the closing's build-up: the time the factor needs for 95 % of its way (a factor that did not move says nothing)
+        if (bu_i >= 60 && fabsf(bu_f[bu_i - 1] - bu_f[0]) > 0.05f) {
+            int i = 0;
+            while (i < bu_i - 1 && (bu_f[i] - bu_f[0]) / (bu_f[bu_i - 1] - bu_f[0]) < 0.95f) i++;
+            r.bu_sum += (float)(i * DT); r.bu_n++;
+        }
+        bu_i = 0;
+    };
     float a_gap = 0, gap_x = 0;
     r.k_min = 1; r.k_rel = -1; r.k_settled = -1; r.rel_hi = r.rel_rise = -99; r.rel_lo = 99;
     for (; t_now < 45; step_i++) {
@@ -241,7 +255,9 @@ static res run(const sc &s)
         }
         if (s.soften && (in_gap || (gap_t1 > 0 && t < gap_t1 + 0.8)) && v * 3.6f > 12) { r.gap_hi = fmaxf(r.gap_hi, a - tgt_full); r.gap_lo = fminf(r.gap_lo, a - tgt_full); }
         if (s.snap && !in_gap && gap_t1 > gap_t0 && t >= gap_t1 && t < gap_t1 + 1.0 && v * 3.6f > 12) {
-            if (rel_judged != gap_t1) { rel_judged = gap_t1; r.rels++; gap_x = fmaxf(a_gap - tgt_full, 0); r.rel_gap = fmaxf(r.rel_gap, gap_x); }
+            if (rel_judged != gap_t1) { bu_end(); rt_got = false; rel_judged = gap_t1; r.rels++; gap_x = fmaxf(a_gap - tgt_full, 0); r.rel_gap = fmaxf(r.rel_gap, gap_x); }
+            if (bu_i < 120) bu_f[bu_i++] = g_ret_scale;
+            if (!rt_got && D.rt >= 0) { rt_got = true; r.rt_sum += D.rT; r.rt_n++; }
             r.rel_hi = fmaxf(r.rel_hi, a - tgt_full); r.rel_rise = fmaxf(r.rel_rise, a - tgt_full - gap_x); r.rel_lo = fminf(r.rel_lo, a - tgt_full); r.rel_jerk = fmaxf(r.rel_jerk, fabsf(jerk));
         }
         if (in_gap) a_gap = a;
@@ -280,6 +296,7 @@ static res run(const sc &s)
         if (s.press_t >= 0 && t_now > s.press_t + 1.0) break;   // the pedal cases only look at the moment of the press
         if (s.release_t >= 0 && t_now > s.release_t + 3.0) break;
     }
+    bu_end();
     r.gaps = gaps_judged;
     return r;
 }
@@ -296,8 +313,8 @@ static void check(bool ok, const char *what, char *why, size_t n)
 int main(int argc, char **argv)
 {
     for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "-v")) verbose = 1;
-    if (argc == 7 && !strcmp(argv[1], "-t")) {   // one scenario with the trace: -t mass_t gain n step every_nth_step
-        sc s; s.mass_t = (float)atof(argv[2]); s.gain = (float)atof(argv[3]); s.n = atoi(argv[4]); s.step = atoi(argv[5]); vstep = atoi(argv[6]); verbose = 1;
+    if ((argc == 7 || argc == 8) && !strcmp(argv[1], "-t")) {   // one scenario with the trace: -t mass_t gain n step every_nth_step
+        sc s; s.mass_t = (float)atof(argv[2]); s.gain = (float)atof(argv[3]); s.n = atoi(argv[4]); s.step = atoi(argv[5]); vstep = atoi(argv[6]); verbose = 1; if (argc == 8) { s.soften = 1; s.snap = 1; s.cycle = (float)atof(argv[7]); }
         res r = run(s);
         printf("ovs at %.2f s; gap err %.2f ovs %.2f jerk %.1f edge %.1f fin %.1f stop %.1f\n", r.ovs_t, r.gap_err, r.ovs, r.jerk, r.edge, r.final_jerk, r.t_stop);
         return 0;
@@ -436,6 +453,7 @@ int main(int argc, char **argv)
             { 25, 1.0f, 0, 0, 2, 1 }, { 25, 1.0f, 0, 0, 2, 3 },
             { 36, 1.0f, 0, 0, 2, 1 }, { 36, 1.0f, 0, 0, 2, 4 }, { 36, 0.6f, 0, 0, 2, 4 },
         };
+        float bu_light = -1, bu_heavy = -1, rt_light = -1, rt_heavy = -1; int rci = 0;
         for (auto &c : rc) {
             sc s; s.mass_t = c.mass; s.gain = c.gain; s.n = 4; s.step = c.step; s.tmin = c.tmin; s.ret_abs = c.ret_abs; s.cycle = c.cycle;
             s.soften = 1; s.snap = 1;
@@ -446,9 +464,20 @@ int main(int argc, char **argv)
             check(r.rel_rise <= 0.3f, "decel over target + 0.3 after a closing (the gap's own excess aside)", why, sizeof why);
             check(r.rel_jerk <= p_jerk, "jerk over the limit after a closing", why, sizeof why);
             check(r.t_stop > 0 && r.req_after_stop <= 0 && bits_one(g_ret_scale), "no clean stop with factor 1", why, sizeof why);
-            printf("  %2.0ft g%.1f N4 s%d tgt %.2f every %.0f s (%d) | before %+.2f/%+.2f jerk %4.1f in gaps %+.2f | after %+.2f/%+.2f jerk %4.1f in gaps %+.2f gap %.2f rise %+.2f | stop %.1fs  %s%s\n",
-                   c.mass, c.gain, c.step, r.tgt, c.cycle, r.rels, rb.rel_hi, rb.rel_lo, rb.rel_jerk, rb.gap_lo, r.rel_hi, r.rel_lo, r.rel_jerk, r.gap_lo, r.rel_gap, r.rel_rise, r.t_stop,
+            float bu = r.bu_n ? r.bu_sum / (float)r.bu_n : -1, rl = r.rt_n ? r.rt_sum / (float)r.rt_n : -1;
+            if (rci == 0) { bu_light = bu; rt_light = rl; }
+            if (rci == 10) { bu_heavy = bu; rt_heavy = rl; }
+            rci++;
+            printf("  %2.0ft g%.1f N4 s%d tgt %.2f every %.0f s (%d) | before %+.2f/%+.2f jerk %4.1f in gaps %+.2f | after %+.2f/%+.2f jerk %4.1f in gaps %+.2f gap %.2f rise %+.2f build-up %.2f s (jerk-limited %.2f s) | stop %.1fs  %s%s\n",
+                   c.mass, c.gain, c.step, r.tgt, c.cycle, r.rels, rb.rel_hi, rb.rel_lo, rb.rel_jerk, rb.gap_lo, r.rel_hi, r.rel_lo, r.rel_jerk, r.gap_lo, r.rel_gap, r.rel_rise, bu, rl, r.t_stop,
                    why[0] ? "FAIL: " : "ok", why);
+            if (why[0]) fails++;
+        }
+        {   // the build-up is jerk-limited: a small hand-over (light truck, first step, the retarder softened to the target) is done sooner than a large one (heavy truck, last step)
+            char why[100] = "";
+            check(rt_light > 0 && rt_heavy > 0 && rt_heavy - rt_light >= 0.15f, "the jerk-limited length does not differ with the size of the hand-over", why, sizeof why);
+            check(bu_light > 0 && bu_heavy > 0 && bu_light <= rt_light + 0.6f && bu_heavy <= rt_heavy + 0.6f, "the factor takes more than the brake's release after the jerk-limited length", why, sizeof why);
+            printf("  build-up: light truck (10 t, step 1) %.2f s jerk-limited, factor settled in %.2f s; heavy truck (36 t, step 4) %.2f s, settled in %.2f s  %s%s\n", rt_light, bu_light, rt_heavy, bu_heavy, why[0] ? "FAIL: " : "ok", why);
             if (why[0]) fails++;
         }
         {   // the hook not in: today's behavior (the same run as with ramp_s 0), no factor posted

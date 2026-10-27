@@ -33,9 +33,11 @@
 // it) while the brake still holds the gap's level, and a factor could follow the close only a frame later: the deceleration
 // jumps. With ramp_s and the hook (and a retarder step held) the retarder's comeback is ours: in a gap the factor goes to 0 over
 // the retarder's fall time, the brake's lag after the open (the feedforward counts no floor: the brake holds the whole target
-// there), and from the close the level goes linearly from the gap's to the one before it over ramp_s while the factor climbs
-// from 0 to its own (soften's, or 1) as the brake model gives up the level, so the two sum to the target on the way. Without
-// the hook all of this is off (one log line) and the close is as above.
+// there), and from the close the level goes linearly from the gap's to the one before it while the factor climbs from 0 to its
+// own (soften's, or 1) as the brake model gives up the level, so the two sum to the target on the way. The build-up is
+// jerk-limited: it lasts as long as the deceleration it hands over (the level's change over the brake's gain) needs at
+// jerk_limit, so a small difference is done almost at once and a large one takes longer; ramp_s is only the longest it may
+// take. Without the hook all of this is off (one log line) and the close is as above.
 #include "../core/suite.h"
 #include <math.h>
 #include <string.h>
@@ -50,7 +52,7 @@ static param g_params[] = {
     { "jerk_limit", &p_jerk, 4.0f, "most the added braking may change per second (m/s3), rising and falling" },
     { "max_brake", &p_max, 0.6f, "most brake request (0-1) the assist may ask for" },
     { "soften", &p_soften, 1, "1 = when the step alone brakes harder than its target (a light truck), the game's retarder is made weaker until the target holds; full again when the lever is released. Needs [core] retarder_hook = 1. 0 = the retarder stays as the game has it" },
-    { "ramp_s", &p_ramp, 0.45f, "seconds over which the game's retarder is built back up after a gearbox shift, while the service brake hands over in the same time (no jolt when the clutch closes; in the shift the brake alone holds the target). Needs [core] retarder_hook = 1. 0 = the retarder comes back as the game has it" },
+    { "ramp_s", &p_ramp, 1.0f, "most seconds the game's retarder takes to build back up after a gearbox shift. The service brake hands over at the rate the jerk limit allows (a small difference takes a fraction of a second, a large one longer, never more than this), so the deceleration does not jump when the clutch closes; in the shift the brake alone holds the target. Needs [core] retarder_hook = 1. 0 = the retarder comes back as the game has it" },
 };
 
 // Constants of the controller (physics of the measurements, not preferences).
@@ -84,6 +86,7 @@ static const float DC_SOFT_MIN = 0.2f;   // the lowest factor
 static const float DC_SOFT_U = 0.01f;    // our request under this counts as none (the brake backs off before the retarder is lowered)
 static const float DC_SOFT_GAP_UP = 0.4f;   // s, the factor's way back to 1 in a gap (twice the retarder's fall: the two together dip, not peak)
 static const float DC_SOFT_GAP_DN = 0.2f;   // s, its way back down after the clutch closes (a little under the retarder's recovery)
+static const float DC_RAMP_MIN = 0.05f;  // s, the shortest build-up after a shift (a few frames: a hand-over of nothing is done at once)
 
 // What one tick sees (the sim sets the same fields).
 struct decel_in {
@@ -126,7 +129,9 @@ static struct {
     float kg;             // the factor as the gap began (down to 0 from there)
     float rt = -1;        // seconds since the close while the ramp runs (-1 = none)
     float rdl, r0;        // the ramp's change of the level (gap's to before) and its factor at the close
-    float rs;             // the retarder's share of the ramp so far: the level's share through the brake's lag
+    float rT;             // the ramp's length (s): the hand-over (m/s2) over the jerk limit, at most ramp_s
+    float rs;             // the retarder's share of the ramp so far: the share of the hand-over the brake model has made
+    float ry0, rye;       // the brake model at the close and the level the ramp ends at (the hand-over, in request)
 } D;
 
 // The target deceleration of a lever step, 1..n of n steps.
@@ -160,7 +165,10 @@ static void decel_release(float need)
     }
     float to = fminf(D.lvl, D.pre);
     if (D.rg) {
-        D.rdl = to - D.lvl; D.rt = 0; D.rs = 0; D.r0 = D.kp; D.rg = 0;
+        D.rdl = to - D.lvl; D.rt = 0; D.rs = 0; D.r0 = D.kp; D.rg = 0; D.ry0 = D.y; D.rye = to;
+        // the build-up takes as long as the change of the deceleration it hands over needs at the jerk limit: a small difference
+        // is done at once, a large one takes longer; ramp_s is only the longest it may take
+        D.rT = fminf(fmaxf(-D.rdl / D.k / fmaxf(p_jerk, 0.1f), DC_RAMP_MIN), fmaxf(p_ramp, DC_RAMP_MIN));
         D.ks = D.kr;   // soften's own way down after the close is the ramp's
         D.blind = DC_BLIND_S;
     } else {
@@ -245,7 +253,7 @@ static void decel_tick(const decel_in &in)
     int step_now = 0;   // the level jumped (the shift's feedforward or its release): the request follows at once
     float lvl = D.lvl;
     if (!D.gap && open) {
-        if (D.rt >= 0) { lvl = fmaxf(lvl + D.rdl * (1 - fminf(D.rt / p_ramp, 1.0f)), 0); D.rt = -1; }   // a ramp cut short: where it went
+        if (D.rt >= 0) { lvl = fmaxf(lvl + D.rdl * (1 - fminf(D.rt / D.rT, 1.0f)), 0); D.rt = -1; }   // a ramp cut short: where it went
         D.gap = 1; D.gap_s = 0; D.fix = 0; D.pre = lvl; D.rg = rg; D.kg = D.kp;
         // the level that held the target in the last gap, at once; before a gap has taught it, only part of what the nominal brake
         // would need (too little the loop makes up in a moment, too much is a lurch)
@@ -260,9 +268,9 @@ static void decel_tick(const decel_in &in)
         step_now = 1;
     } else if (D.gap) D.gap_s += dt;
     if (D.rt >= 0) {   // the ramp's share of the level for this tick
-        float s0 = fminf(D.rt / p_ramp, 1.0f);
+        float s0 = fminf(D.rt / D.rT, 1.0f);
         D.rt += dt;
-        lvl = fmaxf(lvl + D.rdl * (fminf(D.rt / p_ramp, 1.0f) - s0), 0);
+        lvl = fmaxf(lvl + D.rdl * (fminf(D.rt / D.rT, 1.0f) - s0), 0);
     }
     D.refm += dt / (DC_REFM_S + dt) * (D.ref - D.refm);
     if (in.soften) {
@@ -277,10 +285,12 @@ static void decel_tick(const decel_in &in)
         else D.ks = D.kr >= D.ks ? D.kr : fmaxf(D.kr, D.ks - (1 - D.kr) / DC_SOFT_GAP_DN * dt);
     }
     float kf = in.soften ? D.ks : 1.0f;
+    int ramp_on = D.rt >= 0;   // (the tick that ends the ramp still posts the request unslewed)
     if (D.rg) kf = D.kg * fminf(fmaxf(1 - (D.gap_s - DC_LAG_S) / DC_FF_S, 0), 1.0f);   // a ramp's gap: off as the brake's feedforward arrives
-    else if (D.rt >= 0) {   // the ramp: the retarder takes over what the brake gives up, as the brake model has it (to the last 1 %)
-        D.rs += (fminf(D.rt / p_ramp, 1.0f) - D.rs) * dt / (DC_LAG_S + dt);
-        if (D.rs > 0.99f) D.rt = -1;
+    else if (D.rt >= 0) {   // the ramp: the retarder takes over what the brake gives up, as the brake model has it (the request leads by the lag, below)
+        float span = D.ry0 - D.rye;
+        D.rs = span > 0.01f ? fminf(fmaxf((D.ry0 - D.y) / span, 0), 1.0f) : 1.0f;
+        if (D.rs >= 0.97f && D.rt >= D.rT) D.rt = -1;
         else kf = D.r0 + (kf - D.r0) * D.rs;
     }
     if (in.soften || in.ramp) soft_post(kf);
@@ -327,8 +337,11 @@ static void decel_tick(const decel_in &in)
     float di = fminf(fmaxf(DC_KI * e, -dn), starved ? 0 : up) * dt;
     if (!((lvl >= p_max && di > 0) || (lvl <= 0 && di < 0))) lvl += di;
     D.lvl = fminf(fmaxf(lvl, 0), p_max);
-    float want = fminf(fmaxf(D.lvl + DC_KP * e, 0), p_max);
-    D.u = step_now || D.rt >= 0 ? want : fminf(fmaxf(want, D.u - dn * dt), D.u + up * dt);
+    // in the ramp the request leads the level by the brake's lag, so the deceleration the brake gives (the request through the lag)
+    // falls as the level does and the retarder can follow the level's share at once
+    float lead = ramp_on && D.rt >= 0 ? D.rdl / D.rT * DC_LAG_S : 0;
+    float want = fminf(fmaxf(D.lvl + DC_KP * e + lead, 0), p_max);
+    D.u = step_now || ramp_on ? want : fminf(fmaxf(want, D.u - dn * dt), D.u + up * dt);
     act_brake(ACT_DECEL, D.u);
 }
 
