@@ -1461,7 +1461,8 @@ static int knife_edge_test()
         for (int sc = 0; sc < 3; sc++) {
             float v0 = sc == 0 ? 70.0f : sc == 1 ? 55.0f : 85.0f, d0 = sc == 0 ? 450.0f : sc == 1 ? 300.0f : 600.0f;
             jnres r = jn_climb_run("approach", jn_flat_road, 33000, v0, d0, 90);
-            printf("   junction approach from %.0f km/h at %.0f m, brake 10 m/s2 per request: brake wish on/off x%d, %.1f km/h at the entrance\n", v0, d0, g_jn_flips, r.kmh_end);
+            printf("   junction approach from %.0f km/h at %.0f m, brake 10 m/s2 per request: brake wish on/off x%d (was 30 / 14 / 48), %.1f km/h at the entrance\n", v0, d0, g_jn_flips, r.kmh_end);
+            bad |= g_jn_flips > 8 || r.kmh_end > 34.5f;
         }
         g_jn_quiet = 0; g_jn_bk = 4.0f;
     }

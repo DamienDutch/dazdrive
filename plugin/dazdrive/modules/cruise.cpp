@@ -174,6 +174,7 @@ static float s_lead_prev = -1, s_gap_rate;              // lead_rel_speed: gap f
 static float s_bend_coast_kmh = NAN;   // the route's bend speed (coast plan) this frame, for the trace (Damien 11-10: a sharp bend at full set speed)
 static float s_bn_f, s_bn_pk; static int s_bn_init, s_bn_on, s_bn_cap; static double s_bn_said, s_bn_cap_at;   // bend_now: filtered path curvature (1/m), its held peak, state, last log
 static int s_curve_braking;                             // bend braking hysteresis
+static int s_jn_braking;                                // junction braking hysteresis
 static int s_isa_last = -1;                             // the limit (km/h) we last set the cruise to
 static double s_btn_down_at, s_btn_up_at;               // speed-limit button hold
 static int s_btn_fired, s_acc_armed, s_acc_key_bad;
@@ -1020,7 +1021,11 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
     // distance left needs (0.2 at 0.35 m/s2, 0.4 at 2 m/s2), also under the 3 km/h hysteresis above.
     // brake once coasting along the planned profile is not enough (threshold follows the plan: 0.35 at the old 0.4)
     float jn_thr = p_jn_dec - 0.05f;
-    if (p_curve_brake > 0 && jn_need > jn_thr && kmh > jn_kmh + 3)
+    // With a hysteresis (27-10, a plant braking like the game's: 15 on / off cycles of the request on one approach): the 0.2 request is far more
+    // than the 0.35 m/s2 it started for, the need fell under the threshold within a second, the request let go, the need rose again. On at the
+    // threshold, off only when the need is 0.35 m/s2 under it (the request then still follows the need, 0.16 there, so it does not step to 0 from a high value).
+    s_jn_braking = p_curve_brake > 0 && jn_need > jn_thr - (s_jn_braking ? 0.35f : 0.0f) && kmh > jn_kmh + (s_jn_braking ? 0.0f : 3.0f);
+    if (s_jn_braking)
         s_want_curve = fmaxf(s_want_curve, fminf(0.45f, 0.2f + 0.12f * (jn_need - jn_thr)));
     // a descent the retarder and the engine brake cannot hold (1678-1692 s, -9 %: set 63, 70 km/h; Damien 25-10: the service brake may help):
     // over the set speed plus the descent allowance and not slowing: a gentle brake request that grows with the overspeed
@@ -2354,7 +2359,7 @@ static void cr_reset(int level, const char *why)
     C.on = 0; C.u = C.i = 0;
     CF.fm = 0; CF.k = 1; CF.u = 0; CF.at = -1;
     g_sg_hold = 0; g_feed = 0; g_stopped_at = 0;
-    s_curve_braking = 0; s_desc_braking = 0; s_bn_init = 0; s_bn_on = 0; s_bn_cap = 0;
+    s_curve_braking = 0; s_jn_braking = 0; s_desc_braking = 0; s_bn_init = 0; s_bn_on = 0; s_bn_cap = 0;
     s_acc_f = 0; s_acc_init = 0;
     s_steer_until = s_jn_ignore_until = 0; s_stuck_since = 0;
     s_cr_prev = s_cr_rate = NAN; s_cr_since = -1; s_cr_said = 0;
