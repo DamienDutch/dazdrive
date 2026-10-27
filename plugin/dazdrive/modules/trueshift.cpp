@@ -137,7 +137,7 @@ static param g_params[] = {
     { "eco_roll_cruise_min_s", &p_roll_cruise_min, 15, "with cruise: when the cruise first has to build the roll boost speed, a roll must be expected to last this long (s); without the boost 10 s" },
     { "tones", &p_tones, 1, "1 = a short tone when the mode changes (Eco low, Normal middle, Power rising, M two short)" },
     { "retarder_downshift", &p_ret_down, 0, "1 = the retarder also makes TrueShift keep the rpm up like the engine brake (a retarder does not need it); 0 = only the engine brake does" },
-    { "air_charge_psi", &p_air_psi, 100, "brake air below this (psi): keep the rpm up so the engine-driven compressor refills it; 0 = off" },
+    { "air_charge_psi", &p_air_psi, 100, "brake air below this (psi): keep the rpm up so the engine-driven compressor refills it ([core] air_from_truck: 35 psi over the truck's own warning pressure instead); 0 = off" },
     { "air_charge_rpm", &p_air_rpm, 1200, "the rpm kept while charging (no upshift below it)" },
     { "no_creep", &p_no_creep, 1, "1 = with crawl switched off the truck never creeps on the clutch at idle: pedals free below 8 km/h opens the clutch" },
     { "smooth_stop", &p_stop, 1, "1 = when braking to a stop the clutch opens around idle +150 rpm (more when braking harder) instead of pushing to ~2 km/h" },
@@ -1406,7 +1406,8 @@ static int decide_gear(void *self, int *why)
 
     // Brake air low (Damien: the tank ran empty twice): the compressor runs on the engine, and at ~900 rpm it barely
     // keeps up. Below air_charge_psi keep the rpm up: no upshift below air_charge_rpm, a downshift when well under it.
-    if (p_air_psi > 0 && T.air_psi > 1 && T.air_psi < p_air_psi && thr > 0.02f) {
+    float air_charge = air_edge_psi(p_air_psi, AIR_MARGIN_CHARGE);   // the truck's warning + 35 with [core] air_from_truck
+    if (air_charge > 0 && T.air_psi > 1 && T.air_psi < air_charge && thr > 0.02f) {
         static double said;
         if (sim_s() - said > 10) { said = sim_s(); logline("air %.0f psi: keeping the rpm up to charge it", T.air_psi); }
         if (rpm < rs_abs(idle_rpm(), p_air_rpm) - 250 && cur > 1) {

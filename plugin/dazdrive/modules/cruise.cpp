@@ -78,7 +78,7 @@ static param g_params[] = {
     { "emergency_decel", &p_ess_dec, 4.0f, "deceleration (m/s2) that counts as an emergency stop" },
     { "emergency_off_decel", &p_ess_off, 2.5f, "below this deceleration (m/s2) before the truck stops, the hazards go off again (real trucks: 2.5)" },
     { "emergency_kmh", &p_ess_kmh, 50, "only above this speed (km/h)" },
-    { "air_min_psi", &g_air_min_psi, 75, "below this brake air pressure (psi) the module stops its own brake requests (bends, crawl descent) and leaves descents to the engine brake" },
+    { "air_min_psi", &g_air_min_psi, 75, "below this brake air pressure (psi) the module stops its own brake requests (bends, crawl descent) and leaves descents to the engine brake ([core] air_from_truck: 10 psi over the truck's own warning pressure instead)" },
     { "curve_lat", &p_curve_lat, 3.125f, "sideways acceleration (m/s2) allowed in bends at about 92 km/h, the same in every mode (higher = faster through bends). Slower bends get more, up to 1.23x (4 m/s2), like the allowance in a Mercedes-Benz patent" },
     { "route_hermite", &p_herm, 1, "1 = with navigation: the road between two route points is read as a curve through the directions of the points, so tight bends are seen earlier and sharper (0 = straight lines between the points, the older way)" },
     { "junctions", &p_junc, 1, "1 = with navigation: also slow down before junctions where the route turns, and before roundabouts (needs curves = 1; always on with own_acc = 1)" },
@@ -998,7 +998,7 @@ static float cruise_body(void *ga, float dt, float pedal, float stock)
     // cruise gave full throttle for 14 s, engine racing in neutral): low air, or full throttle without moving for 2 s
     // → our throttle 0 and the integrator reset, until the truck moves again.
     {
-        int air_bad = T.air_warning || (T.air_psi > 1 && T.air_psi < g_air_min_psi);
+        int air_bad = T.air_warning || (T.air_psi > 1 && T.air_psi < air_pause_psi());
         int stuck = thr > 0.5f && kmh < 2 && T.in_thr < 0.02f;
         if (!stuck) s_stuck_since = 0;
         else if (!s_stuck_since) s_stuck_since = wall_s();
@@ -1876,11 +1876,11 @@ static void aeb(char *g, float dt)
         float ff = g_aeb == g_aeb ? (a_cmd - 0.4f) / g_aeb : (a_cmd - 0.4f) / 10.0f * heavy;
         if (now - AE.st_at > 0.6) AE.i = fminf(0.5f, fmaxf(-0.15f, AE.i + 0.08f * (a_cmd + T.accel) * dt));
         target = fminf(1, fmaxf(0.05f, ff + AE.i));
-        if (T.air_psi > 1 && T.air_psi < 90 && st < AEB_FULL) target = fminf(target, 0.6f);  // save the air outside full braking
+        if (T.air_psi > 1 && T.air_psi < air_edge_psi(90, AIR_MARGIN_SAVE) && st < AEB_FULL) target = fminf(target, 0.6f);  // save the air outside full braking
     } else AE.i = 0;
     float up = st == AEB_FULL ? 6.0f : 3.0f, dn = 1.5f;
     // low air: no pulsing while braking (each new application costs air), hold it steady
-    if (T.air_warning || (T.air_psi > 1 && T.air_psi < g_air_min_psi)) AE.air_low = 1;  // for the rest of this event
+    if (T.air_warning || (T.air_psi > 1 && T.air_psi < air_pause_psi())) AE.air_low = 1;  // for the rest of this event
     if (AE.air_low && (st == AEB_PARTIAL || st == AEB_FULL) && vc > 0) dn = 0;
     // one application, not a pumping one: while braking and still closing in, small dips of the target are ignored (each
     // release and re-apply costs air; the sim pumped 56 times following at 7 m with the fast filters)
@@ -2092,7 +2092,7 @@ static void cr_frame()
             if (steep) { s_down_now = 1; s_flat_since = 0; }
             else if (s_down_now && flat) { if (!s_flat_since) s_flat_since = wall_s(); else if (wall_s() - s_flat_since > 5) s_down_now = 0; }
             else s_flat_since = 0;
-            int air_ok = !T.air_warning && !(T.air_psi > 1 && T.air_psi < g_air_min_psi);
+            int air_ok = !T.air_warning && !(T.air_psi > 1 && T.air_psi < air_pause_psi());
             int down = T.cruise > 0.5f && s_down_now && air_ok;
             // A dip (PCC, Damien 11-10): a climb follows the descent, so let the truck run up to the band over the set
             // speed and carry that into the climb instead of braking it away. Latched to the bottom (there the road

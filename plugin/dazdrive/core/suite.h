@@ -125,6 +125,7 @@ struct telemetry {
     float wheel_radius[16];
     int wheel_powered[16];
     char shifter[32];
+    float air_warn_cfg, air_emerg_cfg;   // the truck's brake air warning / emergency pressure (psi), 0 = not reported
     float cargo_mass;
     // derived
     float accel;       // longitudinal acceleration from speed, m/s2, filtered
@@ -295,6 +296,18 @@ int act_clutch_vehicle(char *inner, float v);   // the vehicle's own clutch valu
 extern volatile float g_ret_scale;  // the merged retarder factor the drivetrain hook applies to the player's vehicle (1 = the game's own)
 extern float g_retarder_hook;    // [core] retarder_hook: 1 = install the retarder hook
 extern float g_air_min_psi;      // [cruise] air_min_psi: below it our brake requests pause (holds and the AEB excepted)
+extern float g_air_from_truck;   // [core] air_from_truck: 1 = the brake air edges follow the truck's own warning pressure
+// The brake air edges (psi). fixed = the ini value (0 = that rule off, it stays off). With [core] air_from_truck = 1 and a truck
+// that reports its warning pressure (config brake.air.pressure.warning, above the emergency one) an edge is that warning plus
+// a margin instead: our requests pause at +10 ([cruise] air_min_psi), the AEB saves air below +25, TrueShift keeps the rpm up
+// to charge below +35 ([trueshift] air_charge_psi). A 65 psi warning gives the fixed 75 / 90 / 100. Not reported: fixed.
+static const float AIR_MARGIN_PAUSE = 10, AIR_MARGIN_SAVE = 25, AIR_MARGIN_CHARGE = 35;
+static inline int air_truck_ok() { float w = T.air_warn_cfg; return w > 1 && w < 150 && !(T.air_emerg_cfg >= w); }
+static inline float air_edge_psi(float fixed, float margin)
+{
+    return g_air_from_truck >= 0.5f && fixed > 0 && air_truck_ok() ? T.air_warn_cfg + margin : fixed;
+}
+static inline float air_pause_psi() { return air_edge_psi(g_air_min_psi, AIR_MARGIN_PAUSE); }  // our brake requests pause below
 void act_start();                // m_core (config.cpp): hooks before the modules start
 void act_stop();
 void act_reset(int level, const char *why);

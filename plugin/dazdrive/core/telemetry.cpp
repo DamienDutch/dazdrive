@@ -87,6 +87,7 @@ static SCSAPI_VOID ev_config(const scs_event_t, const void *const info, const sc
         T.fwd_gears = T.rev_gears = T.wheels = 0;
         T.shifter[0] = 0;
         T.retarder_steps = 0;
+        T.air_warn_cfg = T.air_emerg_cfg = 0;
         for (const scs_named_value_t *a = c->attributes; a->name; a++) {
             const char *n = a->name;
             unsigned i = a->index;
@@ -95,6 +96,10 @@ static SCSAPI_VOID ev_config(const scs_event_t, const void *const info, const sc
             else if (!strcmp(n, SCS_TELEMETRY_CONFIG_ATTRIBUTE_differential_ratio)) T.diff = a->value.value_float.value;
             else if (!strcmp(n, SCS_TELEMETRY_CONFIG_ATTRIBUTE_rpm_limit)) T.rpm_limit = a->value.value_float.value;
             else if (!strcmp(n, SCS_TELEMETRY_CONFIG_ATTRIBUTE_retarder_step_count)) T.retarder_steps = a->value.value_u32.value;
+            else if (!strcmp(n, SCS_TELEMETRY_CONFIG_ATTRIBUTE_air_pressure_warning) && a->value.type == SCS_VALUE_TYPE_float)
+                T.air_warn_cfg = a->value.value_float.value;
+            else if (!strcmp(n, SCS_TELEMETRY_CONFIG_ATTRIBUTE_air_pressure_emergency) && a->value.type == SCS_VALUE_TYPE_float)
+                T.air_emerg_cfg = a->value.value_float.value;
             else if (!strcmp(n, SCS_TELEMETRY_CONFIG_ATTRIBUTE_wheel_count)) T.wheels = a->value.value_u32.value;
             else if (!strcmp(n, SCS_TELEMETRY_CONFIG_ATTRIBUTE_forward_ratio) && i < 32) T.ratio[i] = a->value.value_float.value;
             else if (!strcmp(n, SCS_TELEMETRY_CONFIG_ATTRIBUTE_wheel_radius) && i < 16) T.wheel_radius[i] = a->value.value_float.value;
@@ -104,6 +109,8 @@ static SCSAPI_VOID ev_config(const scs_event_t, const void *const info, const sc
         }
         logline("truck config: %d forward gears, diff %.3f, rpm limit %.0f, wheel radius %.3f m, retarder %u steps, "
                 "shifter %s", T.fwd_gears, T.diff, T.rpm_limit, wheel_radius(), T.retarder_steps, T.shifter);
+        logline("truck config: brake air warning %.0f psi, emergency %.0f psi (0 = not reported); our requests pause below %.0f psi%s",
+                T.air_warn_cfg, T.air_emerg_cfg, air_pause_psi(), g_air_from_truck >= 0.5f && air_truck_ok() ? " (from the truck)" : "");
         // Same truck again (a reload of the config) is nothing; another truck resets everything we learned.
         double sig = T.fwd_gears * 1000.0 + T.diff * 7.0 + T.rpm_limit * 0.013 + wheel_radius() * 31.0 + T.wheels;
         for (int i = 0; i < T.fwd_gears && i < 32; i++) sig += T.ratio[i] * (i + 3);
