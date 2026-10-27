@@ -966,7 +966,7 @@ static accres acc_run(const char *name, int own, int scen)
 // Brakes: the game slews +0x17c at 5/s; request r gives 0.4 + 10 r / (mass / 30 t) m/s2 (ts4* logs, 26-30 t); the driver's
 // brake pedal 8 m/s2 at 1.0; throttle 20 kN at 1.0 (zeroed while the request is > 0). Air: every rise of the applied brake
 // costs 60 psi per unit, the compressor gives 4 psi/s (rough; only for "one ramp vs pulses").
-struct aebres { float min_gap, peak_dec, end_kmh, warn_lead_s, psi_drop, max_req, after_kd; int max_st, flips, hit; float warn_gap, brake_gap, final_gap, hit_kmh; };
+struct aebres { float min_gap, peak_dec, end_kmh, warn_lead_s, psi_drop, max_req, after_kd; int max_st, flips, hit; float warn_gap, brake_gap, final_gap, hit_kmh, dec_early, dec_end; };   // dec_early: the plant's deceleration 0.8 s after the request began, dec_end: when the speed first drops under 2 m/s
 static double g_aeb_v0 = 80;   // our start speed (km/h)
 static double g_plant_k = 1;   // the plant's brakes against the AEB's fit (1 = the fit: 10 m/s2 per request at 30 t and less)
 static double g_prime_k = 0;   // > 0: [core] brake_learn on, the vehicle model's estimate primed to this plant's gain (the learned gain is then x this of the plant's: 1 = exact)
@@ -988,7 +988,7 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
     if (scen == 2) v = 60 / 3.6;
     if (scen == 3) v = 40 / 3.6;
     if (scen == 17) v = 30 / 3.6;
-    float prev_req = 0;
+    float prev_req = 0; double t_b0 = -1; int got_end = 0;
     for (; t_now - t0 < 40; t_now += 1 / 60.0) {
         double t = t_now - t0, dt = 1 / 60.0;
         switch (scen) {
@@ -1068,6 +1068,9 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
         x += v * dt;
         a_f += (a - a_f) * fmin(1, dt / 0.15);
         r.peak_dec = fmaxf(r.peak_dec, (float)-a);
+        if (t_b0 < 0 && req > 0.02f && lead_on) t_b0 = t;
+        if (t_b0 >= 0 && r.dec_early == 0 && t >= t_b0 + 0.8) r.dec_early = (float)-a;
+        if (t_b0 >= 0 && !got_end && v < 2.0 && v > 0.01) { got_end = 1; r.dec_end = (float)-a; }
         if (lead_on && t > 0.5) r.min_gap = fminf(r.min_gap, (float)(lx - x));
         r.max_st = AE.st > r.max_st && AE.st <= AEB_FULL ? AE.st : r.max_st;
         if (AE.st == AEB_WARN && t_warn < 0) t_warn = t;
@@ -1079,8 +1082,8 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
     r.final_gap = lead_on ? (float)(lx - x) : -1;
     r.warn_lead_s = t_warn >= 0 && t_part >= 0 ? (float)(t_part - t_warn) : -1;
     if (r.min_gap > 1e8f) r.min_gap = 0;
-    printf("%-50s max %-15s min gap %5.1f m, peak decel %.1f, max request %.2f, warning %.1f s before braking, air -%.0f psi, request reversals %d, end %.0f km/h%s\n",
-           name, aeb_name[r.max_st], r.min_gap, r.peak_dec, r.max_req, r.warn_lead_s, r.psi_drop, r.flips, r.end_kmh, r.hit ? "  <-- HIT" : "");
+    printf("%-50s max %-15s min gap %5.1f m, peak decel %.1f, max request %.2f, warning %.1f s before braking, air -%.0f psi, request reversals %d, end %.0f km/h, final gap %.2f m, decel %.1f at 0.8 s -> %.1f at the end%s\n",
+           name, aeb_name[r.max_st], r.min_gap, r.peak_dec, r.max_req, r.warn_lead_s, r.psi_drop, r.flips, r.end_kmh, r.final_gap, r.dec_early, r.dec_end, r.hit ? "  <-- HIT" : "");
     s_aeb_owns = 0; g_sim_mass = 26000; T.in_steer = 0; T.yaw = 0; GA[0x1d0] = 0;
     g_brake_learn = 0;
     return r;
@@ -1165,6 +1168,93 @@ static fmres fm_run(float mass, int fm, float cvar, float eco_cap, float (*road)
     g_fm_plant = 0; p_force_mode = 0; p_eco_cap = 1; g_cvar_adaptive = 3;
     return r;
 }
+// ======================================================================= a junction ahead and a climb in between (ride 8, 27-10, log 496-535 s)
+// 33 t on the 12-speed box of fm_run, set 63, 41 km/h and a 74 deg junction (21 km/h, margin 10) 290 m ahead. A climb begins 50 m on (6 % from
+// 90 m, tapering from 190 m to 2.5 % at the junction). The player: coasting at first, then full throttle toward the set speed, then off again.
+// Records the throttle, the speed at 30 m before the entrance, the fullest throttle after the first lift (the burst) and the seconds at full throttle.
+struct jnres { float thr_burst, kmh_30m, kmh_min, t_full, kmh_end; int regain; };
+static float jn_climb_road(double s) { return s < 50 ? 0.0f : s < 90 ? 6.0f * (float)(s - 50) / 40 : s < 190 ? 6.0f : s < 290 ? 6.0f - 3.5f * (float)(s - 190) / 100 : 2.5f; }
+static float jn_late_road(double s) { return s < 150 ? 5.5f - 3.0f * (float)s / 150 : 2.5f; }
+static float jn_flat_road(double) { return 0; }
+static int g_jn_print;
+static jnres jn_climb_run(const char *name, float (*road)(double), float mass, float v0, float dist0, float set_kmh)
+{
+    jnres r = { 0, -1, 999, 0, 0, 0 };
+    memset(GA, 0, sizeof GA); memset(&T, 0, sizeof T); memset(&C, 0, sizeof C); memset(&AH, 0, sizeof AH);
+    for (int o = 0; o < ACT_N; o++) act_brake(o, 0);
+    act_reset(RESET_HARD, "sim"); cr_reset(RESET_HARD, "sim");
+    g_fm_plant = 1; g_full_power = 1; p_force_mode = 0; g_cvar_adaptive = 3;
+    g_sim_eng = engine_info(); g_sim_eng.torque = 2400; g_sim_eng.n_curve = 0; g_sim_eng.rpm_limit = 2200; g_sim_mass = mass;
+    for (int i = 0; i < 12; i++) T.ratio[i] = FM_RATIO[i];
+    T.diff = 2.85f; T.fwd_gears = 12; T.wheels = 1; T.engine_on = 1; T.air_psi = 120;
+    vehicle_reset(RESET_HARD);
+    o_cruise = stock_cruise; stock_thr = 0; p_smooth = 1; g_sg_ok = 1; g_low_ok = 1; g_sg_hold = 0; g_feed = 0; g_stopped_at = 0;
+    float cancel_keep = p_jn_cancel_s; p_jn_cancel_s = 0;
+    g_route = 1; g_road = road; g_s = 0;
+    g_sim_jn = route_junction_t(); g_sim_jn.dist_m = dist0; g_sim_jn.turn_deg = 74; g_sim_jn.limit_ms = 21 / 3.6f; g_sim_jn.ratio = 1; g_sim_jn.roundabout = 0; g_sim_jn.curves = 1;
+    *(unsigned char *)(GA + GA_ON) = 1; *(float *)(GA + GA_SET) = set_kmh;
+    float v = v0 / 3.6f, u = 0; double s = 0, t0 = t_now, shift_end = -1, full_since = -1, last_print = -9; float xj = dist0;
+    int gear = 9, next = 9, lifted = 0, in_burst = 0;
+    if (g_jn_print) printf("   %s\n      t     dist   km/h  throttle  brake  grade\n", name);
+    for (; t_now - t0 < 90; t_now += 1 / 60.0) {
+        double t = t_now - t0;
+        float grade = road(s), kmh = v * 3.6f;
+        g_sim_jn.dist_m = xj - (float)s;
+        if (g_sim_jn.dist_m < 12) break;
+        T.speed = v; T.cruise = set_kmh / 3.6f; T.place.orientation.pitch = atanf(grade / 100) / 6.2831853f;
+        *(float *)(GA + GA_LEAD_M) = 0; *(float *)(GA + GA_ACC_TARGET) = 0; *(float *)(GA + GA_BRAKE_REQ) = 0;
+        if (shift_end >= 0 && t_now >= shift_end) { gear = next; shift_end = -1; }
+        int shifting = shift_end >= 0;
+        if (!shifting) {
+            float rpm = vehicle_rpm_at(gear, v);
+            if (gear < 12 && rpm > 1500 && vehicle_rpm_at(gear + 1, v) >= 950 && u * vehicle_force_at(gear, v, 1.0f) <= 0.9f * vehicle_force_at(gear + 1, v, 1.0f)) next = gear + 1;
+            else if (gear > 1 && (rpm < 950 || (full_since >= 0 && t_now - full_since > 3 && vehicle_rpm_at(gear - 1, v) < 1700))) next = gear - 1;
+            if (next != gear) { shift_end = t_now + 0.5; full_since = -1; shifting = 1; }
+        }
+        T.gear = T.dgear = gear; T.rpm = vehicle_rpm_at(gear, v); T.eff_clutch = shifting ? 1 : 0;
+        vehicle_frame();
+        u = act_stub(GA, 1 / 60.0f, 0);
+        T.eff_thr = u;
+        float brake = *(float *)(GA + GA_BRAKE_REQ);
+        if (u < 0.99f || shifting) full_since = -1; else if (full_since < 0) full_since = t_now;
+        float F = shifting ? 0 : u * vehicle_force_at(gear, v, 1.0f);
+        float res = mass * 9.81f * (sinf(atanf(grade / 100)) + 0.006f) + 0.5f * 1.2f * 6 * v * v + brake * mass * 4.0f;
+        T.accel = (F - res) / mass;
+        if (t > 1) {   // (not the first second: the bumpless start takes the game's throttle)
+            if (u < 0.02f && !shifting) lifted = 1;
+            if (lifted) { r.thr_burst = fmaxf(r.thr_burst, u); if (u > 0.5f && !in_burst) { in_burst = 1; r.regain++; } if (u < 0.1f) in_burst = 0; }
+            if (u > 0.95f) r.t_full += 1 / 60.0f;
+        }
+        v = fmaxf(0, v + (F - res) / mass / 60);
+        s += v / 60; g_s = s;
+        r.kmh_min = fminf(r.kmh_min, kmh);
+        if (r.kmh_30m < 0 && xj - s < 30) r.kmh_30m = v * 3.6f;
+        r.kmh_end = v * 3.6f;
+        if (g_jn_print && t - last_print >= 2) { last_print = t; printf("   %6.1f %6.0f %6.1f %8.2f %6.2f %6.1f\n", t, xj - s, kmh, u, brake, grade); }
+    }
+    printf("   %-52s burst %.2f (re-accelerations after the first lift: %d), %.1f s at full throttle, min %.1f km/h, %.1f km/h at 30 m, %.1f at the entrance\n", name, r.thr_burst,
+           r.regain, r.t_full, r.kmh_min, r.kmh_30m, r.kmh_end);
+    g_fm_plant = 0; g_full_power = 0; p_jn_cancel_s = cancel_keep; g_route = 0; g_sim_jn.dist_m = 0; g_road = NULL; *(unsigned char *)(GA + GA_ON) = 0;
+    return r;
+}
+static int junction_climb_test()
+{
+    int bad = 0;
+    printf("--- a junction (74 deg, 21 km/h + 10) ahead, set 63, 33 t, a climb to 6 %% in between: no gas after the first lift, speed at the entrance within the target\n");
+    g_jn_print = getenv("JN_PRINT") != NULL;
+    jnres c = jn_climb_run("41 km/h, junction 290 m, climb 6 %", jn_climb_road, 33000, 41, 290, 63);
+    jnres f = jn_climb_run("41 km/h, junction 290 m, flat", jn_flat_road, 33000, 41, 290, 63);
+    jnres c2 = jn_climb_run("28 km/h, junction 150 m, climb tapering 5.5 -> 2.5 %", jn_late_road, 33000, 28, 150, 63);
+    jnres c3 = jn_climb_run("55 km/h, junction 450 m, flat", jn_flat_road, 33000, 55, 450, 63);
+    g_jn_print = 0;
+    // (this plant brakes weakly, so the entrance speed is held against what the cruise gave before the change: 33.7 / 35.4 / 31.2 / 36.3 km/h)
+    bad |= c.kmh_end > 34.2f || f.kmh_end > 35.9f || c2.kmh_end > 31.7f || c3.kmh_end > 36.8f;
+    bad |= c.regain > 0 || c2.regain > 0 || c.thr_burst > 0.5f || c2.thr_burst > 0.5f;   // before: full throttle again 6-16 s after the first lift (1.00)
+    bad |= c.t_full > 7.0f || c2.t_full > 1.0f || f.t_full > 0;                          // before: 10.3 s / 4.4 s / 0 s at full throttle
+    printf("junction climb test: %s\n", bad ? "FAIL" : "ok");
+    return bad;
+}
+
 static int force_mode_test()
 {
     int bad = 0;
@@ -1187,7 +1277,7 @@ static int force_mode_test()
                fm, e.thr_max_near, 83 - e.loss, e.shifts);
         bad |= e.thr_max_near > 0.6f + 1e-4f;
     }
-    // approach_by_mode: the approach 70 -> 83 km/h on the flat, 33 t; 0 = the throttle follows the deficit up to full, 1 = Eco and Normal use a share of the pull to spare
+    // approach_by_mode: the approach 70 -> 83 km/h on the flat, 33 t; 0 = the throttle follows the deficit up to full, 1 = each mode uses its share of the pull to spare (0.9 / 0.95 / 1.0)
     printf("--- approach_by_mode: 70 -> 83 km/h, 33 t, flat; highest throttle before 82 km/h and the seconds to 82 km/h\n");
     float hi[2][3], ts[2][3];
     for (int ab = 0; ab < 2; ab++) {
@@ -1203,7 +1293,8 @@ static int force_mode_test()
     }
     p_app_mode = 1; g_full_power = 0;
     bad |= hi[0][0] < 0.99f || hi[0][1] < 0.99f;   // (today: full throttle)
-    bad |= hi[1][0] > 0.9f || hi[1][1] > 0.9f || hi[1][2] < 0.99f || !(ts[1][0] > ts[1][1] && ts[1][1] > ts[1][2]);
+    // (27-10: the modes pull up about equally hard, shares 0.9 / 0.95 / 1.0: Eco within 25 % of Power's time, still not faster than Normal and Power)
+    bad |= hi[1][2] < 0.99f || !(ts[1][0] >= ts[1][1] && ts[1][1] >= ts[1][2]) || ts[1][0] > 1.25f * ts[1][2];
     printf("force_mode test: %s\n", bad ? "FAIL" : "ok");
     return bad;
 }
@@ -1413,6 +1504,16 @@ int main(int argc, char **argv)
         for (int i = 0; i < 3; i++)
             printf("   %-8.0f %5.1f / %5.1f / %5.2f           %5.1f / %5.1f / %5.2f\n", sp[i], t[0][i].warn_gap, t[0][i].brake_gap, t[0][i].final_gap,
                    t[1][i].warn_gap, t[1][i].brake_gap, t[1][i].final_gap);
+        // aeb_rising (27-10): the deceleration rises during the event instead of falling off as the truck slows down. 0 = as before.
+        printf("   aeb_rising 0 against 1 (mode 1, standing lead, 26 t): deceleration 0.8 s into the braking -> when the speed drops under 2 m/s, final gap\n");
+        for (int i = 0; i < 3; i++) {
+            aebres r01[2];
+            for (int rs = 0; rs < 2; rs++) { p_aeb_rise = (float)rs; p_aeb_mode = 1; g_aeb_v0 = sp[i]; r01[rs] = aeb_run("rise", 14, 26000, 140); }
+            p_aeb_rise = 1;
+            printf("   %2.0f km/h   rising 0: %.1f -> %.1f, %.2f m     rising 1: %.1f -> %.1f, %.2f m\n", sp[i], r01[0].dec_early, r01[0].dec_end, r01[0].final_gap, r01[1].dec_early, r01[1].dec_end, r01[1].final_gap);
+            bad |= r01[1].hit || r01[1].dec_end < r01[1].dec_early - 0.1f || r01[1].dec_end < r01[0].dec_end + (i ? 0.3f : 0.0f);   // it ends at least as hard as it began, and harder than the constant plan (not at 30 km/h: little to gain)
+            bad |= r01[1].final_gap < r01[0].final_gap - 0.02f || r01[1].min_gap < r01[0].min_gap - 0.02f;                        // never closer than the constant plan
+        }
         g_aeb_v0 = 80; p_aeb_mode = 1;
         a = aeb_run("mode 1: standing lead at 80 km/h, 60 t", 14, 60000, 140); bad |= a.hit || a.final_gap < 0.2f || a.final_gap > 1.5f;
         g_aeb_v0 = 50; a = aeb_run("mode 1: following 30 m at 50, the lead brakes 5 m/s2 to 0", 12, 26000, 140); bad |= a.hit || a.flips > 6;
@@ -1538,6 +1639,7 @@ int main(int argc, char **argv)
         if (bad) return 1;
     }
     if (force_mode_test()) return 1;   // after the lever test: it starts everything it uses afresh
+    if (junction_climb_test()) return 1;
     {   // last, so nothing above sees its time or its state
         int bad = 0;
         float k0 = s_ah_k;

@@ -1239,7 +1239,7 @@ static float g_cf_set = 83;
 // the throttle the approach may use is the force that holds the speed plus the mode's share of what a full wish has to spare, over what the
 // gear gives; the share is the mode's own key (approach_share_eco / approach_share / approach_share_power). More when the truck gains under 0.05 m/s2 while 1 km/h under.
 static int g_cf_app = 0; static float g_cf_ex = 0, g_cf_ceil = 1;
-static float g_cf_sh[3] = { 0.36f, 0.6f, 1.0f };   // approach_share_eco / approach_share / approach_share_power at their defaults (SC_SHARES=a,b,c overrides, for tuning)
+static float g_cf_sh[3] = { 0.9f, 0.95f, 1.0f };   // approach_share_eco / approach_share / approach_share_power at their defaults (SC_SHARES=a,b,c overrides, for tuning)
 static float cf_ceiling(int md, float e, float acc_kmhs, float dt, int shifting)
 {
     bool slow = acc_kmhs < 0.18f && e > 1.0f;
