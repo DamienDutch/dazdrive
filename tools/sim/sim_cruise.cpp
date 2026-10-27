@@ -1184,14 +1184,16 @@ static fmres fm_run(float mass, int fm, float cvar, float eco_cap, float (*road)
 // 33 t on the 12-speed box of fm_run, set 63, 41 km/h and a 74 deg junction (21 km/h, margin 10) 290 m ahead. A climb begins 50 m on (6 % from
 // 90 m, tapering from 190 m to 2.5 % at the junction). The player: coasting at first, then full throttle toward the set speed, then off again.
 // Records the throttle, the speed at 30 m before the entrance, the fullest throttle after the first lift (the burst) and the seconds at full throttle.
-struct jnres { float thr_burst, kmh_30m, kmh_min, t_full, kmh_end; int regain; };
-static float jn_climb_road(double s) { return s < 50 ? 0.0f : s < 90 ? 6.0f * (float)(s - 50) / 40 : s < 190 ? 6.0f : s < 290 ? 6.0f - 3.5f * (float)(s - 190) / 100 : 2.5f; }
+struct jnres { float thr_burst, kmh_30m, kmh_min, t_full, kmh_end; int regain; float thr_sec; };
+static float g_climb_k = 1;   // the climb scaled (the sweep: 4 / 6 / 8 %)
+static float jn_climb_road0(double s) { return s < 50 ? 0.0f : s < 90 ? 6.0f * (float)(s - 50) / 40 : s < 190 ? 6.0f : s < 290 ? 6.0f - 3.5f * (float)(s - 190) / 100 : 2.5f; }
+static float jn_climb_road(double s) { return g_climb_k * jn_climb_road0(s); }
 static float jn_late_road(double s) { return s < 150 ? 5.5f - 3.0f * (float)s / 150 : 2.5f; }
 static float jn_flat_road(double) { return 0; }
-static int g_jn_print;
+static int g_jn_print, g_jn_quiet, g_jn_nokick;   // (nokick: the plant keeps its gear: no downshift at rpm < 950 or after 3 s at full throttle, thresholds of the plant, not of the cruise)
 static jnres jn_climb_run(const char *name, float (*road)(double), float mass, float v0, float dist0, float set_kmh)
 {
-    jnres r = { 0, -1, 999, 0, 0, 0 };
+    jnres r = { 0, -1, 999, 0, 0, 0, 0 };
     memset(GA, 0, sizeof GA); memset(&T, 0, sizeof T); memset(&C, 0, sizeof C); memset(&AH, 0, sizeof AH);
     for (int o = 0; o < ACT_N; o++) act_brake(o, 0);
     act_reset(RESET_HARD, "sim"); cr_reset(RESET_HARD, "sim");
@@ -1220,7 +1222,7 @@ static jnres jn_climb_run(const char *name, float (*road)(double), float mass, f
         if (!shifting) {
             float rpm = vehicle_rpm_at(gear, v);
             if (gear < 12 && rpm > 1500 && vehicle_rpm_at(gear + 1, v) >= 950 && u * vehicle_force_at(gear, v, 1.0f) <= 0.9f * vehicle_force_at(gear + 1, v, 1.0f)) next = gear + 1;
-            else if (gear > 1 && (rpm < 950 || (full_since >= 0 && t_now - full_since > 3 && vehicle_rpm_at(gear - 1, v) < 1700))) next = gear - 1;
+            else if (gear > 1 && !g_jn_nokick && (rpm < 950 || (full_since >= 0 && t_now - full_since > 3 && vehicle_rpm_at(gear - 1, v) < 1700))) next = gear - 1;
             if (next != gear) { shift_end = t_now + 0.5; full_since = -1; shifting = 1; }
         }
         T.gear = T.dgear = gear; T.rpm = vehicle_rpm_at(gear, v); T.eff_clutch = shifting ? 1 : 0;
@@ -1236,6 +1238,7 @@ static jnres jn_climb_run(const char *name, float (*road)(double), float mass, f
             if (u < 0.02f && !shifting) lifted = 1;
             if (lifted) { r.thr_burst = fmaxf(r.thr_burst, u); if (u > 0.5f && !in_burst) { in_burst = 1; r.regain++; } if (u < 0.1f) in_burst = 0; }
             if (u > 0.95f) r.t_full += 1 / 60.0f;
+            r.thr_sec += u / 60.0f;
         }
         v = fmaxf(0, v + (F - res) / mass / 60);
         s += v / 60; g_s = s;
@@ -1244,10 +1247,58 @@ static jnres jn_climb_run(const char *name, float (*road)(double), float mass, f
         r.kmh_end = v * 3.6f;
         if (g_jn_print && t - last_print >= 2) { last_print = t; printf("   %6.1f %6.0f %6.1f %8.2f %6.2f %6.1f\n", t, xj - s, kmh, u, brake, grade); }
     }
-    printf("   %-52s burst %.2f (re-accelerations after the first lift: %d), %.1f s at full throttle, min %.1f km/h, %.1f km/h at 30 m, %.1f at the entrance\n", name, r.thr_burst,
+    if (!g_jn_quiet) printf("   %-52s burst %.2f (re-accelerations after the first lift: %d), %.1f s at full throttle, min %.1f km/h, %.1f km/h at 30 m, %.1f at the entrance\n", name, r.thr_burst,
            r.regain, r.t_full, r.kmh_min, r.kmh_30m, r.kmh_end);
     g_fm_plant = 0; g_full_power = 0; p_jn_cancel_s = cancel_keep; g_route = 0; g_sim_jn.dist_m = 0; g_road = NULL; *(unsigned char *)(GA + GA_ON) = 0;
     return r;
+}
+// ahead_accel swept 0.070-0.120 in 0.005 steps for 26 / 33 / 40 t and a 4 / 6 / 8 % climb (the 6 % one is the test above): the metrics must
+// move smoothly. A hard switch in the cruise showed as a step between 0.084 and 0.085 (27-10: the burst 0.06 -> 0.01, full throttle 3.2 -> 3.9 s,
+// the entrance 32.6 -> 33.7 km/h): `kmh >= v_ok - 2 ? kmh : v_ok` jumped the error by 2 km/h (0.5 throttle). The asserted plant keeps
+// its gear (4 / 6 %): the plant's own downshifts (rpm < 950, or 3 s at 0.95+ throttle) are thresholds of the plant, and which tick they fall on
+// moves the metrics by up to 0.4 km/h / 0.6 s without the cruise doing anything different. The table with SWEEP=1 shows both. Returns bad when two neighbors differ by more than the tolerances.
+static int ahead_sweep_test()
+{
+    int bad = 0, show = getenv("SWEEP") != NULL;
+    float keep = p_bind_a;
+    g_jn_quiet = 1;
+    if (show && !strcmp(getenv("SWEEP"), "fine")) {   // SWEEP=fine: 33 t, 6 %, 0.080-0.090 in 0.001 steps (the edge of 27-10), plant box
+        for (int i = 0; i <= 10; i++) {
+            p_bind_a = 0.080f + 0.001f * i;
+            jnres r = jn_climb_run("fine", jn_climb_road, 33000, 41, 290, 63);
+            printf("   %.3f  entrance %.1f km/h, throttle %.1f s, full %.1f s, burst %.2f\n", p_bind_a, r.kmh_end, r.thr_sec, r.t_full, r.thr_burst);
+        }
+        g_jn_quiet = 0; p_bind_a = keep;
+        return 0;
+    }
+    for (int nokick = 1; nokick >= 0; nokick--) {
+        g_jn_nokick = nokick;
+        float worst_end = 0, worst_thr = 0, worst_burst = 0;
+        for (float mass : { 26000.0f, 33000.0f, 40000.0f }) {
+            for (float pk : { 4.0f, 6.0f, 8.0f }) {
+                g_climb_k = pk / 6;
+                if (show) printf("   %2.0f t, climb %.0f %%, %s:  ahead_accel  entrance km/h  throttle s  full s  burst\n", mass / 1000, pk, nokick ? "gear held" : "plant box");
+                jnres prev = { 0, 0, 0, 0, 0, 0, 0 }, prev2 = prev;
+                for (int i = 0; i <= 10; i++) {
+                    p_bind_a = 0.07f + 0.005f * i;
+                    jnres r = jn_climb_run("sweep", jn_climb_road, mass, 41, 290, 63);
+                    if (show) printf("                  %.3f        %5.1f          %5.1f    %4.1f   %.2f\n", p_bind_a, r.kmh_end, r.thr_sec, r.t_full, r.thr_burst);
+                    if (i > 1 && (!nokick || pk <= 6)) {   // (an 8 % climb on a held gear is no road for 33 / 40 t: it stalls to 11-25 km/h. A step: how far the middle one sits from the mean of its two neighbors; a steady slope is no step)
+                        worst_end = fmaxf(worst_end, fabsf(prev.kmh_end - 0.5f * (prev2.kmh_end + r.kmh_end)));
+                        worst_thr = fmaxf(worst_thr, fabsf(prev.thr_sec - 0.5f * (prev2.thr_sec + r.thr_sec)));
+                    }
+                    worst_burst = fmaxf(worst_burst, r.thr_burst);
+                    if (nokick && pk <= 6) bad |= r.regain > 0;
+                    prev2 = prev; prev = r;
+                }
+            }
+        }
+        printf("   %s: worst step against the neighbors' mean: entrance %.2f km/h, throttle %.2f s; highest burst %.2f\n", nokick ? "gear held" : "plant box  ", worst_end, worst_thr, worst_burst);
+        if (nokick) bad |= worst_end > 0.35f || worst_thr > 0.4f || worst_burst > 0.5f;
+    }
+    g_climb_k = 1; g_jn_quiet = 0; g_jn_nokick = 0; p_bind_a = keep;
+    printf("ahead_accel sweep: %s\n", bad ? "FAIL" : "ok");
+    return bad;
 }
 static int junction_climb_test()
 {
@@ -1264,6 +1315,7 @@ static int junction_climb_test()
     bad |= c.regain > 0 || c2.regain > 0 || c.thr_burst > 0.5f || c2.thr_burst > 0.5f;   // before: full throttle again 6-16 s after the first lift (1.00)
     bad |= c.t_full > 7.0f || c2.t_full > 1.0f || f.t_full > 0;                          // before: 10.3 s / 4.4 s / 0 s at full throttle
     printf("junction climb test: %s\n", bad ? "FAIL" : "ok");
+    bad |= ahead_sweep_test();
     return bad;
 }
 
