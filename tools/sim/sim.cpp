@@ -610,10 +610,12 @@ static int run_scores_cruise();
 static int run_scores_approach();
 static int run_scores_engine();
 static int run_scores_cross();
+static int run_scores_kickwish();
 static int run_scores()
 {
     printf("\n=== SCORES part 1: the score function on the vehicle model (Renault ATO 12 speeds, diff 3.08) ===\n");
     use_ato();
+    if (getenv("SC_PART9")) return run_scores_kickwish();   // (only part 9)
     if (getenv("SC_PART8")) return run_scores_cross();   // (only part 8)
     if (getenv("SC_PART7")) return run_scores_engine();   // (only part 7)
     if (getenv("SC_PART6")) return run_scores_approach();   // (only part 6; SC_VERBOSE=1 with -v prints the module log)
@@ -709,6 +711,7 @@ static int run_scores()
     r |= run_scores_approach();
     r |= run_scores_engine();
     r |= run_scores_cross();
+    r |= run_scores_kickwish();
     return r | g_sc_failed;
 }
 
@@ -1569,6 +1572,125 @@ static int run_scores_cross()
         g_quiet = 0;
     }
     set_param("power_shift_crossover", 1.0f); use_ato();
+    return g_sc_failed;
+}
+
+
+// ---- part 9: kickdown_by_wish ([trueshift], choice 1 with the wish pedal): the kickdown as the driver's unmet wish, against the flat-pedal rule
+// The wish pedal is on as in part 2's wish rows (ref_now: the best gear's full force at this speed is a full wish), the driver's pedal is T.in_thr.
+// c_kw: the pedal holds g_kw_p0 for g_kw_hold s, then rises to g_kw_p1 in g_kw_ramp s. g_kw_r: the ratio of the wished force to this gear's force at
+// full throttle at the last tick before a decision; at every kickdown it is checked (never one with the ratio under 1).
+static float g_kw_p0 = 0.3f, g_kw_p1 = 1.0f, g_kw_hold = 6, g_kw_ramp = 24; static double g_kw_t0, g_kw_r;
+static float g_kw_rmin = 9; static int g_kw_seen, g_kw_kd; static char g_kw_buf[2][16];
+static void c_kw(double t)
+{
+    if (t <= 0) { g_kw_t0 = t_now; g_rec_n = 0; g_kw_seen = 0; g_kw_r = 0; g_pl_full = 1; }
+    for (; g_kw_seen < g_rec_n; g_kw_seen++)
+        if (!strncmp(g_rec[g_kw_seen].why, "kickdown", 8)) { g_kw_kd++; if (g_kw_r > 0) g_kw_rmin = fminf(g_kw_rmin, (float)g_kw_r); }
+    float p = t < g_kw_hold ? g_kw_p0 : fminf(g_kw_p1, g_kw_p0 + (g_kw_p1 - g_kw_p0) * (float)((t - g_kw_hold) / fmax(g_kw_ramp, 1e-3)));
+    M.pedal = p; g_pl_ped = p; M.wish_on = 0;
+    if (M.gear > 0 && !M.state && M.v * 3.6f > 12) {
+        float fg = vehicle_force_at(M.gear, M.v, 1.0f);
+        if (fg > 0) { M.wish_on = 1; M.wish_thr = fminf(1, sim_wish_force(M.v) / fg); g_kw_r = sim_wish_force(M.v) / fg; }
+    }
+}
+static float r_flat0(double) { return 0; }
+static float r_two(double) { return 2.0f; }
+struct kw_res { int shifts, downs, ups, pairs, kd; double first_dn; char why[24]; };
+static kw_res kw_stats(double from)   // from the recorder; first_dn = seconds from `from` to the first downshift (-1 = none)
+{
+    kw_res r = {}; r.first_dn = -1;
+    for (int i = 0; i < g_rec_n; i++) {
+        r.shifts++;
+        if (g_rec[i].b > g_rec[i].a) r.ups++; else { r.downs++; if (r.first_dn < 0 && g_rec[i].t >= from) { r.first_dn = g_rec[i].t - from; snprintf(r.why, sizeof r.why, "%s", g_rec[i].why); } }
+        if (!strncmp(g_rec[i].why, "kickdown", 8)) r.kd++;
+        for (int j = i + 1; j < g_rec_n && g_rec[j].t - g_rec[i].t < 4.0; j++) if (g_rec[i].b > g_rec[i].a && g_rec[j].b < g_rec[j].a) { r.pairs++; break; }
+    }
+    return r;
+}
+static int run_scores_kickwish()
+{
+    printf("\n=== SCORES part 9: kickdown_by_wish 0 (the flat-pedal rule) against 1 (the unmet wish), wish pedal, choice 1, ATO ===\n");
+    use_ato(); set_param("choice", 1.0f); sim_reset(RESET_HARD, "sim: part 9");
+    struct Md { const char *name; float cvar; } mds[3] = { { "Eco", 10.0f }, { "Normal", 3.0f }, { "Power", 1.6667f } };
+    float lvl[3] = { 0, 0, 0 }, rat[3] = { 0, 0, 0 };
+    {
+        const char *kl[3] = { "kick_level_eco", "kick_level", "kick_level_power" }, *kr[3] = { "kick_ratio_eco", "kick_ratio", "kick_ratio_power" };
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < m_trueshift.n_params; j++) {
+                if (!strcmp(m_trueshift.params[j].key, kl[i])) lvl[i] = *m_trueshift.params[j].val;
+                if (!strcmp(m_trueshift.params[j].key, kr[i])) rat[i] = *m_trueshift.params[j].val;
+            }
+        printf("  levels (defaults): Eco %.3f, Normal %.3f, Power %.3f; ratio %.2f / %.2f / %.2f. Time to the kickdown at a +10 %% shortage: %.1f / %.1f / %.2f s; at +40 %%: %.2f / %.2f / %.2f s\n",
+               lvl[0], lvl[1], lvl[2], rat[0], rat[1], rat[2], lvl[0] / (1.10f - rat[0]), lvl[1] / (1.10f - rat[1]), lvl[2] / (1.10f - rat[2]),
+               lvl[0] / (1.40f - rat[0]), lvl[1] / (1.40f - rat[1]), lvl[2] / (1.40f - rat[2]));
+    }
+    // 1. the pedal sweep 0.3 -> 1.0 (6 s at 0.3, 24 s rise, 15 s at 1.0) from 50 km/h, 45 s. (a) in the highest gear that gives 1100 rpm, the gear the
+    // truck would be in (9 at 1252 rpm: the wish is within 4 % of what it gives); (b) in the highest gear that gives 900 rpm (10 at 980 rpm: inside the
+    // window but 25 % weaker than 9; the wish does not stay unmet)
+    g_kw_kd = 0; g_kw_rmin = 9;
+    int sw_pairs = 0, sw_tot[2][2] = { { 0, 0 }, { 0, 0 } }, sw_worst = 0;
+    for (int part = 0; part < 2; part++) {
+        float rpm_min = part ? 900.0f : 1100.0f;
+        printf("\n  pedal sweep 0.3 -> 1.0 from 50 km/h, 45 s, start %s: shifts / downshifts / kickdowns / up-down pairs within 4 s     kickdown_by_wish 0   |  1\n",
+               part ? "in gear 10 (980 rpm, a step too tall)" : "in gear 9 (1252 rpm, the gear it would be in)");
+        for (float mass : { 17000.0f, 33000.0f })
+            for (int grade = 0; grade < 2; grade++)
+                for (int m = 0; m < 3; m++) {
+                    kw_res r[2];
+                    for (int kw = 0; kw < 2; kw++) {
+                        set_param("kickdown_by_wish", (float)kw);
+                        g_kw_p0 = 0.3f; g_kw_p1 = 1.0f; g_kw_hold = 6; g_kw_ramp = 24; g_rec_on = 1;
+                        sc_do("kw sweep", {mass, 50, sc_gear_for(50, rpm_min), 45, mds[m].cvar, 0.5f, 0, -1, -1, grade ? r_two : r_flat0, 0}, c_kw, 1);
+                        g_rec_on = 0;
+                        r[kw] = kw_stats(0);
+                        sw_tot[part][kw] += r[kw].shifts;
+                        if (getenv("KW_LIST") && kw == 1) for (int i = 0; i < g_rec_n; i++) printf("        %5.1f s  %d->%d (%s) %.0f rpm\n", g_rec[i].t - g_kw_t0, g_rec[i].a, g_rec[i].b, g_rec[i].why, g_rec[i].rpm);
+                    }
+                    sw_pairs += r[1].pairs;
+                    if (part) sw_worst = r[1].shifts - r[0].shifts > sw_worst ? r[1].shifts - r[0].shifts : sw_worst;
+                    printf("    %2.0f t %-4s %-7s  %2d / %d / %d / %d            |  %2d / %d / %d / %d\n", mass / 1000, grade ? "2 %" : "flat", mds[m].name,
+                           r[0].shifts, r[0].downs, r[0].kd, r[0].pairs, r[1].shifts, r[1].downs, r[1].kd, r[1].pairs);
+                }
+        printf("  shifts over the 12 runs: %d (0) against %d (1)\n", sw_tot[part][0], sw_tot[part][1]);
+    }
+    set_param("kickdown_by_wish", 1.0f);
+    sc_check(sw_pairs == 0, "kickdown_by_wish 1: no upshift followed by a downshift within 4 s in the sweeps");
+    sc_check(sw_tot[0][1] * 10 <= sw_tot[0][0] * 11, "kickdown_by_wish 1: start in the gear it would be in: no more than 10 % more shifts than 0 over the sweeps");
+    sc_check(sw_worst <= 3, "kickdown_by_wish 1: start a step too tall: at most 3 shifts more than 0 in any sweep (the kickdown and the upshift back)");
+    sc_check(g_kw_rmin >= 1.0f, "a kickdown by the wish never comes while this gear can give the wish (ratio under 1)");
+    // 2. gear 10, 33 t flat: the pedal steps from 0.3 to 0.6 / 0.8 / 1.0 at 2 s: seconds from the step to the first downshift against the time the level
+    // gives. At 41 km/h gear 10 turns 803 rpm (under the window: the lugging rule shifts first, with kickdown_by_wish 0 as well); at 50 km/h 980 rpm
+    // (inside the window, weaker than 9: only the wish decides)
+    int ok = 0, n = 0;
+    for (float kmh : { 41.0f, 50.0f }) {
+        sc_prime(33000, 0.5f, kmh, 10);
+        printf("\n  gear 10 at %.0f km/h = %.0f rpm, 33 t flat, the pedal steps from 0.3 at 2 s: ratio of the wish to gear 10, seconds to the first downshift with kickdown_by_wish 1 | 0\n", kmh, rpm_now());
+        for (int m = 0; m < 3; m++)
+            for (float pe : { 0.6f, 0.85f, 1.0f }) {
+                double dn[2] = { -2, -2 };
+                char wy[24] = "";
+                float r0 = 0, tb = 0;
+                for (int kw = 1; kw >= 0; kw--) {
+                    set_param("kickdown_by_wish", (float)kw);
+                    g_kw_p0 = 0.3f; g_kw_p1 = pe; g_kw_hold = 2; g_kw_ramp = 0.1f; g_rec_on = 1;
+                    sc_do("kw step", {33000, kmh, 10, 10, mds[m].cvar, 0.5f, 0, -1, -1, r_flat0, 0}, c_kw, 1);
+                    g_rec_on = 0;
+                    kw_res kr = kw_stats(g_kw_t0 + 2); dn[kw] = kr.first_dn; if (kw == 1) snprintf(wy, sizeof wy, "%s", kr.why);
+                    g_pl_ped = pe; g_pl_full = 1;
+                    r0 = sim_wish_force(kmh / 3.6f) / vehicle_force_at(10, kmh / 3.6f, 1.0f);
+                }
+                // the level over the excess, plus the shift time, 0.3 s of settling and a second for the pedal's own rise (a flat pedal: at once)
+                tb = r0 > rat[m] ? (pe >= 1.0f ? 0.0f : lvl[m] / (r0 - rat[m])) + 0.5f + 0.3f + 1.0f : 0;
+                snprintf(g_kw_buf[0], 16, dn[1] < 0 ? "none" : "%.1f s", dn[1]);
+                snprintf(g_kw_buf[1], 16, dn[0] < 0 ? "none" : "%.1f s", dn[0]);
+                printf("    %-6s pedal %.2f  ratio %.2f   %-6s | %-6s   (bound %.1f s)  %s\n", mds[m].name, pe, r0, g_kw_buf[0], g_kw_buf[1], tb, dn[1] >= 0 ? wy : "");
+                if (r0 > rat[m] + 0.2f) { n++; if (dn[1] >= 0 && dn[1] <= tb) ok++; }
+            }
+    }
+    sc_check(n > 0 && ok == n, "gear 10 at 41 and 50 km/h, 33 t, pedal 0.6-1.0: the downshift comes within the per-mode time of the level (each case with the ratio 0.2 over kick_ratio)");
+    set_param("kickdown_by_wish", 1.0f);
+    g_pl_full = 0; g_pl_ped = 0.7f; M.wish_on = 0;
     return g_sc_failed;
 }
 
