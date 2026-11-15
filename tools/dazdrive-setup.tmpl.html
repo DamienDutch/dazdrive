@@ -256,7 +256,7 @@ body.explain .tiles{grid-template-columns:1fr}
 <body>
 <header class="dash"><div class="in">
 <h1>DazDrive<span class="ver" id="ver"></span>setup</h1>
-<p>For ETS2 1.60 (Steam beta temporary_1_60). Gearbox on Automatic. Singleplayer, not TruckersMP. Nothing leaves this page.</p>
+<p>For ETS2 1.62. Gearbox on Automatic. Singleplayer, not TruckersMP. Nothing leaves this page.</p>
 </div></header>
 <main>
 <nav class="wizhead" aria-label="Steps"><div class="wsteps" id="wsteplist"></div><label class="xsw"><input type="checkbox" id="explain"><i></i><span>Extra info</span></label></nav>
@@ -351,24 +351,45 @@ function wrapc(text) {   // a comment at 96 columns, every line starting with "#
   if (cur) lines.push("# " + cur);
   return lines.length ? lines : ["#"];
 }
+// A value as the ini writes it: true/false for a switch at 0 or 1, the word of a choice, else the number as it is.
+function iniValue(D, sec, key, v) {
+  var n = D.names[sec + "." + key];
+  if (n[3] === "s" && (same(v, 0) || same(v, 1))) return +v ? "true" : "false";
+  if (n[3] === "c") {
+    var w = n[4].split(" ");
+    for (var i = 0; i < w.length; i++) { var p = w[i].split("="); if (+p[0] === +v) return p[1]; }
+  }
+  return v;
+}
+// What the ini text says for a value: a number, true/false/on/off/yes/no, or the word of a choice -> the number as a string; null = not a value.
+function iniNumber(D, sec, key, text) {
+  var t = String(text).trim().toLowerCase().replace(/^(-?\d+),(\d+)$/, "$1.$2"), n = D.names[sec + "." + key], i;   // a decimal comma is a number too, as in the plugin
+  if (n && n[3] === "c") {
+    var w = n[4].split(" ");
+    for (i = 0; i < w.length; i++) { var p = w[i].split("="); if (p[1] === t) return num(p[0]); }
+  }
+  if (/^(true|on|yes)$/.test(t)) return "1";
+  if (/^(false|off|no)$/.test(t)) return "0";
+  return isNum(t) ? num(t) : null;
+}
 function buildIni(D, era, vals) {
-  var e = eraOf(D, era), out = [];
+  var e = eraOf(D, era), out = [], seen = {}, help = {}, std = null;
+  D.eras.forEach(function (x) { if (x.shipped) std = presetValues(D, x.id); });   // a setting that is not in the ini gets this value
+  D.order.forEach(function (s) { D.tables[s].forEach(function (r) { help[s + "." + r[0]] = r[2]; }); });
   out = out.concat(wrapc("dazdrive " + D.version + " settings: " + e.name + " (" + e.year + "), made with dazdrive-setup.html. Open this file in dazdrive-setup.html again to change the choices."));
   out.push("#");
   out = out.concat(wrapc(D.howto));
-  D.order.forEach(function (sec) {
+  D.layout.forEach(function (sx) {
+    // the internal (tuning) settings are not written, unless the value differs from the standard preset (what a missing key gets)
+    var rows = sx.rows.filter(function (r) { return D.names[r[0] + "." + r[1]][2] !== "i" || !same(vals[r[0]][r[1]], std[r[0]][r[1]]); });
+    if (!rows.length) return;
     out.push("");
-    if (D.intro[sec]) { out.push("# " + new Array(95).join("=")); out = out.concat(wrapc(D.intro[sec])); out.push("# " + new Array(95).join("=")); }
-    out.push("[" + sec + "]");
-    var sw = (D.switches && D.switches[sec]) || [], rows = D.tables[sec];
-    var first = rows.filter(function (r) { return sw.indexOf(r[0]) >= 0; }), rest = rows.filter(function (r) { return sw.indexOf(r[0]) < 0; });
-    [["Switches", first], ["Settings", rest]].forEach(function (g) {
-      if (!g[1].length) return;
-      if (first.length) { out.push(""); out.push("# --- " + g[0] + " ---"); }
-      g[1].forEach(function (row) {
-        out.push(""); out = out.concat(wrapc(row[2]));
-        out.push(row[0] + "=" + vals[sec][row[0]]);
-      });
+    if (D.intro[sx.module] && !seen[sx.module]) { out.push("# " + new Array(95).join("=")); out = out.concat(wrapc(D.intro[sx.module])); out.push("# " + new Array(95).join("=")); }
+    seen[sx.module] = 1;
+    out.push("[" + sx.section + "]");
+    rows.forEach(function (r) {
+      out.push(""); out = out.concat(wrapc(help[r[0] + "." + r[1]]));
+      out.push(D.names[r[0] + "." + r[1]][1] + "=" + iniValue(D, r[0], r[1], vals[r[0]][r[1]]));
     });
   });
   return out.join("\n") + "\n";
@@ -462,20 +483,26 @@ function parseIni(text) {
   String(text).split(/\r?\n/).forEach(function (l) {
     l = l.trim();
     if (!l || l[0] === "#" || l[0] === ";") return;
-    var m = l.match(/^\[([A-Za-z0-9_]+)\]$/);
-    if (m) { sec = m[1]; return; }
+    var m = l.match(/^\[([A-Za-z0-9_.]+)\]$/);
+    if (m) { sec = m[1].toLowerCase(); return; }
     var kv = l.match(/^([A-Za-z0-9_]+)\s*=\s*(.*)$/);
-    if (kv && sec) { out[sec] = out[sec] || {}; out[sec][kv[1]] = kv[2].trim(); }
+    if (kv && sec) { out[sec] = out[sec] || {}; out[sec][kv[1].toLowerCase()] = kv[2].trim(); }
   });
-  if (out.lane && /^\s*1\s*$/.test(out.lane.mode || "")) out.lane.mode = "2";   // the plugin treats lane mode 1 as 2
   return out;
 }
-// put the known numeric values of a parsed ini into vals; returns how many were taken
+// put the values of a parsed ini into vals (a key under its new [module.section] name, else under the old plain [module] header);
+// returns how many were taken
 function applyIni(D, parsed, vals) {
   var n = 0;
   D.order.forEach(function (sec) { D.tables[sec].forEach(function (row) {
-    var k = row[0];
-    if (parsed[sec] && (k in parsed[sec]) && isNum(parsed[sec][k])) { vals[sec][k] = num(parsed[sec][k]); n++; }
+    var k = row[0], nm = D.names[sec + "." + k], t = null;
+    if (parsed[nm[0]] && (nm[1] in parsed[nm[0]])) t = parsed[nm[0]][nm[1]];
+    else if (parsed[sec] && (k in parsed[sec])) t = parsed[sec][k];
+    if (t === null) return;
+    var v = iniNumber(D, sec, k, t);
+    if (v === null) return;
+    if (sec === "lane" && k === "mode" && v === "1") v = "2";   // the plugin treats lane mode 1 as 2
+    vals[sec][k] = v; n++;
   }); });
   return n;
 }
@@ -549,7 +576,7 @@ if (typeof document !== "undefined") (function () {
     document.querySelectorAll("#eras input").forEach(function (r) { r.checked = r.value === era; });
     $("eras").style.setProperty("--p", (D.eras.indexOf(e) / (D.eras.length - 1) * 100) + "%");
     // what a year adds to the year before (the first year: what it includes); the story and "keeps" are the extra info
-    var ev = presetValues(D, era), pi = D.eras.indexOf(e) - 1, pv = pi >= 0 ? presetValues(D, D.eras[pi].id) : null, added = [];
+    var ev = presetValues(D, era), pi = e.standalone ? -1 : D.eras.indexOf(e) - 1, pv = pi >= 0 ? presetValues(D, D.eras[pi].id) : null, added = [];   // (a standalone tile is no year after the others: it says what it includes)
     D.features.forEach(function (f) {
       if (featureState(f, ev) !== "false" && (!pv || featureState(f, pv) === "false")) added.push(/^[A-Z][a-z-]+( [a-z]+)*( \([A-Z]+\))?$/.test(f.label) ? f.label.charAt(0).toLowerCase() + f.label.slice(1) : f.label);
     });
@@ -733,6 +760,7 @@ if (typeof document !== "undefined") (function () {
         if (kb.presets) {   // the presets as marks under the slider: they are points on it
           var marks = el("div", "marks"); mk = [];
           kb.at.forEach(function (x, i) {
+            if (kb.at.indexOf(x) < i) { mk.push(null); return; }   // a preset that sits on the same point as an earlier one (it differs in another control): one mark
             var b = el("button", null, m.g.tuning[i].name); b.type = "button";
             b.style.left = ((x - kb.min) / (kb.max - kb.min) * 100) + "%";
             b.addEventListener("click", function () { setKnob(kb, x, vals); refresh(); });
@@ -752,7 +780,7 @@ if (typeof document !== "undefined") (function () {
         else {
           if (document.activeElement !== ctl) ctl.value = v;
           out.textContent = fmtVal(v, kb.unit);
-          if (mk) mk.forEach(function (b, i) { b.classList.toggle("on", same(v, kb.at[i])); });
+          if (mk) mk.forEach(function (b, i) { if (b) b.classList.toggle("on", same(v, kb.at[i])); });
         }
       }
       odd.textContent = fits ? "" : "Set under Custom. Moving this resets it.";
@@ -789,7 +817,7 @@ if (typeof document !== "undefined") (function () {
     var cp = el("div", "rawbox"); cp.hidden = true;
     rb.addEventListener("click", function () { cp.hidden = !cp.hidden; rb.textContent = cp.hidden ? "All raw settings" : "Hide raw settings"; });
     cp.appendChild(el("p", "rawnote x", "The raw settings of dazdrive.ini, each with the plugin's own one-line help. No safety net: the page only checks that a value is a number."));
-    ownKeys(D, g).forEach(function (sk) { cp.appendChild(item(sk[0], sk[1], sk[2], sk[1], false)); });
+    ownKeys(D, g).forEach(function (sk) { cp.appendChild(item(sk[0], sk[1], sk[2], "[" + D.names[sk[0] + "." + sk[1]][0] + "] " + D.names[sk[0] + "." + sk[1]][1], false)); });
     pn.appendChild(rb); pn.appendChild(cp); m.panels.custom = cp; m.rawBtn = rb;
     m.panel = pn;
     mods.push(m);
@@ -953,6 +981,12 @@ if (typeof document !== "undefined") (function () {
       check("parse-roundtrip " + e.id, applyIni(D, p, w) > 100 && JSON.stringify(w) === JSON.stringify(v));
       check("nearest " + e.id, nearestEra(D, v)[0] === e.id && nearestEra(D, v)[1] === 0);
     });
+    // an ini in the old layout ([module] key=number) and in the new one ([module.section], true/false, words) fill the same values
+    var lv = presetValues(D, recommended), nv = presetValues(D, recommended);
+    applyIni(D, parseIni("[cruise]\nacc_short_s=1.2\nown_acc=1\n[lane]\nmode=1\n[core]\nlog_level=0\n"), lv);
+    applyIni(D, parseIni("[Cruise.ACC]\nShort_Gap_Seconds = 1,2\nown_controller_enabled=TRUE\n[lane.general]\nmode=model_law\n[core.logging]\nlevel=short\n"), nv);
+    check("old ini layout", lv.cruise.acc_short_s === "1.2" && lv.cruise.own_acc === "1" && lv.lane.mode === "2" && lv.core.log_level === "0");
+    check("new ini layout", nv.cruise.acc_short_s === "1.2" && nv.cruise.own_acc === "1" && nv.lane.mode === "2" && nv.core.log_level === "0");
     setEra("2020", false);
     var f = D.features[0]; check("feature on", featureState(f, vals) === "true");
     f.keys.forEach(function (k) { vals[k[0]][k[1]] = k[3]; }); check("feature off", featureState(f, vals) === "false");

@@ -112,7 +112,7 @@ void incident_frame()
     r.kmh = T.speed * 3.6f; r.rpm = T.rpm; r.thr = T.in_thr; r.brake = T.in_brake; r.accel = T.accel;
     r.grade = g_inc.grade_pct; r.set_kmh = T.cruise * 3.6f; r.gap = g_inc.gap_m;
     r.gear = (short)T.gear; r.target = (short)g_inc.target; r.mode = (short)g_inc.mode;
-    r.flags = (short)(g_inc.flags | (g_crawl_on ? INC_CRAWL : 0));
+    r.flags = (short)(g_inc.flags | (g_lv.crawl_toggle ? INC_CRAWL : 0));
     g_i = (g_i + 1) % RING;
     if (g_n < RING) g_n++;
     if (g_f) {

@@ -2,14 +2,17 @@
 // the real ones). Plant = the model FITTED ON REAL RIDES (lka-sysid notes), not an assumed wheel:
 //   A'  = -(al-0.3) A + be u          (be, al speed dependent; filter_a adds the other 0.3/s of leak)
 //   w'  = (-w + gA A + w_driver)/tau  (FFB wheel follows the assist offset, plus whatever the hands do)
-//   o2' = -c v w - d v o3 + wind      (heading error; o3 = lane curvature term, w_bend = -(d/c) o3 = -4.4 o3)
+//   o2' = -c v w - d v o3 + wind      (heading error; o3 = lane curvature term, w_bend = -(d/c) o3 = -BEND_NEED o3)
 //   o1' = -kk v o2                    (lateral offset, sign as logged)
 // nominal c 0.19, gA 1.0, tau 0.3, kk 0.88, d 0.85; the sweeps vary c (0.6-1.5x) and tau (0.2-0.45 s).
 // Hands-on = a driver who steers the bend himself (-3.3 o3, 75% of the need) with a hand tremor.
 // Build+run: tools/sim/run_lane.sh
 #include "core/suite.h"
+#include "core/vclass.h"
 #include "sim_env.h"  // SIM_SET=section.key=value,... overrides ini defaults (sweeps)
 #include "core/game.h"
+#include "core/lanehook.h"
+#include "sim_layout.h"
 #include <math.h>
 #include <initializer_list>
 #include <utility>
@@ -21,15 +24,17 @@
 
 telemetry T;
 char g_dir[MAX_PATH];
-static layout g_layout = { "1.60", "eut2" };  // ln_start hooks only on the 1.60 layout
-const layout *L = &g_layout;
-volatile int g_rolling, g_cruise_smooth, g_crawl_on;
+const layout *L = &sim_layout;
+#define GA_U        (L->a_lka_u)      // the LKA control output the law writes (per-layout)
+#define V_A         (L->i_assist)     // the vehicle's LKA assist state A
+#define V_STEER_IN  (L->i_steer_in)   // the vehicle's steering input
+#define V_STEER     (L->i_steer)      // the vehicle's effective steering (0x640 in the sim layout; lane.cpp reads it through sense_steering)
+volatile int g_rolling, g_cruise_smooth;
 volatile float g_roll_boost_kmh;
-volatile double g_rb_cancel_at = -1e9;
 volatile int g_pcc_on;
 volatile int g_pedal_mapped;
-volatile int g_lcx;
 volatile float g_overspeed_cap = 5;
+volatile float g_overspeed_pct = 0;
 volatile float g_pcc_need_kmh = NAN;
 int g_log_level = 2;
 incident_ctx g_inc = { 0, 0, 0, NAN, NAN };
@@ -44,6 +49,9 @@ void incident(const char *kind, const char *fmt, ...)
 }
 const char *g_truck_unsupported;
 int game_letter(void *, char) { return 1; }   // the dashboard letter's writer (core/display.cpp)
+const vclass_profile *vprof() { return &k_vprof_truck; }   // (this sim is a truck; the vehicle model is not linked here)
+static int g_sim_class = 1;   // VC_TRUCK (core/vehicle.h comes in with lane.cpp, below)
+int vclass_active() { return g_sim_class; }
 static double t_now;
 double wall_s() { return t_now; }
 double sim_s() { return t_now; }
@@ -64,6 +72,7 @@ void logline(const char *fmt, ...)
 }
 static std::vector<int> g_cues;   // the tones played, in order (the calibration and key tests read them)
 void play_cue(int c) { g_cues.push_back(c); }
+static double g_rp_act; static int g_rp_n, g_rp_hi;   // replay: the driver-activity reading over the rows
 static int sim_route_ok; static float sim_route_straight = 1e9f;   // the route look-ahead: none, or straight for this many meters
 int route_ok() { return sim_route_ok; }
 float route_straight_m(float) { return sim_route_ok ? sim_route_straight : -1; }
@@ -76,6 +85,23 @@ char *game_actor_safe() { return GA; }
 void *game_gearbox() { return GB; }
 char *gb_inner(void *) { return VEH; }
 int mem_readable(const void *, size_t) { return 1; }
+// core/lanehook.cpp is the game surface of the hook installer; the sim never installs the hook (stub_law and filter_a are called directly)
+int lanehook_law(lane_law_fn, lane_law_fn *) { return LH_NOT_FOUND; }
+int lanehook_min_speed_patch(float) { return 0; }
+int lanehook_min_speed_ok() { return 0; }
+void act_lane_min_speed(float) {}
+int lanehook_assist_store(float (*)(float)) { return 0; }
+
+// Cruise's side of the lane key with needs_cruise (modules/cruise.cpp cruise_lane_engage, tested in sim_cruise): here it only says yes or no, and for yes the game's cruise byte shows
+static int g_eng_ok = 1, g_eng_n, g_eng_lag; static const char *g_eng_why = "under the cruise's minimum switch-on speed";
+int cruise_lane_engage(const char **why, float *set_kmh)
+{
+    g_eng_n++; *why = g_eng_why;
+    if (!g_eng_ok) return 0;
+    if (!g_eng_lag) T.cruise = 80 / 3.6f;   // (the game's byte; with lag: the cruise never shows)
+    if (set_kmh) *set_kmh = 90;
+    return 1;
+}
 
 #include "modules/lane.cpp"
 #include "core/display.cpp"
@@ -84,7 +110,9 @@ int mem_readable(const void *, size_t) { return 1; }
 struct pl { double o1, o2, w, A, tr; };
 struct pp {
     float c = 0.19f, gA = 1.0f, tw = 0.3f, kk = 0.88f, d = 0.85f;
-    pp() {  // plant override for what-if runs (ts4n: hands off c .155 gA 1.2 tau .45; in the 283 s ringing c .21 gA 2.5 tau .24)
+    float ag = 1.0f;  // actuator gain: the game's A per request u relative to the ETS2 fit (ATS 1.61 trucks: ~0.15, A' = -al A + ag be u)
+    pp() {
+        if (getenv("PL_AG")) ag = atof(getenv("PL_AG"));  // plant override for what-if runs (ts4n: hands off c .155 gA 1.2 tau .45; in the 283 s ringing c .21 gA 2.5 tau .24)
         if (getenv("PL_C")) c = atof(getenv("PL_C"));
         if (getenv("PL_GA")) gA = atof(getenv("PL_GA"));
         if (getenv("PL_TAU")) tw = atof(getenv("PL_TAU"));
@@ -104,6 +132,7 @@ static unsigned rng = 12345;
 static float noise() { rng = rng * 1664525u + 1013904223u; return ((rng >> 8) & 0xffff) / 65535.0f - 0.5f; }
 static float gauss() { return (noise() + noise() + noise() + noise()) * 0.866f * 1.0f; }  // ~N(0,0.5)
 
+static void learn_track_reset();   // the learner's contract check below
 struct cfg { const char *name; int mode; };
 static struct { const char *k; float v; } ovr[32];
 static int novr;
@@ -113,11 +142,16 @@ static void apply(const cfg &c)
     p_mode = c.mode; p_needs_cc = 0;   // the sim has no cruise: lane steers by itself here (needs_cruise is tested separately)
     p_bias = getenv("BIAS") ? atof(getenv("BIAS")) : 0; p_bend_out = getenv("BEND_OUT") ? atof(getenv("BEND_OUT")) : 0; p_learn = getenv("LEARN") ? atof(getenv("LEARN")) : 0; p_sway = getenv("SWAY") ? atof(getenv("SWAY")) : 0;  // the old scenarios test the fixed law
     L_cur = L_base = { 1, 1, p_l_max }; L_trial = 0; L_hold = 0; L_t = 0; L_Nw = L_Syy = L_Cxx = L_Cxy = L_Cyy = 0; for (int k = 0; k < LK_NK; k++) L_Sxx[k] = L_Sxy[k] = 0;
-    L_scn = L_scs = L_sc_zc = L_since = 0; L_b_valid = 0; L_ring_cool = 0; L_nupd = 0; SW_fac = 1; SW_t = 0; SW_hold_until = 0; SW_events = 0; SW_lastact = -1e9; L_loaded = 0; L_dirty = 0; learn_block_reset(); L_dev_blocks = 0; L_blocks_ok = L_blocks_bad = 0; L_rolled = 0;
+    L_scn = L_scs = L_sc_zc = L_since = 0; L_b_valid = 0; L_ring_cool = 0; L_nupd = 0; SW_fac = 1; SW_t = 0; SW_hold_until = 0; SW_events = 0; SW_lastact = -1e9; L_sess = 1; L_sess_at = -1e9; L_loaded = 0; L_dirty = 0; learn_block_reset(); L_dev_blocks = 0; L_blocks_ok = L_blocks_bad = 0; L_rolled = 0;
     if (c.mode == 2) for (int i = 0; i < novr; i++) for (auto &p : g_params) if (!strcmp(p.key, ovr[i].k)) *p.val = ovr[i].v;
     p_min_kmh = 5; g_ffb = 1;  // the plant model is an FFB wheel
+    g_ag = 1; AG_aa = AG_hh = AG_w = 0; AG_t = -1e9; AG_hold_until = -1e9; AG_known = 0; AG_snapped = 1; AG_ah = 0; AG_dirty = 0;   // the actuator gain is measured anew
     lane_reset(); g_u = 0; g_o1_prev = 0; g_o2_prev = 0;
+    L_sess_ann = 1; AG_ann = 1; learn_track_reset();
 }
+
+static layout g_lay161;   // the sim layout as a 1.61 game (game_is_161()): ATS rows run on it
+static void use_layout(int l161) { if (!g_lay161.name) { g_lay161 = sim_layout; g_lay161.tail_jmp = 7; } L = l161 ? &g_lay161 : &sim_layout; LE.is161 = sense_is_161(); }
 
 static float g_sim_uraw;
 static void sim_game_law(void *ga, float, float, float, float) { *(float *)((char *)ga + GA_U) = g_sim_uraw; }
@@ -125,17 +159,53 @@ static void sim_game_law(void *ga, float, float, float, float) { *(float *)((cha
 static double g_refmax_off;   // largest |aim| of shared steering in a hands-off run: must stay ~0 (a hands-off truck must not take over its own offset)
 static void print_refmax() { printf("\nshared steering: largest |aim| with hands off: %.3f m (must be < 0.05)\n", g_refmax_off); }
 
+// WP-LA6: the learner's contract, checked on every plant step of every scenario (core/lane learner: s, dfac, the ring ceiling, the actuator gain, the session factor).
+//  - a learned value does not move without a line that announces it (LEARN_LOG sets its bit in g_lv_mask in the same call): s, dfac and the ceiling at the step they change, the
+//    actuator gain and the session factor (which move in small steps) when they are 5 % / 0.05 from the last announced value (the check allows 6 % / 0.06);
+//  - a learner write stays inside its bounds (a value the harness put outside them may only move toward them): s and the ceiling in [learn_min, the stored maximum] (learn_max 1.0, 1.4 only on a 1.61 game, only a calibration sets it), dfac in
+//    [0.5, 1], the session factor in [0.4, 1], the actuator gain in [AG_MIN, AG_MAX], the scale the law applies never over the stored maximum.
+// The harness itself writes these values between runs (apply(), the ATS rows): a jump of the clock, or apply(), starts the baseline again.
+struct lv_state { double t; float s, dfac, cap, ag, sess; int init; };
+static lv_state LT;
+static long g_lv_steps, g_lv_viol; static int g_lv_n[5]; static char g_lv_first[260];
+static void learn_track_reset() { LT.init = 0; g_lv_mask = 0; }
+static void learn_track()
+{
+    const unsigned ann = g_lv_mask; g_lv_mask = 0;
+    const bool jump = !LT.init || t_now < LT.t || t_now - LT.t > 1.0;
+    auto viol = [&](const char *what, float was, float now) { if (!g_lv_viol++) snprintf(g_lv_first, sizeof g_lv_first, "t %.2f: %s %.4f -> %.4f", t_now, what, was, now); };
+    g_lv_steps++;
+    for (int i = 0; i < 5; i++) g_lv_n[i] += (ann >> i) & 1;
+    if (!jump) {
+        const float smax = s_stored_max();
+        if (fabsf(L_cur.s - LT.s) > 1e-5f) { if (!(ann & LV_S)) viol("s moved with no line", LT.s, L_cur.s); if (L_cur.s < fminf(p_l_min, LT.s) - 1e-4f || L_cur.s > fmaxf(smax, LT.s) + 1e-4f) viol("s outside its bounds", LT.s, L_cur.s); }
+        if (fabsf(L_cur.dfac - LT.dfac) > 1e-5f) { if (!(ann & LV_DFAC)) viol("dfac moved with no line", LT.dfac, L_cur.dfac); if (L_cur.dfac < fminf(0.5f, LT.dfac) - 1e-4f || L_cur.dfac > fmaxf(1.0f, LT.dfac) + 1e-4f) viol("dfac outside its bounds", LT.dfac, L_cur.dfac); }
+        if (fabsf(L_cur.cap - LT.cap) > 1e-5f) { if (!(ann & LV_CAP)) viol("ceiling moved with no line", LT.cap, L_cur.cap); if (L_cur.cap < fminf(p_l_min, LT.cap) - 1e-4f || L_cur.cap > fmaxf(smax, fmaxf(LT.cap, LT.s)) + 1e-4f) viol("ceiling outside its bounds", LT.cap, L_cur.cap); }
+        if (!(ann & LV_AG) && fabsf(g_ag / LT.ag - 1) > 0.06f) viol("actuator gain moved with no line", LT.ag, g_ag);
+        if (!(ann & LV_SESS) && fabsf(L_sess - LT.sess) > 0.06f) viol("session factor moved with no line", LT.sess, L_sess);
+        if (g_ag < AG_MIN - 1e-6f || g_ag > AG_MAX + 1e-6f) viol("actuator gain outside its bounds", LT.ag, g_ag);
+        if (L_sess < 0.4f - 1e-4f || L_sess > 1.0f + 1e-4f) viol("session factor outside its bounds", LT.sess, L_sess);
+    }
+    if (p_learn > 0 && p_mode >= 2 && !jump && scale_s() > fmaxf(s_stored_max(), LT.s) * 1.0001f) viol("the scale the law applies is over the stored maximum", LT.s, scale_s());
+    LT.t = t_now; LT.s = L_cur.s; LT.dfac = L_cur.dfac; LT.cap = L_cur.cap; LT.init = 1;
+    if (jump || (ann & LV_AG)) LT.ag = g_ag;
+    if (jump || (ann & LV_SESS)) LT.sess = L_sess;
+}
+
+static float g_sim_do1, g_sim_do2;   // what the game's lane reading adds to the truck's real offset / heading error (a prefab whose lane reference jumps); 0 = the reading is true
+static int g_sim_lat;                // 1 = the plant reports its yaw rate and steering in T (the lateral load the lane assist backs off from); 0 = T stays as the older rows have it
 static void step(pl &p, const pp &m, float dt, float o3, int drv, float w_cmd, float wind, float *u_game_out = NULL)
 {
     float kmh = vkmh, v = kmh / 3.6f;
     T.speed = v;  // lane.cpp gates on the speed (keep_on: no request below min_kmh)
-    float uraw = clampf(kmh * (0.075f * (float)p.o2 - 0.00275f * (float)p.o1 - 0.5f * o3), -1, 1);
+    const float p1 = (float)p.o1 + g_sim_do1, p2 = (float)p.o2 + g_sim_do2;   // (the true values while the reading is true)
+    float uraw = clampf(kmh * (0.075f * p2 - 0.00275f * p1 - 0.5f * o3), -1, 1);
     float before = *(float *)(GA + GA_U);
     *(float *)(GA + GA_U) = uraw != before ? uraw : uraw + 1e-6f;
     float u = *(float *)(GA + GA_U);
     *(float *)(VEH + V_STEER_IN) = (float)p.w;
     *(float *)(VEH + V_A) = (float)p.A;
-    float o1m = (float)p.o1, o2m = (float)p.o2 + (quiet ? 0 : 0.0007f * gauss());  // lane sensor noise
+    float o1m = p1, o2m = p2 + (quiet ? 0 : 0.0007f * gauss());  // lane sensor noise
     float out;
     if (via_stub) {  // the game's law writes clamp(u_raw) (it already did above), stub_law wraps it as in the game
         *(float *)(GA + GA_U) = before;
@@ -151,13 +221,16 @@ static void step(pl &p, const pp &m, float dt, float o3, int drv, float w_cmd, f
     }
     if (u_game_out) *u_game_out = u;
     float be = 0.235f - 0.0010f * kmh, al = 2.6f + 0.016f * kmh - 0.3f;
-    p.A += dt * (-al * p.A + be * out);
+    p.A += dt * (-al * p.A + m.ag * be * out);
     p.A = filter_a((float)p.A);
     // driver: tremor is an OU process on the wheel
     if (!quiet) p.tr += dt * (-p.tr / 0.6f) + sqrtf(dt) * 0.0045f * gauss() * 1.6f;
     float wd = 0;
     if (drv == 1) wd = -3.3f * o3 + (float)p.tr;
     if (drv == 2) wd = w_cmd + (float)p.tr;
+    // a driver who looks at the road (the real one does): the commanded wheel plus a correction of the heading error and the offset he sees, 1 s heading time constant and 3 s
+    // for the offset (wheel per rad = 1 / (c v T): 0.365 at 14 m/s)
+    if (drv == 3) wd = w_cmd + 0.365f * ((float)p.o2 - 0.026f * (float)p.o1) * (14.0f / fmaxf(v, 5.0f)) + (float)p.tr;
     static double hist[4096]; static int hn; int dl = (int)(m.delay / dt + 0.5);
     static double lastt = -1; if (t_now < 1e-9 || t_now <= lastt) { hn = 0; for (auto &h : hist) h = 0; }  // a new run (also one that starts at a ride's clock)
     lastt = t_now;
@@ -168,8 +241,11 @@ static void step(pl &p, const pp &m, float dt, float o3, int drv, float w_cmd, f
     if (m.db > 0 && m.gA > 1.2f) tgt -= m.db * tanh(Ad / (m.db / (m.gA - 1.0)));
     double err = tgt + wd - p.w;
     if (fabs(err) > m.stick) p.w += dt * (err - (err > 0 ? m.stick : -m.stick)) / m.tw;
-    p.o2 += dt * (-m.c * v * p.w - m.d * v * o3 + wind);
+    const double o2d = -m.c * v * p.w - m.d * v * o3 + wind;
+    if (g_sim_lat) { T.yaw = (float)(-(v * o3 + o2d) / 6.2831853); T.in_steer = (float)p.w; }   // (left +; the lane term o3 is + in a right bend, the heading error + to the right)
+    p.o2 += dt * o2d;
     p.o1 += dt * (-m.kk * v * p.o2);
+    learn_track();
 }
 
 struct res { double rms, maxe, bendmax, bendss, per; int zc; double Apk; };
@@ -312,12 +388,84 @@ static int sbend_tests()
     return 0;
 }
 
+// review 30-10: a one-sided runaway at 80 km/h. A constant cross-wind overcomes the assist, the request saturates to one side and the
+// heading error keeps growing: the old guard only caught this via |o2| > 0.18 rad (late). The one-sided growth detection must disengage
+// earlier. "before" is measured with the guard off (when |o2| would cross 0.18), "after" with the guard on (when g_panic_until arms).
+static int runaway_tests()
+{
+    printf("\nRunaway guard: one-sided runaway at 80 km/h (constant cross-wind, hands off, straight road)\n");
+    printf("%-8s %-8s %-8s %-8s\n", "wind", "before", "after", "gain");
+    int bad = 0;
+    for (float wind : { 0.22f, 0.25f, 0.28f }) {
+        double t_before = -1, t_after = -1;
+        {   // guard off: when the heading error alone would have crossed 0.18 rad (the old guard's only catch)
+            const cfg c2 = { "runaway", 2 }; apply(c2); p_runaway = 0; vkmh = 80; rng = 5; via_stub = 0;
+            g_panic_until = 0; g_sat_dir[0] = g_sat_dir[1] = g_sat_dir[2] = 0; g_sat_t[0] = g_sat_t[1] = g_sat_t[2] = 0; g_sat_since = 0;
+            pl p = {0, 0, 0, 0, 0}; pp m; float dt = DTS;
+            for (int i = 0; i < (int)(20 / dt) && t_before < 0; i++) {
+                t_now = i * dt;
+                step(p, m, dt, 0, 0, 0, wind);
+                if (fabs(p.o2) > 0.18f) t_before = t_now;
+            }
+        }
+        {   // guard on: the time the (new) guard disengages
+            const cfg c2 = { "runaway", 2 }; apply(c2); p_runaway = 1; vkmh = 80; rng = 5; via_stub = 0;
+            g_panic_until = 0; g_sat_dir[0] = g_sat_dir[1] = g_sat_dir[2] = 0; g_sat_t[0] = g_sat_t[1] = g_sat_t[2] = 0; g_sat_since = 0;
+            pl p = {0, 0, 0, 0, 0}; pp m; float dt = DTS;
+            for (int i = 0; i < (int)(20 / dt) && t_after < 0; i++) {
+                t_now = i * dt;
+                step(p, m, dt, 0, 0, 0, wind);
+                if (g_panic_until > t_now) t_after = t_now;
+            }
+        }
+        int ok = t_after > 0 && t_after <= t_before;   // review 30-10: must fire, and no later than the old |o2| > 0.18 catch
+        printf("%-8.2f %-8.1f %-8.1f %-8.1f%s\n", wind, t_before, t_after, t_before > 0 ? t_before - t_after : 0, ok ? "" : "  <-- WRONG");
+        bad |= !ok;
+    }
+    printf("Runaway one-sided test: %s\n", bad ? "FAILED" : "ok");
+    return bad;
+}
+
+// 30-10: the same guard must NOT fire while a strong correction brings the truck back toward the center (a recovery after a lane
+// change / an indicator). The request saturates and the heading error grows (turning toward the center), but the truck is not
+// diverging; handing over to the game's weaker law there let it swing across the lane (rollover, 1651-1655). A fire is only allowed
+// once the truck actually drifts AWAY from the center (o1 and its rate point the same way, o1 * g_do1 > 0).
+static int recovery_tests()
+{
+    printf("\nRunaway guard: recovery toward the center (request saturates, heading grows) must not fire while approaching the center\n");
+    int bad = 0;
+    struct pv { const char *n; float gA, tw, dl, db; };
+    const pv pls[] = { { "nominal", 1.0f, 0.3f, 0, 0 }, { "ts4w-like gA 1.3", 1.3f, 0.05f, 0.33f, 0.0015f }, { "strong gA 2.0", 2.0f, 0.05f, 0.3f, 0.004f } };
+    for (auto &q : pls) for (float kmh : { 60.f, 80.f }) {
+        const cfg c2 = { "recover", 2 }; apply(c2); p_runaway = 1; vkmh = kmh; rng = 5; via_stub = 0;
+        g_panic_until = 0; g_sat_dir[0] = g_sat_dir[1] = g_sat_dir[2] = 0; g_sat_t[0] = g_sat_t[1] = g_sat_t[2] = 0; g_sat_since = 0;
+        pp m; m.gA = q.gA; m.tw = q.tw; m.delay = q.dl; m.db = q.db;
+        pl p = { 0.6f, 0.013f, 0, 0, 0 };   // off-center and already heading back toward the center (a lane change recovered)
+        float o3 = -0.006f;                 // a gentle bend the recovery happens in (the feed-forward keeps the request at its ceiling)
+        float dt = DTS; int fired = 0; float fire_o1 = 0, fire_do1 = 0; double sat = 0;
+        for (int i = 0; i < (int)(12 / dt); i++) {
+            t_now = i * dt;
+            step(p, m, dt, o3, 0, 0, 0.0002f * gauss());
+            if (fabsf(g_u) > 0.95f) sat++;
+            if (!fired && g_panic_until > t_now) { fired = 1; fire_o1 = (float)p.o1; fire_do1 = g_do1; }
+        }
+        int ok = !fired || fire_o1 * fire_do1 > 0;   // may only fire once the truck drifts away from the center, not while recovering
+        printf("  %-20s %3.0f km/h: %s (request at the ceiling %.0f ms)%s\n", q.n, kmh, fired ? (ok ? "fired while drifting away" : "FIRED WHILE RECOVERING") : "no fire",
+               sat * dt * 1000, ok ? "" : "  <-- WRONG");
+        bad |= !ok;
+    }
+    printf("Runaway recovery test: %s\n", bad ? "FAILED" : "ok");
+    return bad;
+}
+
 // ---- learner / anti-sway tests (lka-learn notes)
 struct lres { double rms_all, rms_tail, zc_tail, maxe, usable; float s, df, cap, gA, dl, c; int upd, sw, rolled; double win[12]; double first_sw; };
 // hands off on a wandering road for T s; drvmode 3 = the driver weaves (hand on the wheel) from T*0.45 for 120 s
 static lres runL(const pp &m, int learn, int sway, float kmh, float T, int drvmode = 0, float start_o1 = 0.5f, int bends = 0)
 {
     const cfg c2 = { "x", 2 }; apply(c2); p_learn = learn; p_sway = sway; vkmh = kmh; rng = 4242;
+    int ats = m.ag != 1.0f; if (ats) { use_layout(1); via_stub = 1; memset(GA, 0, sizeof GA); GA[0x1d1] = 0x20; L_cur.cap = L_base.cap = 2; g_law_at = -1e9; }   // (a 1.61 plant: through stub_law, with the estimator)
+    if (learn) { g_cal = CAL_ARMED; g_cal_armed_at = 0; L_cal_ok = 0; L_cal_g_sum = L_cal_g_sum2 = 0; }   // learning runs only while a calibration is on
     pl p = {start_o1, 0, 0, 0, 0}; lres r = {}; r.first_sw = -1;
     float dt = DTS, os = 0; double sa = 0, st = 0, sT = 0; long na = 0, nt = 0, nu = 0, nn = 0; int hold = 0, zc = 0; int sw0 = 0;
     for (int i = 0; i < (int)(T / dt); i++) {
@@ -339,20 +487,23 @@ static lres runL(const pp &m, int learn, int sway, float kmh, float T, int drvmo
     }
     r.rms_all = sqrt(sa / na); r.rms_tail = sqrt(st / nt); r.zc_tail = zc * 60.0 / (T * 0.4); r.usable = (double)nu / nn;
     r.s = L_cur.s; r.df = L_cur.dfac; r.cap = L_cur.cap; r.gA = L_gA; r.dl = L_dl; r.c = L_c; r.upd = L_nupd; r.sw = SW_events; r.rolled = L_rolled;
+    if (ats) { use_layout(0); via_stub = 0; }
     return r;
 }
 
 static int learn_tests(int argc, char **argv)
 {
     float kmh = argc > 2 ? atof(argv[2]) : 90; float T = argc > 3 ? atof(argv[3]) : 900;
-    struct pv { const char *n; float c, gA, tw, dl; };
+    struct pv { const char *n; float c, gA, tw, dl, ag; };   // ag 0 = 1
     const pv pls[] = { { "reads like the real wheel", 0.18f, 1.0f, 0.05f, 0.3f }, { "ts4n large-signal fit (1.34, .2)", 0.155f, 1.34f, 0.05f, 0.2f }, { "real-like gA x0.6", 0.18f, 0.6f, 0.05f, 0.3f }, { "real-like gA x1.8", 0.18f, 1.8f, 0.05f, 0.3f }, { "gA x0.6", 0.155f, 0.80f, 0.05f, 0.2f }, { "gA x1.8", 0.155f, 2.41f, 0.05f, 0.2f },
                        { "gA x1.8 c x1.3", 0.20f, 2.41f, 0.05f, 0.2f }, { "slow wheel (delay .35, lag .15)", 0.155f, 1.34f, 0.15f, 0.35f }, { "fast wheel (delay .05)", 0.155f, 1.34f, 0.03f, 0.05f },
-                       { "weak wheel gA x0.5 delay .3", 0.155f, 0.67f, 0.1f, 0.3f }, { "nominal sim plant", 0.19f, 1.0f, 0.3f, 0.0f } };
+                       { "weak wheel gA x0.5 delay .3", 0.155f, 0.67f, 0.1f, 0.3f }, { "nominal sim plant", 0.19f, 1.0f, 0.3f, 0.0f },
+                       { "ATS 1.61 (A x.15, gA 22, c .095)", 0.095f, 22.0f, 0.3f, 0.0f, 0.15f }, { "ATS, gA 15, c .12", 0.12f, 15.0f, 0.3f, 0.0f, 0.15f }, { "ATS, A x.25, gA 12", 0.095f, 12.0f, 0.3f, 0.0f, 0.25f } };
     printf("Learner on a wandering road, %.0f km/h, %.0f s, hands off; fixed gains vs learning (rms over the last 40%%: m, zc/min)\n", kmh, T);
     printf("%-34s | fixed: rms zc max | learn: rms zc max  s  dfac cap | est gA  delay  c  | usable updates sway rolled\n", "plant");
     for (auto &q : pls) {
-        pp m; m.c = q.c; m.gA = q.gA; m.tw = q.tw; m.delay = q.dl;
+        if (getenv("ONLY") && !strstr(q.n, getenv("ONLY"))) continue;   // (a what-if run of one plant)
+        pp m; m.c = q.c; m.gA = q.gA; m.tw = q.tw; m.delay = q.dl; if (q.ag > 0) m.ag = q.ag;
         lres a = runL(m, 0, 0, kmh, T), b = runL(m, 1, 0, kmh, T);
         printf("%-34s | %5.2f %5.1f %5.2f | %5.2f %5.1f %5.2f %5.2f %4.2f %4.2f | %4.2f %5.2f %5.3f | %3.0f%% %3d %d %d\n", q.n, a.rms_tail, a.zc_tail, a.maxe, b.rms_tail, b.zc_tail, b.maxe, b.s, b.df, b.cap, b.gA, b.dl, b.c, b.usable * 100, b.upd, b.sw, b.rolled);
     }
@@ -399,7 +550,190 @@ static int sway_tests(int argc, char **argv)
     return 0;
 }
 
-// Indicator pause (indicator_pause = 1): a lane change to the left with the indicator; the game drops lane keeping halfway.
+// 30-10: a detected sway must lower the gain for the rest of the session, but only the stored profile while a calibration is
+// on (the driver asked it to measure this wheel). Outside a calibration the reduction is a session factor (not stored, slow
+// recovery), so it sticks within the session but cannot walk steer_profile.txt to the floor across sessions.
+static int sway_persist_tests()
+{
+    printf("\nSway persistence: a ringing wheel (gA 2.5) sways; outside a calibration only the session factor falls (stored s stays), with a calibration the profile stores it\n");
+    int bad = 0;
+    pp m; m.c = 0.19f; m.gA = 2.5f; m.tw = 0.08f; m.delay = 0.2f;
+    {   // learn on, no calibration: the estimator is gated off, so only the sway reduction can move anything, and it must touch the session factor, not the profile
+        const cfg c2 = { "swp", 2 }; apply(c2); p_learn = 1; p_sway = 1; vkmh = 90; rng = 4242;
+        g_cal = CAL_IDLE;
+        pl p = { 0.5, 0, 0, 0, 0 }; float dt = DTS; float os = 0;
+        for (int i = 0; i < (int)(120 / dt); i++) { t_now = i * dt; step(p, m, dt, ou_o3(os, dt, 0.0012f), 0, 0, 0.0006f * gauss()); }
+        int ok = SW_events >= 1 && L_sess < 0.95f && L_cur.s == 1.0f && !L_dirty;
+        printf("  gA 2.5 no calibration: sway events %d, session factor %.2f (was 1.00), stored s %.2f (must stay 1.00), dirty %d -> %s\n", SW_events, L_sess, L_cur.s, L_dirty, ok ? "ok" : "<-- WRONG");
+        bad |= !ok;
+    }
+    {   // the same wheel but a calibration armed: the learner may store the reduction (updates are held off so only the sway moves s)
+        const cfg c2 = { "swp", 2 }; apply(c2); p_learn = 1; p_sway = 1; p_l_update = 1e9f; vkmh = 90; rng = 4242;
+        g_cal = CAL_ARMED; g_cal_armed_at = 0; L_cal_ok = 0; L_cal_g_sum = L_cal_g_sum2 = 0;
+        pl p = { 0.5, 0, 0, 0, 0 }; float dt = DTS; float os = 0;
+        for (int i = 0; i < (int)(120 / dt); i++) { t_now = i * dt; step(p, m, dt, ou_o3(os, dt, 0.0012f), 0, 0, 0.0006f * gauss()); }
+        int ok = SW_events >= 1 && L_cur.s < 0.95f && L_dirty;
+        printf("  gA 2.5 calibration: sway events %d, stored s %.2f (was 1.00), dirty %d -> %s\n", SW_events, L_cur.s, L_dirty, ok ? "ok" : "<-- WRONG");
+        bad |= !ok;
+    }
+    printf("Sway persistence test: %s\n", bad ? "FAILED" : "ok");
+    return bad;
+}
+
+// 30-10: learning only runs while a calibration is on, the calibration also identifies the model passively in gentle bends (not only on
+// a straight), and once enough fits agree it stops itself, tells the driver (the done cue) and stores.
+static int count_cue(int c);
+static int cal_learning_tests()
+{
+    printf("\nCalibration learning: no calibration -> no learning; armed on gentle bends -> fits, confidence stop, done cue\n");
+    int bad = 0;
+    {   // without a calibration the estimator is off (rule a)
+        pp m;
+        const cfg c2 = { "caln", 2 }; apply(c2); p_learn = 1; vkmh = 80; rng = 7; g_cal = CAL_IDLE;
+        pl p = { 0.1f, 0, 0, 0, 0 }; float dt = DTS; float os = 0;
+        for (int i = 0; i < (int)(60 / dt); i++) { t_now = i * dt; step(p, m, dt, ou_o3(os, dt, 0.0012f), 0, 0, 0.0004f * gauss()); }
+        int ok = L_nupd == 0;
+        printf("  no calibration: updates %d (must be 0) -> %s\n", L_nupd, ok ? "ok" : "<-- WRONG");
+        bad |= !ok;
+    }
+    struct pv { const char *n; float gA, dl, tw, c; };
+    const pv pls[] = { { "nominal", 1.0f, 0, 0.3f, 0.19f }, { "ts4n-like", 1.34f, 0.2f, 0.05f, 0.155f }, { "strong", 2.0f, 0.3f, 0.05f, 0.19f } };
+    for (auto &q : pls) {
+        pp m; m.gA = q.gA; m.delay = q.dl; m.tw = q.tw; m.c = q.c;
+        const cfg c2 = { "calp", 2 }; apply(c2); p_learn = 1; vkmh = 80; rng = 42; via_stub = 0;
+        g_cal = CAL_ARMED; g_cal_armed_at = 0; L_cal_ok = 0; L_cal_g_sum = L_cal_g_sum2 = 0; g_cues.clear();
+        pl p = { 0.1f, 0, 0, 0, 0 }; float dt = DTS; int stopped = 0;
+        for (int i = 0; i < (int)(240 / dt); i++) {
+            t_now = i * dt;
+            float o3 = 0.0035f * sinf(2 * 3.14159f * (float)t_now / 60.f);   // a gentle bend both ways every 60 s (lat ~1.7 m/s2)
+            step(p, m, dt, o3, 0, 0, 0.0004f * gauss());
+            if (g_cal == CAL_IDLE && t_now > 10) { stopped = 1; break; }
+        }
+        int ok = L_nupd >= 2 && stopped && count_cue(CUE_LANE_CAL_DONE) == 1;
+        printf("  %-10s: updates %d, stopped %s, done cue %d, s %.2f (gA %.2f delay %.2f c %.3f)%s\n", q.n, L_nupd, stopped ? "yes" : "no",
+               count_cue(CUE_LANE_CAL_DONE), L_cur.s, L_gA, L_dl, L_c, ok ? "" : "  <-- WRONG");
+        bad |= !ok;
+    }
+    printf("Calibration learning test: %s\n", bad ? "FAILED" : "ok");
+    return bad;
+}
+
+// review: bend_max_lat 0 is the documented "off" of the bend-feed-forward clamp. The learner's lateral-acceleration gate
+// (v^2 |o3| < bend_max_lat) must then also be off, or learning and calibration die with it (v^2 |o3| < 0 is never true).
+static int bend_off_test()
+{
+    printf("\nbend_max_lat 0 (off): the learner must still run in a gentle bend, not be silently killed by the off value\n");
+    int bad = 0;
+    pp m; m.gA = 1.0f; m.tw = 0.3f; m.c = 0.19f;
+    const cfg c2 = { "bend0", 2 }; apply(c2); p_learn = 1; p_bend_lat = 0; vkmh = 80; rng = 7;
+    g_cal = CAL_ARMED; g_cal_armed_at = 0; L_cal_ok = 0; L_cal_g_sum = L_cal_g_sum2 = 0;
+    pl p = { 0.1f, 0, 0, 0, 0 }; float dt = DTS;
+    for (int i = 0; i < (int)(120 / dt); i++) {
+        t_now = i * dt;
+        float o3 = 0.0035f * sinf(2 * 3.14159f * (float)t_now / 60.f);   // a gentle bend both ways (lat ~1.7 m/s2)
+        step(p, m, dt, o3, 0, 0, 0.0004f * gauss());
+    }
+    int ok = L_nupd >= 1;
+    printf("  bend_max_lat 0: updates %d (must be > 0) -> %s\n", L_nupd, ok ? "ok" : "<-- WRONG");
+    bad |= !ok;
+    printf("Bend-off learning test: %s\n", bad ? "FAILED" : "ok");
+    return bad;
+}
+
+// review: the confidence stop must wait for the profile itself to converge (the last update changed s and dfac by < 3 %),
+// not just for 3 agreeing loop-gain fits. A strong wheel (gA 2.0, c 0.19 -> target s 0.70) must not stop at s ~0.76.
+static int cal_convergence_test()
+{
+    printf("\nCalibration convergence: a strong wheel (target s 0.70) must converge before the done cue, not stop early at s ~0.76\n");
+    int bad = 0;
+    pp m; m.gA = 2.0f; m.delay = 0.3f; m.tw = 0.05f; m.c = 0.19f;
+    const cfg c2 = { "conv", 2 }; apply(c2); p_learn = 1; vkmh = 80; rng = 42; via_stub = 0;
+    g_cal = CAL_ARMED; g_cal_armed_at = 0; L_cal_ok = 0; L_cal_g_sum = L_cal_g_sum2 = 0; g_cues.clear();
+    pl p = { 0.1f, 0, 0, 0, 0 }; float dt = DTS; int stopped = 0;
+    for (int i = 0; i < (int)(360 / dt); i++) {
+        t_now = i * dt;
+        float o3 = 0.0035f * sinf(2 * 3.14159f * (float)t_now / 60.f);
+        step(p, m, dt, o3, 0, 0, 0.0004f * gauss());
+        if (g_cal == CAL_IDLE && t_now > 10) { stopped = 1; break; }
+    }
+    int ok = stopped && L_cur.s <= 0.74f && L_cur.s >= 0.68f && count_cue(CUE_LANE_CAL_DONE) == 1;
+    printf("  strong wheel: stopped %s, s %.3f (target 0.70, must be <= 0.74, was 0.76 before the fix), done cue %d, updates %d -> %s\n", stopped ? "yes" : "no",
+           L_cur.s, count_cue(CUE_LANE_CAL_DONE), L_nupd, ok ? "ok" : "<-- WRONG");
+    bad |= !ok;
+    printf("Calibration convergence test: %s\n", bad ? "FAILED" : "ok");
+    return bad;
+}
+
+
+// ---- 02-11: ATS 1.61 (what the first rides showed): the steering field, the weaker A, the profile per game and class, a scale above learn_max
+static int test_ats()
+{
+    int bad = 0;
+    printf("\nATS 1.61 and the 1.61 layout:\n");
+    // 1. the layouts: the effective steering moved +0x78 on 1.61 (A + steering is the FFB wheel target, in both 1.61 exes); read at 0x640 it was a constant
+    {
+        use_layout(1);
+        memset(VEH, 0, sizeof VEH);
+        *(float *)(VEH + 0x640) = 41.42f; *(float *)(VEH + L->i_steer) = 0.05f; *(float *)(VEH + L->i_steer_in) = 0.05f; *(float *)(VEH + L->i_assist) = 0.002f;
+        float A, st, w; sense_steering(&A, &st, &w);
+        use_layout(0);
+        int ok = st == 0.05f;   // (the sim's 1.61 copy keeps 0x640 as i_steer: what matters is that read_veh follows the layout field, not a constant)
+        g_lay161.i_steer = 0x6b8; use_layout(1);
+        memset(VEH, 0, sizeof VEH); *(float *)(VEH + 0x640) = 41.42f; *(float *)(VEH + 0x6b8) = 0.07f; *(float *)(VEH + L->i_steer_in) = 0.07f;
+        sense_steering(&A, &st, &w); use_layout(0);
+        ok &= st == 0.07f;
+        printf("  steering read through the layout (0x640 on 1.60, 0x6b8 on 1.61): %s\n", ok ? "ok" : "<-- WRONG");
+        bad |= !ok;
+    }
+    // 2. FFB detection on ATS-sized numbers: the assist offset there is ~0.0005-0.005 (ETS2 0.01+), the threshold follows the measured actuator gain
+    {
+        int okk = 1;
+        for (int kind = 0; kind < 2; kind++) {
+            g_ffb = -1; F_n = F_sw = F_swa = F_a = 0; g_ag = 0.15f;
+            for (int i = 0; i < 200; i++) {
+                float A = 0.0018f * sinf(i * 0.05f), w = 0.05f * sinf(i * 0.013f);
+                ffb_detect(A, kind ? w + A : w, w);
+            }
+            printf("  FFB detection with A of 0.0018 (actuator gain 0.15), %s: %d\n", kind ? "assist added (keyboard)" : "FFB wheel", g_ffb);
+            okk &= g_ffb == (kind ? 0 : 1);
+        }
+        g_ag = 1; g_ffb = 1;
+        bad |= !okk;
+    }
+    // 3. the profile key: wheel x game x class; ETS2 trucks keep the plain key the old files hold
+    {
+        char k[64]; int okk = 1;
+        const char *exp[] = { "Wine_joystick_driver", "Wine_joystick_driver.car", "Wine_joystick_driver.ats", "Wine_joystick_driver.ats.car" };
+        for (int a = 0; a < 2; a++) for (int c = 0; c < 2; c++) {
+            static layout lay; lay = sim_layout; lay.game = a ? "ats" : "eut2"; L = &lay; g_sim_class = c ? 2 : 1;
+            prof_key(k, sizeof k, "Wine joystick driver");
+            const char *e = exp[a * 2 + c];
+            // exp is ordered truck/car for eut2, truck/car for ats
+            okk &= !strcmp(k, a ? (c ? exp[3] : exp[2]) : (c ? exp[1] : exp[0]));
+            printf("  profile key, %s %s: %s\n", a ? "ATS " : "ETS2", c ? "car  " : "truck", k); (void)e;
+        }
+        L = &sim_layout; g_sim_class = 1;
+        bad |= !okk;
+    }
+    // 4. a scale above learn_max: only on 1.61, back at learn_max after a ring/sway/runaway, held down while the live wheel gain is far above the measured
+    {
+        int okk = 1;
+        use_layout(0); apply({ "mode 2", 2 }); p_learn = 1; L_cur = { 1.3f, 1, 1.4f }; g_wi = 3.0f; L_gA = 3.0f;
+        okk &= scale_s() == 1.3f;
+        s_back_to_max("test"); okk &= L_cur.s == 1.3f;                 // 1.60: unchanged
+        use_layout(1); L_sess = 1; L_cur = { 1.3f, 1, 1.4f };
+        g_wi = 3.0f; L_gA = 3.0f; float a = scale_s();                   // the live gain agrees: stands
+        g_wi = 6.0f; float b = scale_s();                                // twice the measured gain (large signals): 1.3 x 1.25 x 3/6 = 0.81, held at learn_max
+        g_wi = 3.0f; okk &= a == 1.3f && b == 1.0f;
+        s_back_to_max("test"); okk &= L_cur.s == 1.0f && L_cur.cap == 1.0f && L_dirty;
+        printf("  scale above learn_max: 1.60 unchanged, 1.61 stands (%.2f) / held down by a strong live wheel (%.2f) / back at learn_max after a ring, sway or runaway (%.2f): %s\n", a, b, L_cur.s, okk ? "ok" : "<-- WRONG");
+        use_layout(0); L_dirty = 0; L_cur = L_base = { 1, 1, p_l_max }; L_gA = REF_GA; g_wi = 0;
+        bad |= !okk;
+    }
+    printf("ATS test: %s\n", bad ? "FAILED" : "ok");
+    return bad;
+}
+
 static float g_fake_u;
 static void fake_law(void *ga, float, float, float, float) { *(float *)((char *)ga + GA_U) = g_fake_u; }
 static int test_indicator()
@@ -479,7 +813,7 @@ static int test_lane_state()
         bad |= g_lane_state != want;
     };
     T.speed = 80 / 3.6f; T.cruise = 0;
-    law(0.2f, 0.01f, 0.001f, 30); expect("cruise off, needs_cruise = 1", LANE_WAIT_NO_CRUISE);
+    law(0.2f, 0.01f, 0.001f, 30); expect("cruise off, needs_cruise = 1 (key decision pending)", LANE_WAIT_NO_CRUISE);
     T.cruise = 80 / 3.6f;
     law(0.2f, 0.01f, 0.001f, 30); expect("cruise on, a lane seen", LANE_ACTIVE);
     law(0, 0, 0, 30); expect("lane lost (o1 = o2 = o3 = 0)", LANE_WAIT_NO_LANE);
@@ -596,9 +930,10 @@ static void cal_setup(float kmh, unsigned seed)
 }
 
 static int g_cal_verbose = getenv("CALV") != NULL;   // CALV=1: the log lines of the calibration runs
+static float g_cal_cap;   // > 0: the profile ceiling a calibration run starts with (a fresh profile holds 2; apply() would use learn_max)
 static calres cal_run(const pp &m, float kmh, int ab, double ab_after = 2.0, double tmax = 150, bool arm = true)
 {
-    cal_setup(kmh, 777); int vsave = verbose; if (g_cal_verbose) verbose = 1;
+    cal_setup(kmh, 777); if (g_cal_cap > 0) L_cur.cap = L_base.cap = g_cal_cap; int vsave = verbose; if (g_cal_verbose) verbose = 1;
     pl p = { 0.03, 0, 0, 0, 0 };
     calres r = {};
     r.before = snap();
@@ -648,16 +983,19 @@ static int test_cal_fit()
 {
     int bad = 0;
     printf("\nSteering calibration, fit of a known wheel (plant gA / delay + lag / c; tolerance gA 10 %%, delay 0.08 s, c 15 %%; the inner band is |o1| < 0.5 m):\n");
-    struct pc { float gA, delay, tw, c, kmh; const char *name; };
+    struct pc { float gA, delay, tw, c, kmh; const char *name; float ag; };   // ag: the plant's actuator gain (0 = 1); the fit reads gA per MODEL A, so gA x ag is expected
     const pc cs[] = { { 1.0f, 0, 0.3f, 0.19f, 80, "nominal wheel" }, { 1.0f, 0, 0.3f, 0.19f, 55, "nominal, 55 km/h" }, { 1.0f, 0, 0.3f, 0.19f, 95, "nominal, 95 km/h" },
-                      { 0.7f, 0.30f, 0.05f, 0.17f, 80, "weak, slow wheel" }, { 1.5f, 0.15f, 0.05f, 0.21f, 80, "strong, quick wheel" }, { 1.3f, 0.35f, 0.10f, 0.15f, 70, "slow, strong wheel" } };
+                      { 0.7f, 0.30f, 0.05f, 0.17f, 80, "weak, slow wheel" }, { 1.5f, 0.15f, 0.05f, 0.21f, 80, "strong, quick wheel" }, { 1.3f, 0.35f, 0.10f, 0.15f, 70, "slow, strong wheel" },
+                      { 22.0f, 0, 0.3f, 0.095f, 80, "ATS (A x.15, gA 22)", 0.15f }, { 22.0f, 0, 0.3f, 0.095f, 60, "ATS, 60 km/h", 0.15f }, { 15.0f, 0.15f, 0.05f, 0.12f, 80, "ATS, gA 15, c .12", 0.15f }, { 12.0f, 0.1f, 0.2f, 0.095f, 70, "ATS, A x.25, gA 12", 0.25f } };
     for (auto &c : cs) {
-        pp m; m.gA = c.gA; m.delay = c.delay; m.tw = c.tw; m.c = c.c;
+        pp m; m.gA = c.gA; m.delay = c.delay; m.tw = c.tw; m.c = c.c; if (c.ag > 0) m.ag = c.ag;
+        use_layout(c.ag > 0); g_cal_cap = c.ag > 0 ? 2.0f : 0;
         calres r = cal_run(m, c.kmh, AB_NONE);
-        double exp_dl = c.delay + c.tw;
-        int ok = r.started && r.finished == 1 && r.aborted == 0 && fabs(r.gA / c.gA - 1) <= 0.10 && fabs(r.dl - exp_dl) <= 0.08 && fabs(r.c / c.c - 1) <= 0.15 && r.peak_o1 < 0.5 && r.max_after < 0.5 && !r.rerun;
+        use_layout(0); g_cal_cap = 0;
+        double exp_dl = c.delay + c.tw, exp_gA = c.gA * (c.ag > 0 ? c.ag : 1);
+        int ok = r.started && r.finished == 1 && r.aborted == 0 && fabs(r.gA / exp_gA - 1) <= 0.10 && fabs(r.dl - exp_dl) <= 0.08 && fabs(r.c / c.c - 1) <= 0.15 && r.peak_o1 < 0.5 && r.max_after < 0.5 && !r.rerun;
         printf("  %-20s %3.0f km/h: started %.1f s, ended %.1f s | gA %.2f (plant %.2f) delay %.2f (plant %.2f) c %.3f (plant %.3f) | peak |o1| %.2f m, |o2| %.3f | profile s %.2f dfac %.2f%s\n",
-               c.name, c.kmh, r.t_start, r.t_end, r.gA, c.gA, r.dl, exp_dl, r.c, c.c, r.peak_o1, r.peak_o2, r.after.s, r.after.d, ok ? "" : "  <-- WRONG");
+               c.name, c.kmh, r.t_start, r.t_end, r.gA, exp_gA, r.dl, exp_dl, r.c, c.c, r.peak_o1, r.peak_o2, r.after.s, r.after.d, ok ? "" : "  <-- WRONG");
         bad |= !ok;
     }
     printf("Calibration fit test: %s\n", bad ? "FAILED" : "ok");
@@ -672,13 +1010,174 @@ static int test_cal_aborts()
     for (int ab = AB_INDICATOR; ab < AB_N; ab++) {
         calres r = cal_run(m, 80, ab, 2.0, 80), b = cal_run(m, 80, ab, 2.0, 80, false);   // b: the same disturbance with no calibration armed
         double allow = ab == AB_WIND ? 2.0 : 0.45;   // a drift is only seen once the heading error is 0.03 rad
-        int ok = r.started && r.aborted == 1 && r.finished == 0 && same(r.before, r.after) && !r.rerun && r.t_end - r.t_start < 2.0 + allow && r.peak_o1 < 0.5 && r.max_after < 0.7 && r.max_after <= fmax(r.peak_o1, b.max_after) + 0.35;   // the centering law takes over again: no worse than the disturbance alone (or where the truck was)
+        int ok = r.started && r.aborted == 1 && r.finished == 0 && same(r.before, r.after) && !r.rerun && r.t_end - r.t_start < 2.0 + allow && r.peak_o1 < 0.5 && (ab == AB_CRUISE || (r.max_after < 0.7 && r.max_after <= fmax(r.peak_o1, b.max_after) + 0.35));   // the centering law takes over again: no worse than the disturbance alone (or where the truck was); not with the cruise off, where nothing steers any more (15-11)
         printf("  %-30s: stopped %.2f s after the abort cue, tones: stop %d done %d, profile %s, peak |o1| %.2f, after %.2f m (no calibration: %.2f m)%s\n", ab_name[ab], r.t_end - r.t_start - 2.0, r.aborted, r.finished,
                same(r.before, r.after) ? "unchanged" : "CHANGED", r.peak_o1, r.max_after, b.max_after, ok ? "" : "  <-- WRONG");
         bad |= !ok;
     }
     printf("Calibration abort test: %s\n", bad ? "FAILED" : "ok");
     return bad;
+}
+
+// the 11-11 ride: the truck sways in its lane and the plain rate gate (0.08 m/s) never let the armed test start (300 s, then "no suitable stretch"; lane.csv:
+// median |rate| 0.09 m/s on the straight, the longest stretch that passed was 2.7 s of the 3 s settle). Now the gate asks where the offset will be 1.2 s ahead.
+static int test_cal_sway()
+{
+    int bad = 0;
+    printf("\nSteering calibration start gate on a swaying truck (the 11-11 ride: median offset rate 0.09 m/s):\n");
+    pp m;
+    cal_setup(90, 31);
+    pl p = { 0.03, 0, 0, 0, 0 };
+    cal_arm(0);
+    for (int i = 0; i < (int)(11.5 / DTS); i++) { t_now = i * DTS; step(p, m, DTS, 0.0002f * gauss(), 0, 0, 0.0002f * gauss()); }
+    if (g_cal != CAL_ARMED) { printf("  setup: the test did not stay armed  <-- WRONG\n"); return 1; }
+    struct row { float o1, do1; int must_pass; const char *what; };
+    const row rows[] = {
+        { 0.03f,  0.09f, 1, "centered, drifting out at the swaying truck's median rate (0.09 m/s)" },
+        { 0.08f, -0.09f, 1, "at the edge of the start band, swaying back in" },
+        { 0.08f,  0.09f, 1, "at the edge of the start band, swaying out at the median rate (0.08 + 1.2 x 0.09 = 0.19 m, inside twice the band)" },
+        { 0.03f,  0.40f, 0, "centered but moving out at 0.4 m/s (0.51 m in 1.2 s: leaves the band)" },
+        { 0.09f,  0.15f, 0, "near the edge and moving out at 0.15 m/s (0.27 m in 1.2 s)" },
+        { 0.15f,  0.00f, 0, "off center by 0.15 m (over the start band)" },
+    };
+    for (const row &r : rows) {
+        g_do1 = r.do1;
+        const char *why = cal_unsuitable(90, r.o1, 0, 0, t_now);
+        int ok = r.must_pass ? why == NULL : (why && !strcmp(why, "not centered and settled"));
+        printf("  %-110s: %s%s\n", r.what, why ? why : "suitable", ok ? "" : "  <-- WRONG");
+        bad |= !ok;
+    }
+    g_do1 = 0; g_cal = CAL_IDLE;
+    printf("Calibration sway test: %s\n", bad ? "FAILED" : "ok");
+    return bad;
+}
+
+// 11-11 t 1225-1275: the cruise went off with needs_cruise on, filter_a let the wheel go (A leaks to 0) while the law still computed requests, the actuator-gain
+// estimator read "the game builds nothing" and slid 0.999 -> 0.2, every A term of the law was then amplified 5x and the truck ran away. The estimator must learn
+// nothing while the wheel is let go (on ETS2 the snap to 1 hides the slide until the reading drops under 0.4; the ride's wheel let A leak further). ETS2, a swaying truck, 90 s with the cruise off.
+static int test_ag_no_cruise()
+{
+    int bad = 0;
+    printf("\nActuator gain with the cruise off (needs_cruise on, the wheel let go):\n");
+    pp m;
+    for (int cc = 0; cc < 2; cc++) {
+        cal_setup(90, 41);
+        p_learn = 1; p_needs_cc = 1; T.cruise = cc ? 1 : 0; g_ag = 1; AG_snapped = 1; AG_known = 0; AG_aa = AG_hh = AG_w = 0; AG_hold_until = -1e9; AG_t = -1e9;
+        pl p = { 0.03, 0, 0, 0, 0 };
+        float lo = 1, hi = 1;
+        for (int i = 0; i < 30 * 90; i++) {
+            t_now = i * DTS;
+            step(p, m, DTS, 0.0002f * gauss(), 0, 0, 0.006f * sinf(0.7f * t_now) + 400 * 0.0002f * gauss());   // a heading disturbance that asks real requests (the ride's were up to 0.5)
+            if (fabsf(p.o1) > 0.8) { p.o1 = 0.3; p.o2 = 0; }   // (the driver steers back)
+            lo = fminf(lo, g_ag); hi = fmaxf(hi, g_ag);
+        }
+        // learned nothing while the wheel is let go (the estimator's accepted time), and still learns with the cruise on (else the row proves nothing)
+        int ok = cc ? AG_w > 5 : AG_w < 1;
+        printf("  cruise %-3s: the estimator accepted %5.1f s of data, reads %.2f, actuator gain %.3f .. %.3f (cruise off: must accept < 1 s; on: > 5 s)%s\n", cc ? "on" : "off", AG_w,
+               AG_hh > 0 ? AG_aa / AG_hh : -1.0, lo, hi, ok ? "" : "  <-- WRONG");
+        bad |= !ok;
+        p_needs_cc = 0; T.cruise = 0;
+    }
+    printf("Actuator gain without cruise test: %s\n", bad ? "FAILED" : "ok");
+    return bad;
+}
+
+// 15-11 (replaces W3 of 12-11, the game's own assist without the cruise): with needs_cruise and the cruise off the plugin writes no request at all, and the game's own
+// law is let go like in an indicator pause (the lane key's decision, tap or hold, is only short in the air; cc_gate ends it). With the cruise on our law comes in.
+static int test_game_own()
+{
+    int bad = 0;
+    printf("\nWithout the cruise (needs_cruise on) there is no request, with it our law steers:\n");
+    pp m;
+    cal_setup(90, 51);
+    p_needs_cc = 1; p_cal_timeout = 300; T.cruise = 0;
+    pl p = { 0.5, 0, 0, 0, 0 };
+    int steered = 0, frames = 0; float peakA = 0, peak_o1_cc = 0;
+    const int nudge_i = (int)(20.0 / DTS) + 2;
+    for (int i = 0; i < (int)(40.0 / DTS); i++) {
+        t_now = i * DTS;
+        if (t_now >= 20) T.cruise = 25;
+        if (i == nudge_i) { p.o1 = 0.4; p.o2 = 0; }   // a nudge when our law takes over: it must bring the truck back
+        step(p, m, DTS, 0.0002f * gauss(), 0, 0, 0.0002f * gauss());
+        if (t_now > 1 && t_now < 19.9) {
+            frames++;
+            if (fabsf(*(float *)(GA + GA_U)) > 0.01f) steered++;
+            peakA = fmaxf(peakA, fabsf((float)p.A));
+        } else if (t_now > 30) peak_o1_cc = fmaxf(peak_o1_cc, fabsf((float)p.o1));
+    }
+    int ok1 = steered == 0, ok2 = peakA < 0.002f, ok3 = peak_o1_cc < 0.3f, ok4 = g_law_at > 20.0;
+    printf("  cruise off, 1..20 s: the request is not 0 in %d of %d frames (must be 0)%s\n", steered, frames, ok1 ? "" : "  <-- WRONG");
+    printf("  the game's A peaked at %.4f (must stay under 0.002: nothing steers)%s\n", peakA, ok2 ? "" : "  <-- WRONG");
+    printf("  cruise on from 20 s, nudged 0.4 m off: peak |o1| after 30 s %.2f m (under 0.3)%s\n", peak_o1_cc, ok3 ? "" : "  <-- WRONG");
+    printf("  our law ran again with the cruise on: %s%s\n", ok4 ? "yes" : "no", ok4 ? "" : "  <-- WRONG");
+    bad = !(ok1 && ok2 && ok3 && ok4);
+    p_needs_cc = 0; T.cruise = 0;
+    printf("No lane request without the cruise test: %s\n", bad ? "FAILED" : "ok");
+    return bad;
+}
+
+// 15-11, the owner's wish: with needs_cruise lane keeping exists only with the cruise. The lane key with the cruise off switches the cruise on (a tap) or only arms the calibration (a hold);
+// the cruise going off switches lane keeping off; the cruise coming on alone does not switch it on. (key_reset, press, frames: the lane key test below.)
+static int test_cc_key();
+
+// Owner's wish W2 (12-11): the lane assist at every speed while the cruise is on. It steers from min_kmh (40 on the owner's ini, 20 as shipped); how low can it go?
+// The law is fitted on 30..100 km/h (MODEL_KMH_LO / HI); below, the model's be/al are clamped at 30. Each speed x plant: start 0.8 m off and 0.03 rad of heading,
+// a gust at 15 s, noise; the numbers are the settle (first time |o1| < 0.15 for good), the peak after the gust, swings (|o1| > 0.1 sign changes after 25 s),
+// the peak request, and runaway guards fired. Hard rows: no runaway guard, the peak after the gust under 0.9 m, no swinging; GAP lines otherwise.
+static int test_low_speed()
+{
+    int bad = 0, gaps = 0;
+    printf("\nLane assist at low speed (the law is fitted on 30..100 km/h): settle s / peak after a gust m / swings / peak |u| / runaway guards\n");
+    struct pv { const char *n; float c, gA, tw, dl, db; };
+    const pv pls[] = { { "nominal", 0.19f, 1.0f, 0.3f, 0.0f, 0 }, { "ts4w-like gA 1.5", 0.17f, 1.5f, 0.05f, 0.33f, 0.0015f }, { "crash fit gA 2.95", 0.17f, 2.95f, 0.05f, 0.33f, 0.010f } };
+    for (auto &q : pls) {
+        for (float kmh : { 12.f, 15.f, 20.f, 25.f, 30.f, 40.f, 60.f }) {
+            pp m; m.c = q.c; m.gA = q.gA; m.tw = q.tw; m.delay = q.dl; m.db = q.db;
+            cal_setup(kmh, 61);
+            p_learn = 0; p_min_kmh = 5; p_keep_on = 1; via_stub = 1;
+            pl p = { 0.8, 0.03, 0, 0, 0 };
+            int inc0 = g_n_incidents; double settle = -1, bad_since = 0; float peak_gust = 0, peak_u = 0; int swings = 0, hold = 0;
+            for (int i = 0; i < (int)(60.0 / DTS); i++) {
+                t_now = i * DTS;
+                float wind = 0.0002f * gauss() + (t_now > 15 && t_now < 16 ? 0.02f : 0);
+                step(p, m, DTS, 0.0002f * gauss(), 0, 0, wind);
+                if (t_now < 15) { if (fabs(p.o1) > 0.15) bad_since = t_now; else if (settle < 0 && t_now - bad_since > 2) settle = bad_since; }
+                if (t_now > 15 && t_now < 30) peak_gust = fmaxf(peak_gust, fabsf((float)p.o1));
+                if (t_now > 25 && fabs(p.o1) > 0.1) { int sg = p.o1 > 0 ? 1 : -1; if (hold && sg != hold) swings++; hold = sg; }
+                peak_u = fmaxf(peak_u, fabsf(g_u));
+            }
+            int guards = g_n_incidents - inc0;
+            int ok = guards == 0 && peak_gust < 0.9f && swings == 0 && settle >= 0;
+            printf("  %-18s %3.0f km/h: %5.1f / %.2f / %d / %.2f / %d%s\n", q.n, kmh, settle, peak_gust, swings, peak_u, guards, ok ? "" : (kmh >= 30 ? "  <-- WRONG" : "  GAP"));
+            if (!ok) { if (kmh >= 30) bad = 1; else gaps++; }
+        }
+    }
+    printf("Low speed test: %s (%d low-speed GAP rows under 30 km/h)\n", bad ? "FAILED" : "ok", gaps);
+    return bad;
+}
+
+// The runaway guard (lanelaw.h) only acts above 40 km/h. A constant disturbance on the heading (rad/s; a crosswind, a camber the assist cannot hold) at lower speeds:
+// the peak heading error and offset over 20 s, hands off, with the guard in the code as it is (it cannot fire under 40 km/h). Printed as GAP where the truck leaves the lane
+// (1.5 m: half the lane's room) or the heading error passes the guard's own 0.18 rad, so the minimum speed is not lowered on the strength of the stability rows alone.
+static int test_low_speed_runaway()
+{
+    printf("\nOne-sided disturbance below the runaway guard's 40 km/h (constant heading rate, hands off, 20 s): peak |o2| rad / peak |o1| m\n");
+    int gaps = 0;
+    for (float kmh : { 25.f, 35.f, 60.f }) {
+        printf("  %3.0f km/h:", kmh);
+        for (float wind : { 0.02f, 0.05f, 0.10f, 0.22f }) {
+            const cfg c2 = { "runaway", 2 }; apply(c2); p_runaway = 1; vkmh = kmh; rng = 5; via_stub = 0;
+            g_panic_until = 0; g_sat_dir[0] = g_sat_dir[1] = g_sat_dir[2] = 0; g_sat_t[0] = g_sat_t[1] = g_sat_t[2] = 0; g_sat_since = 0;
+            pl p = { 0, 0, 0, 0, 0 }; pp m; float pk2 = 0, pk1 = 0; int fired = 0;
+            for (int i = 0; i < (int)(20 / DTS); i++) { t_now = i * DTS; step(p, m, DTS, 0, 0, 0, wind); pk2 = fmaxf(pk2, fabsf((float)p.o2)); pk1 = fmaxf(pk1, fabsf((float)p.o1)); fired |= g_panic_until > t_now; }
+            int gap = pk1 > 1.5f || pk2 > 0.18f;
+            printf("  wind %.2f: %.3f / %.2f%s%s", wind, pk2, pk1, fired ? " (guard fired)" : "", gap ? " GAP" : "");
+            gaps += gap && kmh < 40;
+        }
+        printf("\n");
+    }
+    printf("Low speed disturbance rows: %d GAP below 40 km/h\n", gaps);
+    return 0;
 }
 
 // armed but never suitable: nothing starts, the profile stays, the timeout disarms with the stop tone
@@ -842,6 +1341,94 @@ static int test_key()
     return bad;
 }
 
+static int test_cc_key()
+{
+    int bad = 0;
+    printf("\nThe lane key with needs_cruise (15-11):\n");
+    auto check = [&](const char *what, bool ok) { printf("  %-96s %s\n", what, ok ? "ok" : "<-- WRONG"); bad |= !ok; };
+    // key_reset leaves lane keeping on and the cruise off; start from lane keeping off, the key known (found earlier), 80 km/h
+    auto start = [&](int control, int eng_ok, int lag) {
+        static double base = 1e5; base += 1000; t_now = base;   // (the frame's 0.1 s poll keeps its last time in a static: the earlier tests' clocks were reset)
+        key_reset(control); g_key_off = control ? 0x1e780 : 0; p_needs_cc = 1; GA[0x1d1] = 0; T.cruise = 0; T.speed = 80 / 3.6f;
+        g_eng_ok = eng_ok; g_eng_n = 0; g_eng_lag = lag; g_cross_at = -10; g_cc_wait_at = g_cc_grace = -1;
+        frames(1.0); g_cues.clear();   // (the key has been up for a while: K_up_at is 'up since')
+    };
+    auto dump = [&]() { if (getenv("CCDBG")) { printf("    [cues:"); for (int c : g_cues) printf(" %d", c); printf("; eng_n %d bit %d]\n", g_eng_n, bit_on()); } };
+    auto cues_are = [&](int a, int b) { dump(); return (int)g_cues.size() == (a >= 0) + (b >= 0) && (a < 0 || g_cues[0] == a) && (b < 0 || g_cues[1] == b); };
+    // 1. a tap, the cruise off, the cruise can come on
+    start(1, 1, 0);
+    press(3, 0.15, true);
+    check("tap, cruise off: the cruise is switched on once, lane keeping on, one on tone", g_eng_n == 1 && bit_on() && cues_are(CUE_ON, -1));
+    // 2. the cruise goes off (brake, AEB, the key: anything)
+    g_cues.clear(); T.cruise = 0; frames(0.1);
+    check("cruise goes off: lane keeping off at once, one off tone, one X", !bit_on() && cues_are(CUE_OFF, -1) && disp_pick() == 'X');
+    frames(0.5);
+    check("  and it stays off, no second tone", !bit_on() && g_cues.size() == 1 && g_eng_n == 1);
+    // 3. the cruise cannot come on (under its minimum speed)
+    start(1, 0, 0);
+    press(3, 0.15, true);
+    check("tap, cruise cannot come on (refused): lane keeping off, one off tone, no on tone", g_eng_n == 1 && !bit_on() && cues_are(CUE_OFF, -1));
+    // 4. a hold: only the calibration is armed
+    start(1, 1, 0);
+    press(3, 1.2, true);
+    check("hold, cruise off: no cruise-on, lane keeping off, calibration armed", g_eng_n == 0 && !bit_on() && g_cal == CAL_ARMED && T.cruise == 0);
+    check("  the arm tone is given, no on tone", count_cue(CUE_LANE_CAL_ARM) == 1 && count_cue(CUE_ON) == 0);
+    // 4b. hold where the game toggles on the release
+    start(1, 1, 0);
+    t_now += 1.0 / 60; *(int *)(ACT[3] + 0xf8) = 2; ln_frame(); *(int *)(ACT[3] + 0xf8) = 1; frames(1.2);
+    *(int *)(ACT[3] + 0xf8) = 0; GA[0x1d1] ^= 0x20; frames(0.8);
+    check("hold, the game toggles on the release: no cruise-on, lane keeping off, armed", g_eng_n == 0 && !bit_on() && g_cal == CAL_ARMED && count_cue(CUE_ON) == 0);
+    // 5. Resume or Set alone: the cruise comes on, lane keeping does not
+    start(1, 1, 0);
+    T.cruise = 80 / 3.6f; frames(2);
+    check("cruise on alone (Resume/Set): lane keeping stays off, the cruise is not touched", !bit_on() && g_eng_n == 0 && g_cues.empty());
+    // 6. the game switching lane keeping on by itself (not the key): off again, silently, the cruise not switched on
+    start(1, 1, 0);
+    GA[0x1d1] |= 0x20; frames(0.5);
+    check("the game's own switch-on without the key: off again, no cruise-on, no tone", !bit_on() && g_eng_n == 0 && g_cues.empty());
+    // 7. the plugin itself never switches lane keeping on with the cruise off (indicator resume, hold, the phone)
+    start(1, 1, 0);
+    { char *ga = sense_actor(); lka_set(ga, 1); }
+    check("lka_set(on) with the cruise off is refused", !bit_on());
+    // 8. the key not found (control 0): every toggle is a tap
+    start(0, 1, 0);
+    press(3, 0.15, true);
+    check("key not known (control 0): a toggle on is a tap, the cruise is switched on, lane keeping on", g_eng_n == 1 && bit_on());
+    start(0, 0, 0);
+    press(3, 0.15, true);
+    check("key not known, refused: lane keeping off again, one off tone", g_eng_n == 1 && !bit_on() && count_cue(CUE_OFF) == 1 && count_cue(CUE_ON) == 0);
+    // 9. the cruise byte does not show within a second after we switched it on: lane keeping off
+    start(1, 1, 1);
+    press(3, 0.15, true);
+    frames(1.5);
+    check("cruise switched on but never shows (1 s): lane keeping off again", g_eng_n == 1 && !bit_on());
+    // 10. the cruise byte shows a moment late (a tick): lane keeping stays on
+    start(1, 1, 1);
+    press(3, 0.15, true); T.cruise = 80 / 3.6f; frames(0.1);
+    check("cruise byte shows late: lane keeping stays on", bit_on() && g_eng_n == 1);
+    // 11. needs_cruise 0: as before, no cruise-on, lane keeping independent of the cruise
+    start(1, 1, 0);
+    p_needs_cc = 0;
+    press(3, 0.15, true);
+    check("needs_cruise 0: the tap toggles lane keeping with the cruise off, the cruise untouched", bit_on() && g_eng_n == 0 && T.cruise == 0 && cues_are(CUE_ON, -1));
+    frames(2);
+    check("  and it stays on with the cruise off", bit_on());
+    // 12. mode 0 (the game's own law steers; a friend's ini, 15-11): the switch works the same, the key is not known (control needs mode 2)
+    {   const float msave = p_mode;
+        start(0, 1, 0); p_mode = 0;
+        press(3, 0.15, true);
+        check("mode 0, tap with the cruise off: the cruise is switched on, lane keeping on, one on tone", g_eng_n == 1 && bit_on() && cues_are(CUE_ON, -1));
+        g_cues.clear(); T.cruise = 0; frames(0.1);
+        check("mode 0, the cruise goes off: lane keeping off, one off tone", !bit_on() && cues_are(CUE_OFF, -1));
+        start(0, 1, 0); p_mode = 0;
+        T.cruise = 80 / 3.6f; frames(2);
+        check("mode 0, the cruise on alone (Resume/Set): lane keeping stays off", !bit_on() && g_eng_n == 0 && g_cues.empty());
+        p_mode = msave; }
+    p_needs_cc = 0; T.cruise = 0; g_cal = CAL_IDLE; g_eng_ok = 1;
+    printf("Lane key with needs_cruise test: %s\n", bad ? "FAILED" : "ok");
+    return bad;
+}
+
 // Shared steering: the offset pull's back-off share swept across follow_bend_o3 (hand on the wheel, activity 0.7): it stepped by (1 - follow_backoff) there
 static int follow_edge_test()
 {
@@ -857,7 +1444,140 @@ static int follow_edge_test()
     return bad;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// WP-LA5: roundabouts and fast bends from the live lateral load (not from the cruise cancelling for a roundabout the route knew).
+// 25-10 16:00: a prefab 148 m ahead was no known junction or roundabout; in it the game's lane reference jumped (o1 +0.13 -> -1.09 m in 2 s, heading error -0.186 rad),
+// the game's request and ours went to -1.0 together, the runaway guard handed the wheel to the game's law (which sat at the ceiling too) and the driver steered in at
+// 7.2 m/s2 at 52 km/h (rollover guard level 2). Here: the same lane reading in a synthetic roundabout (R 25 m, 7 m/s2 at 52 km/h), the driver steering it (a driver who looks
+// at the road, drv 3, from 0.3 s into the entrance), the assist yielding to his hand (roundabout_off 1) and not (0).
+struct rbres { double w50, guard_at, mean_a, peak_a, mean_u, peak_u, peak_o1, peak_acc, end_o1; int ceil_frames; double guard_u; int guard_n; };   // guard_u / guard_n: sum of |u| and frames while the runaway guard's hand-over is in force
+static rbres run_roundabout(const pp &m, float kmh, int on, int drv, float o3_peak = 0.034f, bool jump = true, double hold_s = 6, double ramp_s = 1.5, float ag0 = 0)
+{
+    const cfg c2 = { "rb", 2 }; apply(c2);
+    p_rb_off = on;
+    if (ag0 > 0) { g_ag = ag0; AG_ann = ag0; AG_known = 1; AG_snapped = 0; }   // an actuator gain already measured (a stored profile, or after a few seconds of requests)
+    g_lat = lat_state(); g_latw = 1; g_lat_off = 0; g_lat_w_at = -1e9; g_lat_r = { 0, 0, 0 }; g_roll_guard_k = 1.0f;
+    via_stub = 1; memset(GA, 0, sizeof GA); GA[0x1d1] = 0x20; g_law_at = -1e9; g_panic_until = 0; g_soft_at = g_soft_end = -1; rng = 77; g_sim_lat = 1;
+    pl p = { 0, 0, 0, 0, 0 }; vkmh = kmh; float dt = DTS, os = 0;
+    const double t0 = 30;                       // the entrance
+    rbres r = { -1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; double sa = 0, su = 0; int n = 0;
+    for (int i = 0; i < (int)((t0 + ramp_s + hold_s + 8) / dt); i++) {
+        t_now = 5000 + i * dt;
+        const double t = i * dt - t0;           // seconds from the entrance
+        auto ramp = [](double x, double a) { double k = x <= 0 ? 0 : x >= a ? 1 : x / a; return k * k * (3 - 2 * k); };
+        float o3 = t < 0 ? ou_o3(os, dt, 0.0010f) : (float)(o3_peak * (ramp(t, ramp_s) - ramp(t - ramp_s - hold_s, ramp_s)));
+        g_sim_do1 = jump ? (float)(-1.1 * (ramp(t - 0.3, 1.5) - ramp(t - ramp_s - hold_s, 1.0))) : 0;     // the lane reference of the prefab
+        g_sim_do2 = jump ? (float)(0.2 * (ramp(t - 0.3, 1.5) - ramp(t - ramp_s - hold_s, 1.0))) : 0;
+        float w_cmd = t < 0.3 ? 0.0f : -(m.d / m.c) * o3;   // the driver turns in 0.3 s into the entrance and steers the whole bend (he knows his own truck's wheel for a bend)
+        lat_frame();
+        step(p, m, dt, o3, t < 0.3 ? 0 : drv, w_cmd, 0.0004f * gauss());
+        if (t < 0) continue;
+        float u = *(float *)(GA + GA_U);
+        if (getenv("TRACE_RB") && atoi(getenv("TRACE_RB")) == on + 2 * (int)(m.gA * 10) && fmod(t, 0.25) < dt) printf("    %5.2f o1 %6.2f o2 %6.3f o3 %.4f u %5.2f A %7.4f w %7.4f act %.2f hand %.2f lw %.2f eff %.2f acc %.1f lead %.1f guard %d hold %.2f\n", t, p.o1, p.o2, o3, u, p.A, p.w, g_act, lat_hand(), g_latw, lat_eff(), g_lat_r.accel, g_lat_r.lead, t_now < g_panic_until, fabsf(g_hwheel) >= 0.03f ? fabsf(g_hdev) / fabsf(g_hwheel) : -1.0f);
+        if (r.w50 < 0 && lat_eff() < 0.5f) r.w50 = t;
+        if (r.guard_at < 0 && t_now < g_panic_until) r.guard_at = t;
+        if (t_now < g_panic_until) { r.guard_u += fabs(u); r.guard_n++; }
+        if (t < ramp_s + hold_s) { sa += fabs(p.A); su += fabs(u); n++; r.peak_u = fmax(r.peak_u, fabs(u)); r.ceil_frames += fabs(u) > 0.95f; r.peak_a = fmax(r.peak_a, fabs(p.A)); }
+        r.peak_o1 = fmax(r.peak_o1, fabs(p.o1));
+        r.peak_acc = fmax(r.peak_acc, fabs(T.yaw) * 6.2831853 * kmh / 3.6);
+        if (t > ramp_s + hold_s + 6) r.end_o1 = p.o1;
+    }
+    r.mean_a = n ? sa / n : 0; r.mean_u = n ? su / n : 0;
+    g_sim_lat = 0; g_sim_do1 = g_sim_do2 = 0; T.yaw = 0; T.in_steer = 0; via_stub = 0;
+    return r;
+}
+
+static int lat_tests()
+{
+    int bad = 0;
+    printf("\nThe lateral load (core/latload.h) and the assist that yields to the driver's hand under it\n");
+    {   // the weight function: whole up to edge_share of the limit, nothing at the limit
+        const float L = 6.27f;
+        float w0 = lat_weight(0.5f * L, L, 0.7f), w1 = lat_weight(0.7f * L, L, 0.7f), w2 = lat_weight(0.85f * L, L, 0.7f), w3 = lat_weight(L, L, 0.7f), w4 = lat_weight(1.6f * L, L, 0.7f);
+        int ok = w0 == 1 && w1 == 1 && fabsf(w2 - 0.5f) < 1e-3f && w3 == 0 && w4 == 0 && lat_weight(9, 0, 0.7f) == 1 && lat_weight(9, L, 0.0f) >= 0 && lat_weight(0, L, 5.0f) == 1;
+        printf("  weight at 0.5 / 0.7 / 0.85 / 1.0 / 1.6 x the limit: %.2f %.2f %.2f %.2f %.2f %s\n", w0, w1, w2, w3, w4, ok ? "ok" : "<-- WRONG");
+        bad |= !ok;
+    }
+    {   // the steering leads: a regression of the measured on v^2 x steering predicts the load before the body has it
+        lat_state S; double t = 0; float v = 20;
+        for (int i = 0; i < 60 * 40; i++) { t += 1.0 / 60; float st = 0.05f * sinf(6.2831853f * (float)t / 8), a = 0.227f * v * v * st; lat_step(S, v, a / v / 6.2831853f, st, t); }   // 40 s of gentle bends: a = 0.227 v^2 st
+        lat_read r = lat_step(S, v, 0.0f, 0.12f, t + 1.0 / 60);   // the wheel turns in, nothing measured yet (the filter still holds the last bend's tail)
+        float want = 0.227f * v * v * 0.12f;
+        int ok = r.lead > 0.8f * want && r.lead <= 1.01f * want && r.accel >= r.lead;
+        printf("  steering 0.12 at 20 m/s with the body still: the steering predicts %.1f m/s2 (the truck's own gain gives %.1f), measured %.1f %s\n", r.lead, want, r.meas, ok ? "ok" : "<-- WRONG");
+        bad |= !ok;
+        lat_state D; t = 0;   // no evidence, a digital wheel at full lock: nothing predicted
+        for (int i = 0; i < 60 * 3; i++) { t += 1.0 / 60; lat_step(D, v, 0.0f, 1.0f, t); }
+        r = lat_step(D, v, 0.0f, 1.0f, t + 1.0 / 60);
+        ok = r.lead == 0 && r.accel == r.meas;
+        printf("  a key at full lock, no evidence: predicts %.1f %s\n", r.lead, ok ? "ok" : "<-- WRONG");
+        bad |= !ok;
+    }
+    printf("Unknown roundabout (R 25 m, 7 m/s2 at 52 km/h; the lane reference jumps -1.1 m / +0.2 rad; the driver steers it): the assist without / with its yielding\n");
+    printf("  %-22s %-5s | yield <0.5 | guard | mean|A| peak|A| | mean|u| peak|u| ceil | peak |o1| true | o1 8 s after | lateral\n", "plant", "yield");
+    struct pv { const char *n; float gA, db, dl, tw, c; };
+    const pv pls[] = { { "nominal (gA 1, lag .3)", 1.0f, 0, 0, 0.3f, 0.19f }, { "ts4w-like (gA 1.5)", 1.5f, 0.0015f, 0.33f, 0.05f, 0.17f }, { "crash fit (gA 2.95)", 2.95f, 0.010f, 0.33f, 0.05f, 0.21f } };
+    for (auto &q : pls) {
+        pp m; m.gA = q.gA; m.db = q.db; m.delay = q.dl; m.tw = q.tw; m.c = q.c; m.d = q.c * BEND_NEED;
+        rbres off = run_roundabout(m, 52, 0, 3), on = run_roundabout(m, 52, 1, 3);
+        for (int k = 0; k < 2; k++) {
+            const rbres &r = k ? on : off;
+            printf("  %-22s %-5s | %-10.2f | %-5.2f | %.4f  %.4f | %.2f    %.2f   %-4d| %-14.2f | %-12.2f | %.1f m/s2\n", q.n, k ? "on" : "off", r.w50, r.guard_at, r.mean_a, r.peak_a, r.mean_u, r.peak_u, r.ceil_frames, r.peak_o1, r.end_o1, r.peak_acc);
+        }
+        // the assist yields while the driver holds the wheel through the load (the weight under 0.5, within 2.5 s of the entrance: the hold has to show first, so on two of
+        // the three wheels the runaway guard has fired by then and the guard is not beaten; what the yield changes is the push against the driver, in the guard's window too),
+        // asks less, and the driver holds the lane no worse than without
+        // while the runaway guard's hand-over is in force (the game's own request at the ceiling, handed to the wheel) and a hand is on it, what goes out is faded: the mean |u|
+        // inside that window is at most half of what goes out without the yield
+        const double gu_on = on.guard_n ? on.guard_u / on.guard_n : 0, gu_off = off.guard_n ? off.guard_u / off.guard_n : 0;
+        int ok = on.w50 >= 0 && on.w50 <= 2.5 && off.w50 < 0 && on.mean_u < off.mean_u && on.peak_o1 <= off.peak_o1 + 0.05 && (gu_off == 0 || gu_on <= 0.5 * gu_off);
+        printf("    -> mean |u| inside the guard's hand-over: %.2f without, %.2f with (%d / %d frames) %s\n", gu_off, gu_on, off.guard_n, on.guard_n, ok ? "ok" : "<-- WRONG (the assist must yield within 2.5 s, ask less, fade what the guard hands over, and the driver hold the lane no worse)");
+        bad |= !ok;
+    }
+    printf("Hands off nothing changes (the 5.7 m/s2 bend of the ts5b crash, 0.9 x the limit, at 63 km/h; a wheel that holds it): the run with and without the yielding is the same, bit for bit\n");
+    for (int w = 0; w < 2; w++) {
+        pp m; if (w) { m.gA = 2.95f; m.db = 0.010f; m.delay = 0.33f; m.tw = 0.05f; m.c = 0.21f; m.d = m.c * BEND_NEED; } else { m.gA = 1.5f; m.db = 0.0015f; m.delay = 0.33f; m.tw = 0.05f; m.c = 0.17f; m.d = m.c * BEND_NEED; }
+        rbres a = run_roundabout(m, 63, 0, 0, 0.0187f, false, 12), b = run_roundabout(m, 63, 1, 0, 0.0187f, false, 12);
+        float acc = (63 / 3.6f) * (63 / 3.6f) * 0.0187f;
+        int ok = a.peak_o1 == b.peak_o1 && a.mean_u == b.mean_u && a.mean_a == b.mean_a && a.guard_at == b.guard_at && b.w50 < 0;
+        printf("  %-20s hands off (%.1f m/s2): peak |o1| %.2f / %.2f m, mean |u| %.3f / %.3f, runaway guard %s / %s, yielded %s %s\n", w ? "crash fit (gA 2.95)" : "ts4w-like (gA 1.5)", acc, a.peak_o1, b.peak_o1, a.mean_u, b.mean_u,
+               a.guard_at >= 0 ? "yes" : "no", b.guard_at >= 0 ? "yes" : "no", b.w50 >= 0 ? "YES" : "no", ok ? "ok" : "<-- WRONG");
+        bad |= !ok;
+    }
+    printf("Hands off on an ATS 1.61 truck (A x0.15 per request, gA 22, c .095; the actuator gain read as 1 until it has been measured, then 0.15): the same bend, the same identity\n");
+    for (int conv = 0; conv < 2; conv++) {
+        pp m; m.ag = 0.15f; m.gA = 22.0f; m.c = 0.095f; m.d = m.c * BEND_NEED;
+        use_layout(1);
+        rbres a = run_roundabout(m, 63, 0, 0, 0.0187f, false, 12, 1.5, conv ? 0.15f : 0), b = run_roundabout(m, 63, 1, 0, 0.0187f, false, 12, 1.5, conv ? 0.15f : 0);
+        use_layout(0);
+        int ok = a.peak_o1 == b.peak_o1 && a.mean_u == b.mean_u && a.mean_a == b.mean_a && a.guard_at == b.guard_at && b.w50 < 0;
+        printf("  ATS, actuator gain %s: hands off, peak |o1| %.2f / %.2f m, mean |u| %.3f / %.3f, runaway guard %s / %s, yielded %s %s\n", conv ? "converged" : "not yet measured", a.peak_o1, b.peak_o1, a.mean_u, b.mean_u,
+               a.guard_at >= 0 ? "yes" : "no", b.guard_at >= 0 ? "yes" : "no", b.w50 >= 0 ? "YES" : "no", ok ? "ok" : "<-- WRONG");
+        bad |= !ok;
+    }
+    printf("Ordinary bends with a hand on the wheel: no yielding up to 70 %% of the limit (4.4 m/s2)\n");
+    for (float kmh : { 60.0f, 80.0f }) for (float o3p : { 0.0035f, 0.0080f }) {
+        pp m;
+        rbres r = run_roundabout(m, kmh, 1, 1, o3p, false, 20);
+        float a = (kmh / 3.6f) * (kmh / 3.6f) * o3p;
+        int ok = a < 4.0f ? r.w50 < 0 : 1;
+        printf("  o3 %.4f at %.0f km/h, hands on: %.1f m/s2 (%.2f x the limit) | yielded: %s | peak |o1| %.2f m %s\n", o3p, kmh, a, a / 6.27f, r.w50 >= 0 ? "yes" : "no", r.peak_o1, ok ? "ok" : "<-- WRONG");
+        bad |= !ok;
+    }
+    printf("Lateral load test: %s\n", bad ? "FAILED" : "ok");
+    return bad;
+}
+
+static int main_inner(int argc, char **argv);
 int main(int argc, char **argv)
+{
+    const bool whole_run = argc <= 1 || (atoi(argv[1]) > 0 && !strchr(argv[1], '='));   // the default run, with or without the sweep flag
+    int rc = main_inner(argc, argv);
+    if (g_lv_viol) { printf("\nLearner contract: %ld violations, the first at %s\n", g_lv_viol, g_lv_first); rc |= 1; }
+    else if (whole_run) printf("\nLearner contract (every change of a learned value announced by a log line, every learner write inside its bounds): %ld plant steps checked, announcements: s %d, dfac %d, ceiling %d, actuator gain %d, session factor %d, 0 violations: ok\n", g_lv_steps, g_lv_n[0], g_lv_n[1], g_lv_n[2], g_lv_n[3], g_lv_n[4]);
+    return rc;
+}
+static int main_inner(int argc, char **argv)
 {
     sim_env_apply("lane", g_params, sizeof g_params / sizeof g_params[0]);
     atexit(print_refmax);
@@ -868,6 +1588,7 @@ int main(int argc, char **argv)
     // name=value arguments override mode-2 ini parameters (for tuning): run_lane.sh bend_assist=2.9 heading_gain=12
     { int k = 0; for (int i = 1; i < argc; i++) { char *e = strchr(argv[i], '='); if (e && novr < 32) { *e = 0; ovr[novr].k = argv[i]; ovr[novr++].v = atof(e + 1); } else argv[k++ + 1] = argv[i]; } argc = k + 1; }
     if (argc > 1 && !strcmp(argv[1], "follow")) return follow_tests();
+    if (argc > 1 && !strcmp(argv[1], "lat")) return lat_tests();
     if (argc > 1 && !strcmp(argv[1], "sbend")) return sbend_tests();
     if (argc > 2 && !strcmp(argv[1], "replay")) {  // open loop: recorded lane.csv inputs through the law. replay <lane.csv> [t0 t1] [mode]
         FILE *f = fopen(argv[2], "r"); if (!f) { printf("cannot open %s\n", argv[2]); return 1; }
@@ -881,12 +1602,15 @@ int main(int argc, char **argv)
             if (t < t0 || t > t1) continue;
             double dt = pt > 0 && t - pt < 0.3 ? t - pt : 0.05; if (pt < 0 || t - pt >= 0.3) { lane_reset(); g_u = 0; g_o1_prev = o1; }
             pt = t; t_now = t; vkmh = kmh;
-            float out = lane_step((float)ug, (float)o1, (float)o2, (float)o3, (float)dt, (float)w, (float)A, (float)kmh); g_u = out; n++;
+            static double ag_r = getenv("REPLAY_AG") ? atof(getenv("REPLAY_AG")) : 1.0;   // REPLAY_AG: A in the log is raw; divide by the game's actuator gain
+            float out = lane_step((float)ug, (float)o1, (float)o2, (float)o3, (float)dt, (float)w, (float)(A / ag_r), (float)kmh); g_u = out; n++;
+            g_rp_act += g_act; g_rp_n++; g_rp_hi += g_act > 0.3f;
             if (fabs(ug) > 0.3) { big++; if (out * ug <= 0) flip++; else if (fabs(out) < 0.5 * fabs(ug) - 1e-6) weak++; }
             if (fabs(o1) > 0.8) { outside++; if (out * o1 > 0) { outwrong++; if (getenv("SHOWWRONG")) printf("WRONG t %.2f o1 %.2f o2 %.3f o3 %.4f u_game %.3f u_new %.3f A %.4f\\n", t, o1, o2, o3, ug, out, A); } if (ug * o1 > 0) gamewrong++; }
             if (!getenv("QUIET") && (fabs(ug) > 0.25 || fabs(o1) > 0.8)) printf("%7.2f %4.0f %6.2f %6.3f %6.4f %7.3f %7.3f %7.3f %7.4f\n", t, kmh, o1, o2, o3, ug, uo, out, A);
         }
         if (p_learn > 0 || p_sway > 0) printf("learner after replay: gA %.2f delay %.2f c %.3f (R2 %.2f/%.2f) | s %.3f dfac %.3f cap %.2f | updates %d rolled %d blocks ok %d bad %d | sway events %d (fac %.2f)\n", L_gA, L_dl, L_c, L_r2a, L_r2c, L_cur.s, L_cur.dfac, L_cur.cap, L_nupd, L_rolled, L_blocks_ok, L_blocks_bad, SW_events, SW_fac);
+        if (g_rp_n) printf("driver activity over %d rows: mean %.3f, share above 0.3: %.1f%% (g_wg %.2f g_wi %.2f at the end)\n", g_rp_n, g_rp_act / g_rp_n, 100.0 * g_rp_hi / g_rp_n, g_wg, g_wi);
         printf("rows %d; |u_game|>0.3: %d, of which our output opposite/zero %d, weaker than half %d; |o1|>0.8 m: %d rows, output pushing outwards %d (the game itself: %d)\n", n, big, flip, weak, outside, outwrong, gamewrong);
         return 0;
     }
@@ -916,7 +1640,7 @@ int main(int argc, char **argv)
         const pv pls[] = { { "nominal (gA 1, lag .3)", 1.0f, 0, 0, 0.3f, 0.19f }, { "ts4w-like (gA 1.5)", 1.5f, 0.0015f, 0.33f, 0.05f, 0.17f }, { "crash fit (gA 2.95)", 2.95f, 0.010f, 0.33f, 0.05f, 0.21f } };
         for (auto &q : pls) for (float ob : { 0.004f, 0.008f }) {
             const cfg c2 = { "r", 2 }; apply(c2);
-            pp m; m.gA = q.gA; m.db = q.db; m.delay = q.dl; m.tw = q.tw; m.c = q.c; m.d = q.c * 4.6f;
+            pp m; m.gA = q.gA; m.db = q.db; m.delay = q.dl; m.tw = q.tw; m.c = q.c; m.d = q.c * BEND_NEED;
             via_stub = 1; memset(GA, 0, sizeof GA); GA[0x1d1] = 0x20; rng = 5; pl p = { 0, 0, 0, 0, 0 }; float dt = DTS; vkmh = 70;
             double m1 = 0, m2 = 0, s2 = 0; int n2 = 0;
             for (int i = 0; i < (int)(45 / dt); i++) {
@@ -926,11 +1650,44 @@ int main(int argc, char **argv)
                 if (hands && t_now > 15) m1 = fmax(m1, fabs(p.o1));
                 if (t_now >= 30 && t_now < 36) m2 = fmax(m2, fabs(p.o1));
                 if (t_now >= 36) { s2 += p.o1 * p.o1; n2++; }
-                static int ti = 0; if (getenv("TRACE") && atoi(getenv("TRACE")) == ti && fmod(t_now, 0.5) < dt) printf("    %5.1f o1 %6.2f o2 %6.3f u %5.2f A %7.4f w %7.4f need %7.4f act %.2f wg %.2f wi %.2f ff %.4f sw %.2f ls %.2f\n", t_now, p.o1, p.o2, *(float *)(GA + GA_U), p.A, p.w, -4.6 * o3, g_act, g_wg, g_wi, g_ff, SW_fac, L_cur.s);
+                static int ti = 0; if (getenv("TRACE") && atoi(getenv("TRACE")) == ti && fmod(t_now, 0.5) < dt) printf("    %5.1f o1 %6.2f o2 %6.3f u %5.2f A %7.4f w %7.4f need %7.4f act %.2f wg %.2f wi %.2f ff %.4f sw %.2f ls %.2f\n", t_now, p.o1, p.o2, *(float *)(GA + GA_U), p.A, p.w, -BEND_NEED * o3, g_act, g_wg, g_wi, g_ff, SW_fac, L_cur.s);
                 if (i == (int)(45 / dt) - 1) ti++;
             }
             via_stub = 0;
             printf("  %-24s o3 %.3f: steering %.2f m | after letting go %.2f m | rms after %.2f\n", q.n, ob, m1, m2, sqrt(s2 / n2));
+        }
+        return 0;
+    }
+    if (argc > 1 && !strcmp(argv[1], "ats")) {  // 02-11: the ATS 1.61 actuator (A 0.15x per request, wheel ~11x per A, c 0.55x) through stub_law: the gain estimator against none, and the profile scale s
+        printf("Actuator gain: stub_law on a 1.61 layout, hands off, wandering road 70 s / bend o3 .0035. rms o1 / max|o1| / zc per min | bend max / steady offset | runaways | g_ag at the end\n");
+        struct pv { const char *n; float ag, gA, c; };
+        const pv pls[] = { { "ETS2 plant (ag 1, gA 1.0, c .19)", 1.0f, 1.0f, 0.19f }, { "ATS plant (ag .15, gA 22, c .095)", 0.15f, 22.0f, 0.095f }, { "ATS, ag .15, gA 15, c .12", 0.15f, 15.0f, 0.12f }, { "ATS, ag .25, gA 12, c .095", 0.25f, 12.0f, 0.095f }, { "ATS, ag .10, gA 30, c .095", 0.10f, 30.0f, 0.095f } };
+        struct var { const char *n; int est; float s; };
+        const var vars[] = { { "no estimator, s 1  ", 0, 1.0f }, { "estimator, s 1     ", 1, 1.0f }, { "estimator, s 0.85  ", 1, 0.85f }, { "estimator, s 0.7   ", 1, 0.7f }, { "estimator, s 0.55  ", 1, 0.55f }, { "estimator, s 0.45  ", 1, 0.45f }, { "estimator, s 1.15  ", 1, 1.15f }, { "estimator, s 1.3   ", 1, 1.3f }, { "estimator, s 1.5   ", 1, 1.5f } };
+        for (auto &q : pls) for (auto &vr : vars) for (float kmh : { 60.0f, 80.0f }) {
+            if (q.ag == 1.0f && (vr.s < 0.85f || getenv("ATS_ONLY"))) continue;
+            if (getenv("ATS_ONLY") && !vr.est) continue;
+            pp m; m.ag = q.ag; m.gA = q.gA; m.c = q.c; m.d = q.c * BEND_NEED;
+            const cfg c2 = { "a", 2 };
+            double rs[2] = {}, mx[2] = {}, zc[2] = {}, bs = 0, bm = 0; int inc0 = g_n_incidents; float agend = 0;
+            use_layout(1);
+            for (int scen = 0; scen < 2; scen++) {
+                apply(c2); p_learn = 1; L_cur = L_base = { vr.s, 1, p_l_max }; L_loaded = 1;   // (apply() zeroes the actuator-gain state)
+                via_stub = 1; memset(GA, 0, sizeof GA); GA[0x1d1] = 0x20; g_law_at = -1e9;
+                vkmh = kmh; rng = 4242; pl p = { 0.5, 0, 0, 0, 0 }; float dt = DTS, os = 0; double sum = 0, sb = 0; int n = 0, nb = 0, hold = 0, z = 0; double mxx = 0, bmx = 0;
+                for (int i = 0; i < (int)(70 / dt); i++) {
+                    t_now = 2000 + i * dt;
+                    if (!vr.est) AG_w = -1e9;   // no estimator: A is read as it is (what the build did before)
+                    float o3; if (scen == 0) o3 = ou_o3(os, dt, 0.0012f); else { float k = clampf((float)(t_now - 2010) / 3, 0, 1) - clampf((float)(t_now - 2045) / 3, 0, 1); o3 = 0.0035f * k * k * (3 - 2 * k); }
+                    step(p, m, dt, o3, 0, 0, 0.0006f * gauss());
+                    if (t_now - 2000 > 8) { sum += p.o1 * p.o1; n++; mxx = fmax(mxx, fabs(p.o1)); if (fabs(p.o1) > 0.1) { int sg = p.o1 > 0 ? 1 : -1; if (hold && sg != hold) z++; hold = sg; } }
+                    if (scen == 1 && t_now - 2000 > 10 && t_now - 2000 < 50) { bmx = fmax(bmx, fabs(p.o1)); if (t_now - 2000 > 38 && t_now - 2000 < 45) { sb += p.o1; nb++; } }
+                }
+                rs[scen] = sqrt(sum / n); mx[scen] = mxx; zc[scen] = z * 60.0 / 62; if (scen == 1) { bs = nb ? sb / nb : 0; bm = bmx; } agend = g_ag;
+                via_stub = 0;
+            }
+            use_layout(0);
+            printf("  %-34s %s %2.0f km/h | wander %.2f %.2f %.1f | bend %.2f %.2f | runaways %d | g_ag %.2f\n", q.n, vr.n, kmh, rs[0], mx[0], zc[0], bm, bs, g_n_incidents - inc0, agend);
         }
         return 0;
     }
@@ -940,7 +1697,7 @@ int main(int argc, char **argv)
         const pv pls[] = { { "ts4w-like (gA 1.5)", 1.5f, 0.0015f, 0.33f, 0.05f, 0.17f }, { "ts5b avg (gA 2.5)", 2.5f, 0.007f, 0.3f, 0.05f, 0.19f } };
         for (auto &q : pls) for (float o10 : { -0.9f, 0.4f, 0.0f }) for (float soft : { 0.0f, 0.35f }) {
             const cfg c2 = { "e", 2 }; apply(c2); p_soft = soft; g_law_at = -1e9;
-            pp m; m.gA = q.gA; m.db = q.db; m.delay = q.dl; m.tw = q.tw; m.c = q.c; m.d = q.c * 4.6f;
+            pp m; m.gA = q.gA; m.db = q.db; m.delay = q.dl; m.tw = q.tw; m.c = q.c; m.d = q.c * BEND_NEED;
             via_stub = 1; memset(GA, 0, sizeof GA); GA[0x1d1] = 0x20; rng = 3; pl p = { o10, o10 < -0.5f ? 0.05 : 0.0, 0, 0, 0 }; float dt = DTS; vkmh = 44;
             double pk = 0, mx = 0, os = 0, settle = 0, wprev = 0;
             for (int i = 0; i < (int)(30 / dt); i++) {
@@ -959,7 +1716,7 @@ int main(int argc, char **argv)
         printf("straight wander %.0f km/h, profile s %.3f dfac %.3f, hands off, 90 s from 0.5 m: rms / max / zc per min (last 60 s)\n", kmh, s, df);
         for (float st : { 0.0f, 0.004f }) for (float G : { 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 3.5f }) {
             const cfg c2 = { "g", 2 }; apply(c2); p_learn = 1; p_sway = 1; L_cur = L_base = { s, df, 2 }; L_hold = 1000;
-            pp m; m.gA = G; m.db = G > 1.2f ? 0.0034f * (G - 1.0f) * 1.5f : 0; m.delay = 0.33f; m.tw = 0.05f; m.c = 0.19f; m.d = 0.19f * 4.6f; m.kk = 0.9f; m.stick = st;
+            pp m; m.gA = G; m.db = G > 1.2f ? 0.0034f * (G - 1.0f) * 1.5f : 0; m.delay = 0.33f; m.tw = 0.05f; m.c = 0.19f; m.d = 0.19f * BEND_NEED; m.kk = 0.9f; m.stick = st;
             via_stub = 1; memset(GA, 0, sizeof GA); GA[0x1d1] = 0x20; rng = 11; pl p = { 0.5, 0, 0, 0, 0 }; float dt = DTS, os = 0; vkmh = kmh;
             double sum = 0, mx = 0; int nn = 0, zc = 0, hold = 0;
             for (int i = 0; i < (int)(90 / dt); i++) {
@@ -992,7 +1749,7 @@ int main(int argc, char **argv)
         for (auto &q : pls) for (auto &pr : pfs) {
             const cfg c2 = { "crash", 2 }; apply(c2); p_learn = 1; p_sway = 1;
             L_cur = L_base = { pr.s, pr.df, 2 }; L_gA = pr.gA; L_dl = pr.dl; L_c = pr.c;
-            pp m; m.gA = q.gA; m.db = q.db; m.delay = q.dl; m.tw = q.tw; m.c = q.c; m.kk = q.kk; m.d = q.c * 4.6f; m.stick = q.st;
+            pp m; m.gA = q.gA; m.db = q.db; m.delay = q.dl; m.tw = q.tw; m.c = q.c; m.kk = q.kk; m.d = q.c * BEND_NEED; m.stick = q.st;
             via_stub = 1; memset(GA, 0, sizeof GA); GA[0x1d1] = 0x20; rng = 7; pl p = { 0, 0, 0, 0, 0 }; float dt = DTS; int k = 0;  // lane keeping on (key)
             double mx = 0, mxb = 0, sat = 0, under = 0, over = 0; int rev = 0, lastsg = 0; double last_tr = -1;
             for (double tt = T_[0]; tt < T_[n - 1]; tt += dt) {
@@ -1005,10 +1762,10 @@ int main(int argc, char **argv)
                     mx = fmax(mx, fabs(p.o1)); if (tt >= 383) mxb = fmax(mxb, fabs(p.o1));
                     if (fabs(u) > 0.99f) sat += dt;
                     int sg = u > 0.3f ? 1 : (u < -0.3f ? -1 : 0); if (sg && lastsg && sg != lastsg) rev++; if (sg) lastsg = sg;
-                    double need = -4.6 * o3v;
+                    double need = -BEND_NEED * o3v;
                     if (fabs(o3v) > 0.008) { if (p.w * need < 0.5 * need * need) under += dt; if (p.w * need > 1.6 * need * need) over += dt; }
                 }
-                if (tr == k_i && tt - last_tr >= 0.1) { last_tr = tt; printf("  %7.2f %4.1f o1 %6.2f o2 %6.3f o3 %.4f u %6.2f A %7.4f wheel %7.4f need %7.4f act %.2f wg %.2f wi %.2f ff %.4f\n", tt, vkmh, p.o1, p.o2, o3v, u, p.A, p.w, -4.6 * o3v, g_act, g_wg, g_wi, g_ff); }
+                if (tr == k_i && tt - last_tr >= 0.1) { last_tr = tt; printf("  %7.2f %4.1f o1 %6.2f o2 %6.3f o3 %.4f u %6.2f A %7.4f wheel %7.4f need %7.4f act %.2f wg %.2f wi %.2f ff %.4f\n", tt, vkmh, p.o1, p.o2, o3v, u, p.A, p.w, -BEND_NEED * o3v, g_act, g_wg, g_wi, g_ff); }
             }
             via_stub = 0;
             if (mx > 0.9 && !q.lim) bad++;
@@ -1122,6 +1879,14 @@ int main(int argc, char **argv)
             printf("  %-14s %2.0f km/h  peak A %.4f  mean A opposing the driver %.4f  overshoot after letting go %.2f m  |o1| at 14-32 s after %.2f\n", c.name, kmh, pk, opp, os, late);
         }
     int rc = follow_edge_test() | test_indicator() | test_indicator_key() | test_ffb() | test_saturation() | test_lane_state() | test_cruise_lane_on();
-    rc |= test_key(); rc |= test_cal_fit(); rc |= test_cal_aborts(); rc |= test_cal_waits();   // in this order: they share the module state
+    rc |= test_key(); rc |= test_cal_fit(); rc |= test_cal_aborts(); rc |= test_cal_waits(); rc |= test_cal_sway(); rc |= test_ag_no_cruise(); rc |= test_game_own(); rc |= test_cc_key(); rc |= test_low_speed(); rc |= test_low_speed_runaway();   // in this order: they share the module state
+    rc |= runaway_tests();   // review 30-10: the one-sided runaway scenario (guard)
+    rc |= recovery_tests();  // 30-10: a recovery toward the center must not fire the guard
+    rc |= sway_persist_tests();  // 30-10: a sway lowers the learned scale for the rest of the session
+    rc |= cal_learning_tests();  // 30-10: learning only while a calibration is on, confidence stop, passive bends
+    rc |= bend_off_test();       // review: bend_max_lat 0 (off) must not kill the learner/calibration
+    rc |= cal_convergence_test();  // review: the confidence stop must wait for the profile to converge
+    rc |= test_ats();              // 02-11: the 1.61 layout, the weaker A, the profile key, a scale above learn_max
+    rc |= lat_tests();             // WP-LA5: roundabouts and fast bends from the live lateral load
     return rc;
 }

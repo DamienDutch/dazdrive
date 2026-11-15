@@ -5,6 +5,8 @@ set -euo pipefail
 here=$(realpath "$(dirname "$0")")
 root=$(realpath "$here/..")
 python3 "$root/../tools/gen_ini.py" inc -o "$here/core/preset_standard.inc"   # the player preset as a C table (core/config.cpp)
+python3 "$root/../tools/gen_ini.py" inc-ini -o "$here/core/preset_standard_ini.inc"   # the same preset as ini text, which the DLL writes when there is no ini
+python3 "$root/../tools/gen_ini_names.py" --check   # core/ini_names.inc is generated from tools/ini_names.tsv and committed
 name=$(sed -n 's/^#define SUITE_NAME "\([^"]*\)".*/\1/p' "$here/core/suite.h")
 # Local extras (core/dev.cpp + dev.h, not part of a release): only when they are there and DAZDRIVE_PUBLIC is not set
 # (tools/make_release.sh sets it). Without them the DLL has no trace of them (DEV_* in core/suite.h are empty).
@@ -13,14 +15,15 @@ srcs=$(cd "$here" && ls core/*.cpp modules/*.cpp | grep -v '^core/dev\.cpp$' | t
 flavor=dev
 if [ "${DAZDRIVE_PUBLIC:-0}" = 1 ]; then flavor=public; fi
 extra="-DDAZDRIVE_FLAVOR=$flavor"
+libs=""   # the dev build adds -lws2_32 for the UDP stream in core/dev.cpp; a release links no Winsock
 if [ -f "$here/core/dev.cpp" ] && [ -f "$here/core/dev.h" ] && [ "${DAZDRIVE_PUBLIC:-0}" != 1 ]; then
-  srcs="$srcs core/dev.cpp"; extra="$extra -DDAZDRIVE_DEV"; echo "build: with the local extras (core/dev.cpp)"
+  srcs="$srcs core/dev.cpp"; extra="$extra -DDAZDRIVE_DEV"; libs="-lws2_32"; echo "build: with the local extras (core/dev.cpp)"
 fi
 echo "build: flavor $flavor"
 podman run --rm -v "$root:/w:Z" -w /w/dazdrive registry.fedoraproject.org/fedora:44 bash -c \
   "dnf -y -q install mingw64-gcc-c++ >/dev/null 2>&1 && x86_64-w64-mingw32-g++ -O2 -Wall -Wextra \
    -Wno-unused-parameter -Wno-missing-field-initializers -std=c++17 $extra -I../sdk/include -I. -shared \
-   -o $name.dll $srcs suite.def -static -static-libgcc -static-libstdc++ -lwinmm"
+   -o $name.dll $srcs suite.def -static -static-libgcc -static-libstdc++ -lwinmm $libs"
 ls -l "$here/$name.dll"
 if [ "${1:-}" = install ]; then
   # The game may sit in a second Steam library (libraryfolders.vdf lists them all); the default library is the fallback.

@@ -1,6 +1,7 @@
 // Game discovery and access. Pattern scanning, .pdata function extents and the
 // call-site trampolines follow car_automatic_transmission (MIT, Deppelover).
 #include "game.h"
+#include "vehicle.h"   // V.electric: the brake pedal hook falls back to the raw pedal on an electric truck
 #include <math.h>
 #include <string.h>
 
@@ -8,8 +9,9 @@
 // 1.60: ETS2 1.60.1.7 (2026-10). Offsets verified live with the probe plugin
 // (runs 1 and 2) and in the disassembly of the automatic's update (0x14098c640),
 // its gear chooser (0x14098d0d0) and start-gear fn (0x14098dbf0).
-// 1.61 (ATS) moved the target gear and throttle: mapped offline, never run in the game, and bound to
-// game_id "ats", so this release (ETS2 only) never tries it.
+// ATS 1.61.3.18 (game_id "ats") is the same prism3d 1.61 build family as ETS2 1.61.1.9: every object offset and
+// pattern is identical (notes/port-ats161.md). Only the game_actor's action objects (the cruise/lane/gearbox-mode
+// keys) sit +0x100 higher than in 1.60, which the modules handle through game_is_161().
 
 static const layout g_layouts[] = {
     { "1.60", "eut2",
@@ -33,31 +35,157 @@ static const layout g_layouts[] = {
       "48 8D 88 ?? ?? ?? ?? 48 85 C9 74 ?? 48 8B 01 48 8D 54",
       "49 8B E3 41 5E 5F 5E 5B E9 ?? ?? ?? ??",
       "F3 0F 59 3D ?? ?? ?? ?? 45 85 F6 0F 84",
-      0x1b8 },
-    // 1.61: ATS 1.61 (2026-10), ported offline 11-10 (ats-161 notes): the gearbox gained a float at
-    // self+0x68 (target 0x70, force 0x121), inner fields +0x68, handles +0x50, engine def +8/+0x10.
-    // a_gearbox, i_tx_alt/x_tx_alt and the gps offset are inferred; tail and stop patterns unchecked
-    // (optional: a miss only switches eco-roll / smooth stop off). Not run in game yet.
+      0x1b8,
+      0x150, 0x154, 0x17c, 0x180, 0x190, 0x198, 0x199, 0x19c, 0x1a0, 0x1a8,
+      0x1d0, 0x1d1, 0x1d5c, 0x340, 0x1e0, 0x1d00, 0x1cc0, 0x1cc4, 0x142c, 0x1444,
+      0x1408, 0x1420, 0x640, 0x100, 0x101, 0x110, 0x228, 8,
+      "48 8B CB F3 44 0F 11 83 E4 1C 00 00 F3 45 0F 5F C3 41 0F 28 D0 E8",
+      "85 C0 74 17 F6 87 D0 01 00 00 10 75 0E 44 0F 2F 8F 7C 01 00 00 73 04 B2 01",
+      "0F 2F CF 76 ?? 83 BB 50 01 00 00 02 75 ?? 0F 2F BB 7C 01 00 00 72 0A F3 0F 11 81 24 14",
+      "48 8B 03 F3 41 0F 5F FE 48 8B CB 0F 28 CF FF 90 78 01 00 00",
+      "E8 ?? ?? ?? ?? 48 8B 0B 44 0F 28 F0 48 8B 01 FF 90 88 00 00 00",
+      "F3 0F 10 BE 7C 01 00 00 0F 2F FE",
+      "48 8B 01 F3 41 0F 5F FE 0F 28 CF FF 90 78 01 00 00",
+      "48 8B 43 18 83 A0 A0 02 00 00 DF 80 BB 54 01 00 00 00",
+      "83 88 A0 02 00 00 20 EB 0B 48 8B 43 18 83 A0 A0 02 00 00 DF",
+      "E8 ?? ?? ?? ?? 0F 2F C6 77 4C 0F 2F B3 60 01 00 00",
+      "8B 00 89 81 44 14 00 00 48 8D 45 7F",
+      "48 8B 4E 18 41 0F 2F C2",
+      "48 8D 4C 24 38 48 0F 46 C8" },
+    // 1.61 (ats): ATS 1.61.3.18 (2026-10), re-derived offline from amtrucks.exe (notes/port-ats161.md). Identical to
+    // the ETS2 1.61 entry below (same build family): the gearbox self grew a float at +0x68, the vehicle inner +0x78
+    // at the handles / +0x90 through the drivetrain, the engine def +8/+0x10, the game_actor +0x68/+0x78/+0xcc.
     { "1.61", "ats",
-      "48 8B 46 10 80 B8 A8 14 00 00 00 74 ?? F2 0F 10 83 44 02 00 00",
-      "4C 63 B9 B0 14 00 00",
+      "48 8B 46 10 80 B8 D0 14 00 00 00 74 ?? F2 0F 10 83 44 02 00 00",
+      "4C 63 B9 D8 14 00 00",
       "40 53 48 83 EC 40 48 8B D9 0F 29 7C 24 20 48 8B 49 10 E8",
       "48 8B 05 ?? ?? ?? ?? B2 01 48 8B 88 ?? ?? ?? ?? E8",
-      "89 46 70", "80 BE 21 01 00 00 00", "44 8B 80 B0 14 00 00",
-      "F3 44 0F 59 A6 C8 01 00 00",
+      "89 46 70", "80 BE 21 01 00 00 00", "44 8B 80 D8 14 00 00",
+      "F3 0F 59 97 C8 01 00 00",
       "48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 41 0F 2F C0",
       0x10, 0x18, 0x70, 0x121,
-      0x14b0, 0x148c, 0x1490, 0x1040, 0x1038,
+      0x14d8, 0x14b4, 0x14b8, 0x1068, 0x1060,
       0x1c8, 0x1d8, 0x1e0, 0x234, 0x244,
       0x1c8,
       0x204,
       0x270, 0x150, 0x358,
-      0x14a8, 0x14a4, 0x270, 0x274, 0x3f0,
+      0x14d0, 0x14cc, 0x270, 0x274, 0x3f0,
       0x1e30,
       "48 8D 88 ?? ?? ?? ?? 48 85 C9 74 ?? 48 8B 01 48 8D 54",
-      "49 8B E3 41 5E 5F 5E 5B E9 ?? ?? ?? ??",
-      "F3 0F 59 3D ?? ?? ?? ?? 45 85 F6 0F 84",
-      0x1c0 },
+      "49 8B E3 41 5E 5F 5E E9 ?? ?? ?? ??",
+      "F3 0F 59 3D ?? ?? ?? ?? E8",
+      0x1c0,
+      0x1b8, 0x1bc, 0x1e4, 0x1e8, 0x1f8, 0x200, 0x204, 0x208, 0x20c, 0x214,
+      0x248, 0x249, 0x1e24, 0x3b8, 0x258, 0x1dcc, 0x1d8c, 0x1d90, 0x14bc, 0x14d4,
+      0x1498, 0x14b0, 0x6b8, 0x108, 0x109, 0x118, 0x230, 7,
+      "48 8B CB F3 44 0F 11 83 B0 1D 00 00 F3 45 0F 5F C3 41 0F 28 D0 E8",
+      "85 C0 74 17 F6 87 48 02 00 00 10 75 0E 44 0F 2F 8F E4 01 00 00 73 04 B2 01",
+      "0F 2F CF 76 ?? 83 BB B8 01 00 00 02 75 ?? 0F 2F BB E4 01 00 00 72 0A F3 0F 11 81 B4 14 00 00",
+      "F3 0F 10 8E E4 01 00 00 48 8B 01 F3 0F 5F CE FF 90 78 01 00 00",
+      "", "",
+      "",
+      "48 8B 43 18 83 A0 A0 02 00 00 DF 80 BB BC 01 00 00 00",
+      "83 88 A0 02 00 00 20 EB 0B 48 8B 43 18 83 A0 A0 02 00 00 DF",
+      "",
+      "8B 00 89 81 D4 14 00 00 48 8D 45 7F",
+      "48 8B 4E 18 41 0F 2F C2",
+      "48 8D 4C 24 38 48 0F 46 C8",
+      // engine brake lever (core/ebrakelogic.h): verified on both 1.61 exes (eurotrucks2.exe, amtrucks.exe)
+      0x1cd, 0x1ce, 0x1d0, 0x1e1, 0x1e9b0, 0x1e9c0,
+      "E8 ?? ?? ?? ?? B1 01 EB 02 32 C9 84 C9 74 ?? 48 8B 47 18 48 8B 88 68 10 00 00 E8 ?? ?? ?? ?? 8B 97 D0 01 00 00 3B 90 74 02 00 00 73 ?? FF C2 48 8B CF E8 ?? ?? ?? ??",
+      "E8 ?? ?? ?? ?? B1 01 EB 02 32 C9 84 C9 74 ?? 48 8D 97 98 E9 01 00 E8 ?? ?? ?? ?? 8B 97 D0 01 00 00 84 C0 41 8B CD 88 87 E1 01 00 00 0F 95 C1 3B D1 76 ?? FF CA 48 8B CF E8 ?? ?? ?? ??" },
+    // 1.61 (eut2): ETS2 1.61.1.9 (2026-10), ported offline 31-10 (notes/port-161.md). The gearbox self object grew a
+    // float at +0x68 (target 0x70, force 0x121) like ATS 1.61; the vehicle inner grew +0x78 at the handles and +0x90
+    // from the steering through the drivetrain; the engine def +8 (+0x10 at the engine-brake fields); the game_actor
+    // grew in three blocks (+0x68 below 0x199, +0x78 at the lights, +0xcc at the pedals/hill). Every offset and pattern
+    // re-derived from the 1.61 disassembly; the brake-pedal getter/hill self-checks are skipped (empty patterns: the
+    // service-brake max moved registers, so only the request read anchors the site). t_shift_time is inferred (+8).
+    { "1.61", "eut2",
+      "48 8B 46 10 80 B8 D0 14 00 00 00 74 ?? F2 0F 10 83 44 02 00 00",
+      "4C 63 B9 D8 14 00 00",
+      "40 53 48 83 EC 40 48 8B D9 0F 29 7C 24 20 48 8B 49 10 E8",
+      "48 8B 05 ?? ?? ?? ?? B2 01 48 8B 88 ?? ?? ?? ?? E8",
+      "89 46 70", "80 BE 21 01 00 00 00", "44 8B 80 D8 14 00 00",
+      "F3 0F 59 97 C8 01 00 00",
+      "48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 41 0F 2F C0",
+      0x10, 0x18, 0x70, 0x121,
+      0x14d8, 0x14b4, 0x14b8, 0x1068, 0x1060,
+      0x1c8, 0x1d8, 0x1e0, 0x234, 0x244,
+      0x1c8,
+      0x204,
+      0x270, 0x150, 0x358,
+      0x14d0, 0x14cc, 0x270, 0x274, 0x3f0,
+      0x1e30,
+      "48 8D 88 ?? ?? ?? ?? 48 85 C9 74 ?? 48 8B 01 48 8D 54",
+      "49 8B E3 41 5E 5F 5E E9 ?? ?? ?? ??",
+      "F3 0F 59 3D ?? ?? ?? ?? E8",
+      0x1c0,
+      0x1b8, 0x1bc, 0x1e4, 0x1e8, 0x1f8, 0x200, 0x204, 0x208, 0x20c, 0x214,
+      0x248, 0x249, 0x1e24, 0x3b8, 0x258, 0x1dcc, 0x1d8c, 0x1d90, 0x14bc, 0x14d4,
+      0x1498, 0x14b0, 0x6b8, 0x108, 0x109, 0x118, 0x230, 7,
+      "48 8B CB F3 44 0F 11 83 B0 1D 00 00 F3 45 0F 5F C3 41 0F 28 D0 E8",
+      "85 C0 74 17 F6 87 48 02 00 00 10 75 0E 44 0F 2F 8F E4 01 00 00 73 04 B2 01",
+      "0F 2F CF 76 ?? 83 BB B8 01 00 00 02 75 ?? 0F 2F BB E4 01 00 00 72 0A F3 0F 11 81 B4 14 00 00",
+      "F3 0F 10 8E E4 01 00 00 48 8B 01 F3 0F 5F CE FF 90 78 01 00 00",
+      "", "",
+      "",
+      "48 8B 43 18 83 A0 A0 02 00 00 DF 80 BB BC 01 00 00 00",
+      "83 88 A0 02 00 00 20 EB 0B 48 8B 43 18 83 A0 A0 02 00 00 DF",
+      "",
+      "8B 00 89 81 D4 14 00 00 48 8D 45 7F",
+      "48 8B 4E 18 41 0F 2F C2",
+      "48 8D 4C 24 38 48 0F 46 C8",
+      // engine brake lever (core/ebrakelogic.h): verified on both 1.61 exes (eurotrucks2.exe, amtrucks.exe)
+      0x1cd, 0x1ce, 0x1d0, 0x1e1, 0x1e9b0, 0x1e9c0,
+      "E8 ?? ?? ?? ?? B1 01 EB 02 32 C9 84 C9 74 ?? 48 8B 47 18 48 8B 88 68 10 00 00 E8 ?? ?? ?? ?? 8B 97 D0 01 00 00 3B 90 74 02 00 00 73 ?? FF C2 48 8B CF E8 ?? ?? ?? ??",
+      "E8 ?? ?? ?? ?? B1 01 EB 02 32 C9 84 C9 74 ?? 48 8D 97 98 E9 01 00 E8 ?? ?? ?? ?? 8B 97 D0 01 00 00 84 C0 41 8B CD 88 87 E1 01 00 00 0F 95 C1 3B D1 76 ?? FF CA 48 8B CF E8 ?? ?? ?? ??" },
+    // 1.62: ETS2 1.62.1.0 / ATS 1.62.1.1 (2026-11), ported offline 06-11 (notes/port-162.md). Same build family in both games.
+    // SCS rewrote the automatic: the gearbox self lost 0xc after +0x10c (drive state 0x10c with 1 = at rest after reverse /
+    // 3 = at rest after forward, so no latch byte; force 0x115; a 1.5 s hold timer at 0x118), the start gear runs through a
+    // wrapper (start fn, then the lower bound, max). The vehicle inner -0x28 from the handles on (gear 0x14b0), the drive +8
+    // (engine 0x368, clutch copy 0x338), the engine and transmission defs unchanged. game_actor: unchanged up to 0x218, +4 at
+    // the lights / blink (0x24c, 0x25c; the flash float stays 0x3b8), +8 from the pedals on (0x1d94, hill 0x1dd4, lka u 0x1e2c,
+    // automatic 0x1e38: 0x1e30 is now the manual box), the action objects +8, the engine-brake fraction 0x3f8. The brake-pedal
+    // hook is off (xmm14 at the 1.61 site is no longer the raw pedal), the engage step too (the generic gearbox changed).
+#define LAYOUT_162(GAME) \
+    { "1.62", GAME, \
+      "48 8B 46 10 80 B8 A8 14 00 00 00 74 ?? F2 0F 10 83 44 02 00 00", \
+      "4C 63 A9 B0 14 00 00", \
+      "40 53 48 83 EC 40 48 8B D9 0F 29 7C 24 20 48 8B 49 10 E8", \
+      "48 8B 05 ?? ?? ?? ?? B2 01 44 0F 29 8C 24 90 00 00 00 44 0F 29 94 24 80 00 00 00 48 8B 88 ?? ?? ?? ?? E8", \
+      "89 46 70", "80 BE 15 01 00 00 00", "44 8B 80 B0 14 00 00", \
+      "F3 44 0F 59 97 C8 01 00 00", \
+      "48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 41 0F 2F C3", \
+      0x10, 0x18, 0x70, 0x115, \
+      0x14b0, 0x148c, 0x1490, 0x1040, 0x1038, \
+      0x1c8, 0x1d8, 0x1e0, 0x234, 0x244, \
+      0x1c8, \
+      0x204, \
+      0x270, 0x150, 0x358, \
+      0x14a8, 0x14a4, 0x270, 0x274, 0x3f8, \
+      0x1e38, \
+      "48 8D 88 ?? ?? ?? ?? 48 85 C9 74 ?? 48 8B 01 48 8D 54", \
+      "49 8B E3 5F 5E 5D E9 ?? ?? ?? ??", \
+      "F3 0F 59 3D ?? ?? ?? ?? E8", \
+      0x1c0, \
+      0x1b8, 0x1bc, 0x1e4, 0x1e8, 0x1f8, 0x200, 0x204, 0x208, 0x20c, 0x214, \
+      0x24c, 0x24d, 0x1e2c, 0x3b8, 0x25c, 0x1dd4, 0x1d94, 0x1d98, 0x1494, 0x14ac, \
+      0x1470, 0x1488, 0x6b8, 0x108, 0, 0x10c, 0x230, 6, \
+      "48 8B CB F3 44 0F 11 83 B8 1D 00 00 F3 45 0F 5F C3 41 0F 28 D0 E8", \
+      "85 C0 74 17 F6 87 4C 02 00 00 10 75 0E 44 0F 2F 8F E4 01 00 00 73 04 B2 01", \
+      "0F 2F CF 76 ?? 83 BB B8 01 00 00 02 75 ?? 0F 2F BB E4 01 00 00 72 0A F3 0F 11 81 8C 14 00 00", \
+      "", "", "", "", \
+      "48 8B 43 18 83 A0 A0 02 00 00 DF 80 BB BC 01 00 00 00", \
+      "83 88 A0 02 00 00 20 EB 0B 48 8B 43 18 83 A0 A0 02 00 00 DF", \
+      "", \
+      "8B 00 89 81 AC 14 00 00 48 8D 45 7F", \
+      "48 8B 4E 18 41 0F 2F C2", \
+      "48 8D 4C 24 38 48 0F 46 C8", \
+      0x1cd, 0x1ce, 0x1d0, 0x1e1, 0x1e9b8, 0x1e9c8, \
+      "E8 ?? ?? ?? ?? B1 01 EB 02 32 C9 84 C9 74 ?? 48 8B 47 18 48 8B 88 40 10 00 00 E8 ?? ?? ?? ?? 8B 97 D0 01 00 00 3B 90 74 02 00 00 73 ?? FF C2 48 8B CF E8 ?? ?? ?? ??", \
+      "E8 ?? ?? ?? ?? B1 01 EB 02 32 C9 84 C9 74 ?? 48 8D 97 A0 E9 01 00 E8 ?? ?? ?? ?? 8B 97 D0 01 00 00 84 C0 41 8B CF 88 87 E1 01 00 00 0F 95 C1 3B D1 76 ?? FF CA 48 8B CF E8 ?? ?? ?? ??" }
+    LAYOUT_162("eut2"),
+    LAYOUT_162("ats"),
 };
 #define N_LAYOUTS (int)(sizeof g_layouts / sizeof g_layouts[0])
 
@@ -255,11 +383,28 @@ static const char *discover_with()
     if (*(const unsigned char *)(hits[0] + 18) != 0xE8) return "grade fn call";
     G.grade_fn = call_target(hits[0] + 18);
     if (!in_text(G.grade_fn)) return "grade fn";
-    int n = calls_to(G.lobound_fn, G.update_lo, G.update_hi, sites, 8);
-    if (n != 2) return "lower bound calls in update";
+    int n;
+    const char *start_chk;
+    if (game_is_162()) {
+        // 1.62: one wrapper (call start; mov rcx,rbx; mov edi,eax; call lower bound; max) that the update calls; the chooser
+        // and the manual-mode fn call the lower bound on their own (no start call before them)
+        uintptr_t all[8];
+        int na = calls_to(G.lobound_fn, tlo, thi, all, 8);
+        n = 0;
+        for (int i = 0; i < na; i++)
+            if (*(const unsigned char *)(all[i] - 10) == 0xE8 && pat_at("48 8B CB 8B F8", all[i] - 5) && n < 8) sites[n++] = all[i];
+        if (n != 1) return "start-gear wrapper";
+        uintptr_t wlo, whi, u[2];
+        if (!func_extent(sites[0], &wlo, &whi) || calls_to(wlo, G.update_lo, G.update_hi, u, 2) != 1) return "start-gear wrapper call in update";
+        start_chk = "48 8B CB 8B F8";
+    } else {
+        n = calls_to(G.lobound_fn, G.update_lo, G.update_hi, sites, 8);
+        if (n != 2) return "lower bound calls in update";
+        start_chk = "48 8B CE 8B D8";
+    }
     for (int i = 0; i < n; i++) {
         uintptr_t s = sites[i] - 10;
-        if (*(const unsigned char *)s != 0xE8 || !pat_at("48 8B CE 8B D8", sites[i] - 5)) return "start-gear call";
+        if (*(const unsigned char *)s != 0xE8 || !pat_at(start_chk, sites[i] - 5)) return "start-gear call";
         uintptr_t t = call_target(s);
         if (G.start_fn && t != G.start_fn) return "start-gear fns differ";
         G.start_fn = t;
@@ -272,8 +417,12 @@ static const char *discover_with()
     int32_t rel;
     memcpy(&rel, (const void *)(hits[0] + 3), 4);
     G.base_ctrl_slot = hits[0] + 7 + (intptr_t)rel;
-    memcpy(&G.game_actor_off, (const void *)(hits[0] + 12), 4);
-    G.mass_fn = call_target(hits[0] + 16);
+    {   // the pattern ends in mov rcx,[rax+game_actor]; call mass (1.62: two movaps sit between mov dl,1 and the load)
+        int n = 0;
+        for (const char *q = L->pat_mass; *q; q++) if (*q != ' ' && (q == L->pat_mass || q[-1] == ' ')) n++;
+        memcpy(&G.game_actor_off, (const void *)(hits[0] + n - 5), 4);
+        G.mass_fn = call_target(hits[0] + n - 1);
+    }
     if (!in_text(G.mass_fn) || G.game_actor_off > 0x10000) return "mass fn";
 
     // optional: the adaptive-shift cvar and its reader
@@ -286,8 +435,8 @@ static const char *discover_with()
 
     // optional: the update's tail jump into the generic gearbox (rcx = self),
     // the last point before the gearbox acts on self+0x68 (lka-roll-re notes B)
-    if (pat_scan(L->pat_tail, G.update_lo, G.update_hi, hits, 8) == 1 && *(const unsigned char *)(hits[0] + 8) == 0xE9)
-        G.tail_site = hits[0] + 8;
+    if (pat_scan(L->pat_tail, G.update_lo, G.update_hi, hits, 8) == 1 && *(const unsigned char *)(hits[0] + L->tail_jmp) == 0xE9)
+        G.tail_site = hits[0] + L->tail_jmp;
 
     // optional: the stop threshold (mulss xmm7,[0.8] = 0.8 x idle) in the update (lka-roll-re notes C)
     if (pat_scan(L->pat_stop, G.update_lo, G.update_hi, hits, 8) == 1) G.stop_site = hits[0];
@@ -426,7 +575,7 @@ int game_patch_stop(uintptr_t site, float (*fn)(float, float, float))
         0xF3, 0x0F, 0x7F, 0x6C, 0x24, 0x70,                                // .. xmm5
         0x0F, 0x28, 0xC7,                                                  // movaps xmm0, xmm7
         0x41, 0x0F, 0x28, 0xCA,                                            // movaps xmm1, xmm10
-        0x41, 0x0F, 0x28, 0xD4,                                            // movaps xmm2, xmm12
+        0x41, 0x0F, 0x28, 0xD4,                                            // movaps xmm2, xmm12 (the brake; 1.61: xmm13)
         0x48, 0xB8 };                                                      // mov rax, fn
     static const unsigned char tail[] = {
         0xFF, 0xD0,                                                        // call rax
@@ -441,6 +590,8 @@ int game_patch_stop(uintptr_t site, float (*fn)(float, float, float))
         0x41, 0x5B, 0x41, 0x5A, 0x41, 0x59, 0x41, 0x58, 0x5A, 0x59, 0x58,  // pop r11 r10 r9 r8 rdx rcx rax
         0xC3 };                                                            // ret
     memcpy(p, head, sizeof head); p += sizeof head;
+    if (game_is_162()) { p[-7] = 0xCD; p[-3] = 0xD7; }                   // 1.62: the update keeps the throttle in xmm13, the brake in xmm15
+    else if (game_is_161()) p[-3] = 0xD5;                               // the brake moved to xmm13 on 1.61 (ModRM of the movaps)
     memcpy(p, &fn, 8); p += 8;
     memcpy(p, tail, sizeof tail); p += sizeof tail;
     g_tramp_used += ((p - c) + 15) & ~(size_t)15;
@@ -557,10 +708,10 @@ int game_patch_skip_if(uintptr_t site, int len, const unsigned char *skip)
     return patch_with_thunk(site, len, code, p - code);
 }
 
-// After the original len bytes (they load xmm<reg>, 0-7): xmm<reg> = 0 while *flag. Flags are kept.
+// After the original len bytes (they load xmm<reg>, 0-15): xmm<reg> = 0 while *flag. Flags are kept.
 int game_patch_zero_xmm_if(uintptr_t site, int len, int reg, const unsigned char *flag)
 {
-    if (reg < 0 || reg > 7) return 0;
+    if (reg < 0 || reg > 15) return 0;
     if (!g_tramp && !(g_tramp = alloc_near(site))) return 0;
     unsigned char code[64], *p = code;
     memcpy(p, (const void *)site, len); p += len;            // original: the load
@@ -569,8 +720,9 @@ int game_patch_zero_xmm_if(uintptr_t site, int len, int reg, const unsigned char
     *p++ = 0x48; *p++ = 0xB8; memcpy(p, &flag, 8); p += 8;    // mov rax, flag
     *p++ = 0x80; *p++ = 0x38; *p++ = 0x00;                    // cmp byte [rax], 0
     *p++ = 0x58;                                              // pop rax
-    *p++ = 0x74; *p++ = 0x03;                                 // je over the clear
-    *p++ = 0x0F; *p++ = 0x57; *p++ = (unsigned char)(0xC0 | reg << 3 | reg);  // xorps xmmR, xmmR
+    *p++ = 0x74; *p++ = reg >= 8 ? 0x04 : 0x03;              // je over the clear (3 bytes, 4 with REX.B)
+    if (reg >= 8) *p++ = 0x41;                                // xorps xmmR, xmmR (REX.B for xmm8-15)
+    *p++ = 0x0F; *p++ = 0x57; *p++ = (unsigned char)(0xC0 | (reg & 7) << 3 | (reg & 7));
     *p++ = 0x9D;                                              // popfq
     *p++ = 0xC3;                                              // ret
     return patch_with_thunk(site, len, code, p - code);
@@ -582,7 +734,7 @@ int game_patch_zero_xmm_if(uintptr_t site, int len, int reg, const unsigned char
 int game_patch_comiss_xmm0(uintptr_t site, float value)
 {
     const unsigned char *b = (const unsigned char *)site;
-    if (b[0] != 0x0F || b[1] != 0x2F || b[2] != 0xC7 || b[3] != 0x76 || b[4] > 0x7F) return 0;
+    if (b[0] != 0x0F || b[1] != 0x2F || (b[2] != 0xC7 && b[2] != 0xC6) || b[3] != 0x76 || b[4] > 0x7F) return 0;   // xmm7 (1.60/1.61) or xmm6 (1.62)
     if (!g_tramp && !(g_tramp = alloc_near(site))) return 0;
     static float consts[4];
     static int n_consts;
@@ -646,14 +798,19 @@ int game_patch_call(uintptr_t site, void *stub)
 // The vehicle's own clutch state (gearbox sequencer, stop rule) stays as the game has it.
 int game_patch_clutch_floor(uintptr_t site, clutch_floor *cf)
 {
-    static const unsigned char orig[] = { 0x8B, 0x83, 0x2C, 0x14, 0x00, 0x00, 0x89, 0x86, 0x30, 0x03, 0x00, 0x00 };
+    unsigned char orig[12] = { 0x8B, 0x83, 0, 0, 0, 0, 0x89, 0x86, 0x30, 0x03, 0x00, 0x00 };   // mov eax,[rbx+clutch]; mov [rsi+0x330],eax
+    unsigned cl = L->i_clutch;
+    for (int i = 0; i < 4; i++) orig[2 + i] = (unsigned char)(cl >> (8 * i));
+    unsigned char dclutch = game_is_162() ? 0x38 : 0x30;   // drive+0x330, 1.62: +0x338 (the drive object grew 8 there)
+    orig[8] = dclutch;
     if (memcmp((const void *)site, orig, sizeof orig)) return 0;
     if (!g_tramp && !(g_tramp = alloc_near(site))) return 0;
     if (g_tramp_used + 64 > 0x1000) return 0;
     unsigned char *c = g_tramp + g_tramp_used, *p = c;
-    static const unsigned char a[] = {
-        0x8B, 0x83, 0x2C, 0x14, 0x00, 0x00,              // mov eax,[rbx+0x142c]
-        0x48, 0xBA };                                    // mov rdx, imm64 (cf)
+    *p++ = 0x8B; *p++ = 0x83;                             // mov eax,[rbx+clutch]
+    for (int i = 0; i < 4; i++) *p++ = (unsigned char)(cl >> (8 * i));
+    *p++ = 0x48; *p++ = 0xBA;                             // mov rdx, imm64 (cf)
+    memcpy(p, &cf, 8); p += 8;
     static const unsigned char b[] = {
         0x48, 0x3B, 0x1A,                                // cmp rbx,[rdx]
         0x75, 0x03,                                      // jne +3 (store)
@@ -661,9 +818,7 @@ int game_patch_clutch_floor(uintptr_t site, clutch_floor *cf)
                                                          // the automatic keeps its clutch open at idle, a max() never closed it)
         0x89, 0x86, 0x30, 0x03, 0x00, 0x00,              // store: mov [rsi+0x330],eax
         0xC3 };                                          // ret
-    memcpy(p, a, sizeof a); p += sizeof a;
-    memcpy(p, &cf, 8); p += 8;
-    memcpy(p, b, sizeof b); p += sizeof b;
+    memcpy(p, b, sizeof b); p[-5] = dclutch; p += sizeof b;
     g_tramp_used += ((p - c) + 15) & ~(size_t)15;
     int64_t rel64 = (int64_t)(uintptr_t)c - (int64_t)(site + 5);
     if (rel64 < INT32_MIN || rel64 > INT32_MAX) return 0;
@@ -692,7 +847,9 @@ int game_patch_clutch_floor(uintptr_t site, clutch_floor *cf)
 // 8 bytes go in with one locked 8-byte compare-exchange: the site must be 8-aligned (it is, 0x1408c87a8), else we decline.
 int game_patch_retarder(uintptr_t site, const retarder_scale *rs)
 {
-    static const unsigned char orig[] = { 0xF3, 0x0F, 0x10, 0x80, 0x44, 0x14, 0x00, 0x00 };
+    unsigned char orig[8] = { 0xF3, 0x0F, 0x10, 0x80, 0, 0, 0, 0 };   // movss xmm0,[rax+retarder]
+    unsigned r = L->i_retarder;
+    for (int i = 0; i < 4; i++) orig[4 + i] = (unsigned char)(r >> (8 * i));
     if (site & 7) return 0;
     if (memcmp((const void *)site, orig, sizeof orig)) return 0;
     if (!g_tramp && !(g_tramp = alloc_near(site))) return 0;
@@ -752,19 +909,20 @@ void gb_set_target(void *self, int g) { *(volatile int32_t *)((char *)self + L->
 // they keep a target we set until the generic gearbox reads it.
 void gb_rest_state(void *self, int drive, int latch)
 {
-    *(volatile int32_t *)((char *)self + 0x110) = drive;
-    *(volatile unsigned char *)((char *)self + 0x101) = (unsigned char)latch;
+    *(volatile int32_t *)((char *)self + L->s_drive) = drive;
+    if (L->s_latch) *(volatile unsigned char *)((char *)self + L->s_latch) = (unsigned char)latch;   // 1.62 has no latch (drive state 3 says it)
 }
 
 // The generic gearbox's own engage step from its gap state (0x140601c7c, neutral-exit-re notes
 // § 2): with gear 0 it waits there for throttle; this does
 // what throttle would: vfunc +0x70(self, gear), state 3 (closing), +0x2c = 1.
-// Only when the gap-state code matches 1.60 exactly.
+// Only when the gap-state code matches the layout exactly (per-layout pattern).
 static int g_engage_ok;
 int game_engage_init()
 {
-    g_engage_ok = L && L->s_state == 0x18 && game_scan("0F 2F 80 B8 01 00 00 72 ?? 85 C9 75 ?? 85 D2 74 ?? 41 0F 2F 80 24 14 00 00 72 ?? 48 8B 03 "
-                                                    "48 8B CB FF 50 78") != 0;
+    g_engage_ok = L && L->s_state == 0x18 && !game_is_162() && game_scan(game_is_161() ?   // 1.62: the generic gearbox's engage path changed (off)
+        "48 8B 43 10 83 B8 D8 14 00 00 00 75 ?? 83 7B 70 00 74 ?? 0F 2F B8 B4 14 00 00 72 ?? 48 8B 03 48 8B CB FF 50 78" :
+        "0F 2F 80 B8 01 00 00 72 ?? 85 C9 75 ?? 85 D2 74 ?? 41 0F 2F 80 24 14 00 00 72 ?? 48 8B 03 48 8B CB FF 50 78") != 0;
     return g_engage_ok;
 }
 
@@ -775,7 +933,7 @@ int gb_engage(void *self, int g)
     void **vt = *(void ***)self;
     if (!readable(vt, 0x78)) return 0;
     ((engage_fn)vt[0x70 / 8])(self, g);
-    *(volatile int32_t *)((char *)self + 0x18) = 3;
+    *(volatile int32_t *)((char *)self + L->s_state) = 3;
     *((volatile unsigned char *)self + 0x2c) = 1;
     return 1;
 }
@@ -802,11 +960,54 @@ static char *resolve(void *self, unsigned handle_off)
     return h ? (char *)((resolve_fn_t)G.resolve_fn)(h) : NULL;
 }
 
+static int writable(const void *p, size_t n);
+#ifdef DAZDRIVE_DEV
+// Chiptune test (dev only, 28-10): the engine's max torque x5 in the game's own engine object, once per engine object, to learn
+// whether the physics reads it live. TrueShift keeps seeing the original torque, so only the physics can tell the difference.
+// The originals go back at shutdown (game_tune_restore). Remove after the test.
+#define TUNE_TEST_K 1.0f   // (x5 for the test; 1 = off, the Tune button still flips x5 / x1)
+static struct { char *eng; float orig; } s_tune[8];
+static int s_tune_n;
+static float tune_test(char *eng)
+{
+    float *t = (float *)(eng + L->e_torque);
+    for (int i = 0; i < s_tune_n; i++) if (s_tune[i].eng == eng) return s_tune[i].orig;
+    float orig = *t;
+    if (s_tune_n >= 8 || !(orig > 50 && orig < 20000) || !writable(t, 4)) return orig;
+    s_tune[s_tune_n].eng = eng; s_tune[s_tune_n].orig = orig; s_tune_n++;
+    *t = orig * TUNE_TEST_K;
+    logv(1, "chiptune test: engine torque %.0f -> %.0f N m (read back %.0f)", orig, orig * TUNE_TEST_K, *t);
+    return orig;
+}
+void game_tune_set(float k)
+{
+    for (int i = 0; i < s_tune_n; i++)
+        if (writable(s_tune[i].eng + L->e_torque, 4)) *(float *)(s_tune[i].eng + L->e_torque) = s_tune[i].orig * k;
+}
+// The engine objects the test wrote, and their original torque (for the scan in dev.cpp)
+int game_tune_engines(char **eng, float *orig, int max)
+{
+    int n = s_tune_n < max ? s_tune_n : max;
+    for (int i = 0; i < n; i++) { eng[i] = s_tune[i].eng; orig[i] = s_tune[i].orig; }
+    return n;
+}
+void game_tune_restore()
+{
+    for (int i = 0; i < s_tune_n; i++)
+        if (writable(s_tune[i].eng + L->e_torque, 4)) *(float *)(s_tune[i].eng + L->e_torque) = s_tune[i].orig;
+    s_tune_n = 0;
+}
+#endif
+
 int gb_engine(void *self, engine_info *e)
 {
     char *eng = resolve(self, L->i_engine);
     if (!eng || !readable(eng, L->e_ranges + 32)) return 0;
+#ifdef DAZDRIVE_DEV
+    e->torque = tune_test(eng);
+#else
     e->torque = *(float *)(eng + L->e_torque);
+#endif
     e->rpm_limit = *(float *)(eng + L->e_rpm_limit);
     memcpy(e->range, eng + L->e_ranges, sizeof e->range);
     const float *c = *(const float **)(eng + L->e_curve);
@@ -826,10 +1027,12 @@ int gb_engine(void *self, engine_info *e)
     char *tr = resolve(self, L->i_trans);
     e->shift_time = tr && readable(tr, L->t_shift_time + 4) ? *(float *)(tr + L->t_shift_time) : NAN;
     if (!(e->shift_time > 0.05f && e->shift_time < 5.0f)) e->shift_time = 0.8f;
-    if (!(e->torque > 50 && e->torque < 20000 && e->rpm_limit > 800 && e->rpm_limit < 10000)) return 0;
-    for (int i = 0; i < 4; i++)
-        if (!(e->range[i][0] > 200 && e->range[i][1] > e->range[i][0] && e->range[i][1] < 10000)) return 0;
-    return e->n_curve >= 2;
+    // WP-TC2: the stall torque ratio sits 8 bytes under the shift time, the diff 4 (live RE, ETS2 1.61); trusted only where that diff equals the truck config's (core/vehicle.cpp).
+    // Every layout that has the shift time gets the same read: ATS 1.61 has the ETS2 1.61 object (0x1c8), 1.60 has it at 0x1c0 (-8 = 0x1b8 not seen live: the diff check decides).
+    engine_read_stall(e, tr && L->t_shift_time >= 8 && readable(tr, L->t_shift_time + 4) ? tr : NULL, L->t_shift_time, T.diff);
+    // 1 = the torque is usable. What the definition did not give (a mod engine with only `torque:`: no curve, no ranges, no limit) is marked in e->missing and the model
+    // stands the game's own defaults in for it (vehicle_update, core/vehicle.cpp; the ride of 04-11 read none of it and TrueShift was blind for the whole drive).
+    return engine_raw_check(e);
 }
 
 float curve_factor(const engine_info *e, float rpm)
@@ -863,6 +1066,19 @@ float game_mass()
     float m = ((mass_fn_t)G.mass_fn)(ga, true);
     return m > 500.0f && m < 500000.0f ? m : NAN;
 }
+
+float game_mass_own()
+{
+    char *ga = game_actor();
+    if (!ga || !G.mass_fn) return NAN;
+    float m = ((mass_fn_t)G.mass_fn)(ga, false);
+    return m > 200.0f && m < 200000.0f ? m : NAN;
+}
+
+// The ATS game layer (ds-ats161) fills these in; until then the mass rule of vehicle_class() carries the detection and the
+// truck limit (truck.navigation.speed.limit) is the only limit the suite reads.
+int game_vehicle_is_car() { return -1; }
+float game_car_speed_limit_ms() { return NAN; }
 
 float game_grade_deg(void *self)
 {
@@ -962,6 +1178,134 @@ float game_ebrake_level(void *self)
         if (f >= 0.0f && f <= 1.0f) lv = lv > f ? lv : f;
     }
     return lv;
+}
+
+// ---------------------------------------------------------------- engine brake lever (modules/ebrake.cpp, core/ebrakelogic.h)
+
+// The key handler consumes the up and down key event with a call, then acts on the press (stage + 1 / - 1 through the stage setter).
+// We wrap those two calls: the callback sees every press of the player's keys, with its direction, BEFORE the handler acts on it.
+// Layout-gated (L->eb_pat_*): the patterns start at the E8 of the consume call and end with the E8 of the stage setter call.
+typedef void (*eb_consume_fn)(void *act);
+typedef void (*eb_setter_fn)(void *game_actor, unsigned level);
+static ebrake_press_fn s_eb_cb;
+static eb_consume_fn s_eb_consume;
+static eb_setter_fn s_eb_setter;
+
+static void eb_consume_stub(void *act)
+{
+    s_eb_consume(act);
+    char *ga = game_actor_safe();
+    if (!ga || !s_eb_cb || !readable(ga + L->a_eb_up, 8) || !readable(ga + L->a_eb_dwn, 8)) return;
+    if (act == *(void **)(ga + L->a_eb_up)) s_eb_cb(ga, 1);
+    else if (act == *(void **)(ga + L->a_eb_dwn)) s_eb_cb(ga, -1);
+}
+
+static int pat_len(const char *p)
+{
+    int n = 0;
+    for (const char *c = p; *c; c++) if (*c == ' ') n++;
+    return n + 1;
+}
+
+// The bytes of a mov with a 32-bit displacement: `<prefix> disp32`, searched in the first 0x80 bytes of the setter.
+static int has_disp_store(uintptr_t fn, const unsigned char *prefix, int np, unsigned disp)
+{
+    unsigned char want[8];
+    memcpy(want, prefix, np);
+    for (int i = 0; i < 4; i++) want[np + i] = (unsigned char)(disp >> (8 * i));
+    for (int i = 0; i + np + 4 <= 0x80; i++)
+        if (!memcmp((const void *)(fn + i), want, np + 4)) return 1;
+    return 0;
+}
+
+// Resolve the game's stage setter from the key code patterns (no patching): the same checks the lever's hook needs. 1 = s_eb_setter is set.
+// u / d (optional) get the two scan hits (the up and down key calls).
+static int eb_resolve(const char **why, uintptr_t *u_out, uintptr_t *d_out)
+{
+    *why = NULL;
+    if (!L || !L->eb_pat_up || !L->eb_pat_dwn || !L->a_eb_on || !L->a_eb_stage || !L->a_eb_up || !L->a_eb_dwn || !L->e_eb_cap || !L->i_engine) {
+        *why = "this game build is not verified for it";
+        return 0;
+    }
+    uintptr_t u = game_scan(L->eb_pat_up), d = game_scan(L->eb_pat_dwn);
+    if (!u || !d) { *why = !u && !d ? "neither key code found" : !u ? "up key code not found" : "down key code not found"; return 0; }
+    uintptr_t us = u + pat_len(L->eb_pat_up) - 5, ds = d + pat_len(L->eb_pat_dwn) - 5;
+    if (*(const unsigned char *)u != 0xE8 || *(const unsigned char *)d != 0xE8 || *(const unsigned char *)us != 0xE8 || *(const unsigned char *)ds != 0xE8) {
+        *why = "key code looks different";
+        return 0;
+    }
+    if (call_target(u) != call_target(d) || call_target(us) != call_target(ds)) { *why = "the two keys do not share their calls"; return 0; }
+    uintptr_t set = call_target(us);
+    if (!in_text(set) || !in_text(call_target(u))) { *why = "call targets outside the code"; return 0; }
+    // the setter must read the on byte and store the stage at the offsets of the layout: movzx ebx,[rdi+on] and mov [rdi+stage],r9d
+    static const unsigned char rd_on[] = { 0x0F, 0xB6, 0x9F }, wr_stage[] = { 0x44, 0x89, 0x8F };
+    if (!has_disp_store(set, rd_on, 3, L->a_eb_on) || !has_disp_store(set, wr_stage, 3, L->a_eb_stage)) { *why = "stage setter does not match the layout"; return 0; }
+    s_eb_setter = (eb_setter_fn)set;
+    if (u_out) *u_out = u;
+    if (d_out) *d_out = d;
+    return 1;
+}
+
+int game_ebrake_hook(ebrake_press_fn cb, const char **why)
+{
+    uintptr_t u = 0, d = 0;
+    if (!eb_resolve(why, &u, &d)) return 0;
+    s_eb_consume = (eb_consume_fn)call_target(u);
+    s_eb_cb = cb;
+    if (!game_patch_call(u, (void *)eb_consume_stub) || !game_patch_call(d, (void *)eb_consume_stub)) { s_eb_cb = NULL; *why = "patching the calls failed"; return 0; }
+    return 1;
+}
+
+// The stage setter alone, without wrapping the keys (the descent control): 1 = game_ebrake_set can be called.
+int game_ebrake_setter(const char **why)
+{
+    if (s_eb_setter) { *why = NULL; return 1; }
+    return eb_resolve(why, NULL, NULL);
+}
+
+// The stage count of the player's engine (engine def u32), 0 = unknown. game_actor+0x18 is the vehicle (the stage setter reads it the same way).
+unsigned game_ebrake_cap(char *ga)
+{
+    if (!ga || !L || !G.resolve_fn || !L->e_eb_cap || !L->i_engine || !readable(ga + 0x18, 8)) return 0;
+    char *in = *(char **)(ga + 0x18);
+    if (!in || !readable(in + L->i_engine, 8)) return 0;
+    void *h = *(void **)(in + L->i_engine);
+    char *eng = h ? (char *)((resolve_fn_t)G.resolve_fn)(h) : NULL;
+    return eng && readable(eng + L->e_eb_cap, 4) ? *(unsigned *)(eng + L->e_eb_cap) : 0;
+}
+
+int game_ebrake_state(char *ga, int *held, int *on, unsigned *stage, int *flag)
+{
+    if (!ga || !L || !L->a_eb_on || !L->a_eb_stage || !readable(ga + L->a_eb_on, 1) || !readable(ga + L->a_eb_stage, 4)) return 0;
+    *on = *(unsigned char *)(ga + L->a_eb_on);
+    *stage = *(unsigned *)(ga + L->a_eb_stage);
+    *held = L->a_eb_held && readable(ga + L->a_eb_held, 1) ? *(unsigned char *)(ga + L->a_eb_held) : 0;
+    *flag = L->a_eb_flag && readable(ga + L->a_eb_flag, 1) ? *(unsigned char *)(ga + L->a_eb_flag) : 0;
+    return 1;
+}
+
+// Set the on byte and the stage the way the key handler does: the byte, then the stage setter (it also recomputes the brake fraction;
+// with the brake off or the stage 0 it zeroes the stage values, so the brake does nothing).
+// Threads: the key handler (which calls the setter), the pedal function (which reads these bytes and computes the engine brake
+// demand) and the throttle function (whose cruise call is our actuator's tick) are all called one after the other by the same parent,
+// the game_actor update, in this order (ETS2 and ATS 1.61, call graph checked): key handler, pedal function, and inside it the throttle
+// function. So this is safe from the callback of game_ebrake_hook and from the actuator's ACT_PRE / ACT_POST hooks (the tick is inside
+// the pedal function and before its engine brake block and cruise cancel rules), and from nowhere else (not the telemetry frame).
+void game_ebrake_put(char *ga, int on, unsigned stage)
+{
+    if (!ga || !s_eb_setter || !L->a_eb_on || !readable(ga + L->a_eb_on, 1)) return;
+    *(volatile unsigned char *)(ga + L->a_eb_on) = on ? 1 : 0;
+    s_eb_setter(ga, stage);
+}
+
+// The same plus the handler's flag byte (the "stage lever was used" byte the cruise rules read): the descent control writes the flag
+// too, so the game's cruise keeps running with the brake on (flag set and the cruise's overspeed setting on) and its own overspeed
+// engine brake stays within the stage. flag < 0 = leave it.
+void game_ebrake_set(char *ga, int on, unsigned stage, int flag)
+{
+    if (!ga || !L) return;
+    game_ebrake_put(ga, on, stage);
+    if (flag >= 0 && L->a_eb_flag && readable(ga + L->a_eb_flag, 1)) *(volatile unsigned char *)(ga + L->a_eb_flag) = flag ? 1 : 0;
 }
 
 // ---------------------------------------------------------------- game_ctrl (outside the hooks)
@@ -1074,4 +1418,165 @@ char *game_actor_safe()
     if (!gc || !G.game_actor_off || !readable(gc + G.game_actor_off, 8)) return NULL;
     char *ga = *(char **)(gc + G.game_actor_off);
     return ga && readable(ga, 0x2000) ? ga : NULL;
+}
+
+// ---------------------------------------------------------------- brake pedal, brake light, retarder feed
+// The mechanism for a later brake channel (brakepedal-re notes; the stubs and their reasons are in game.h). Each hook is installed
+// at start only with its [core] switch, only when the layout has the offsets the stub reads (a_req, a_thr_pedal, a_brake_pedal,
+// a_engine_run, i_retarder), and only when its pattern has exactly one hit and every self-check passes; otherwise the game's
+// code stays as it is and the API calls below do nothing. The patterns and site/self-check offsets are per-layout (in the layout).
+
+static brake_pedal_state s_bp;
+static brake_light_block s_bl;
+static retarder_feed_block s_rf;
+static int s_bp_in, s_bl_in, s_rf_in;
+
+// The game thread, every tick, from the pedal stub. game_actor is read only while a provider is registered.
+float game_brake_pedal_fn(float raw, float req, void *ga)
+{
+    return brake_pedal_hook_body(&s_bp, raw, req, ga, s_bp.provider ? game_actor() : NULL, V.electric);
+}
+void game_brake_pedal_set_provider(float (*fn)(float raw, float req, void *ga)) { brake_pedal_set(&s_bp, fn); }
+void game_brake_pedal_heartbeat() { brake_pedal_beat(&s_bp); }
+int game_brake_pedal_ok() { return s_bp_in; }
+const brake_pedal_counts *game_brake_pedal_counts() { return &s_bp.n; }
+
+int game_brake_light_request(int on) { return s_bl_in ? brake_light_set(&s_bl, on ? game_actor_safe() : NULL, on) : 0; }
+int game_brake_light_ok() { return s_bl_in; }
+int game_retarder_feed(float demand)
+{
+    return s_rf_in ? retarder_feed_set(&s_rf, demand > 0.0f ? game_actor_safe() : NULL, demand) : 0;
+}
+int game_retarder_feed_ok() { return s_rf_in; }
+
+// The 1.61 update is detected by its tail jump (the epilogue lost its pop rbx). The brake hooks have per-layout patterns,
+// so the 1.60 self-checks (pedal getter, hill-start max) are skipped on 1.61 where the service-brake max moved registers:
+// only the request read anchors the brake-pedal site there.
+
+// The pedal getter (0x140990ee0, 1.60): returns game_actor+0x1cc0 (the throttle) when the pedals are swapped, else +0x1cc4
+// (the brake field game_brake_pedal_fn compares raw with). 1.60 only (the 1.61 light/pedal checks do not follow it).
+static int brake_getter_ok(uintptr_t fn)
+{
+    return in_text(fn) && pat_at("F3 0F 10 87 C0 1C 00 00", fn + 0x44) && pat_at("F3 0F 10 87 C4 1C 00 00", fn + 0x57);
+}
+
+// Put a stub of n bytes next to the game and turn the len bytes at site (they must be orig) into `call stub` + nops. cas: the
+// bytes lie within one aligned qword and go in with one locked compare-exchange (safe while the game runs that code, like the
+// retarder hook); else a plain write, only at start (before the game simulates anything, like patch_with_thunk).
+static int patch_call_stub(uintptr_t site, int len, const unsigned char *orig, const unsigned char *stub, size_t n, int cas)
+{
+    if (len < 5 || len > 8 || memcmp((const void *)site, orig, len)) return 0;
+    if (cas && (site & 7) + len > 8) return 0;
+    if (!g_tramp && !(g_tramp = alloc_near(site))) return 0;
+    if (g_tramp_used + n + 16 > 0x1000) return 0;
+    unsigned char *c = g_tramp + g_tramp_used;
+    int64_t rel64 = (int64_t)(uintptr_t)c - (int64_t)(site + 5);
+    if (rel64 < INT32_MIN || rel64 > INT32_MAX) return 0;
+    memcpy(c, stub, n);
+    g_tramp_used += (n + 15) & ~(size_t)15;
+    unsigned char rep[8];
+    memset(rep, 0x90, sizeof rep);
+    rep[0] = 0xE8;
+    int32_t rel = (int32_t)rel64;
+    memcpy(rep + 1, &rel, 4);
+    DWORD old;
+    if (cas) {
+        uintptr_t q = site & ~(uintptr_t)7;
+        LONG64 was, want;
+        unsigned char nb[8];
+        memcpy(&was, (const void *)q, 8);
+        memcpy(nb, &was, 8);
+        memcpy(nb + (site - q), rep, len);
+        memcpy(&want, nb, 8);
+        if (!VirtualProtect((void *)q, 8, PAGE_EXECUTE_READWRITE, &old)) return 0;
+        LONG64 got = InterlockedCompareExchange64((volatile LONG64 *)q, want, was);
+        VirtualProtect((void *)q, 8, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), (void *)q, 8);
+        return got == was;
+    }
+    if (!VirtualProtect((void *)site, len, PAGE_EXECUTE_READWRITE, &old)) return 0;
+    memcpy((void *)site, rep, len);
+    VirtualProtect((void *)site, len, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), (void *)site, len);
+    return 1;
+}
+
+static const char *brake_pedal_check(uintptr_t *site)
+{
+    if (!L->bp_pat || !*L->bp_pat) return "not verified on this game version";
+    uintptr_t h = game_scan(L->bp_pat);
+    if (!h) return "pattern (not exactly one hit)";
+    if (game_is_161()) { *site = h + 8; return NULL; }   // the request read anchors the pattern; registers differ
+    uintptr_t s = h + 3;
+    if (!pat_at(L->bp_getter, s - 0x2d8)) return "pedal getter call at site-0x2d8";
+    if (!brake_getter_ok(call_target(s - 0x2d8))) return "pedal getter body (+0x1cc0 / +0x1cc4 reads)";
+    if (!pat_at(L->bp_req, s - 0x71)) return "brake request read at site-0x71";
+    if (!pat_at(L->bp_hill, s - 0x8d)) return "hill-start max at site-0x8d";
+    *site = s;
+    return NULL;
+}
+
+static const char *brake_light_check(uintptr_t *site)
+{
+    uintptr_t h = game_scan(L->bl_pat);
+    if (!h) return "pattern (not exactly one hit)";
+    uintptr_t s = h + 4;
+    if (!pat_at(L->bl_on, s - 0xd)) return "'on' store at site-0xd";
+    if (!game_is_161()) {
+        if (!pat_at(L->bl_getter, s - 0x67)) return "pedal getter call at site-0x67";
+        if (!brake_getter_ok(call_target(s - 0x67))) return "pedal getter body (+0x1cc0 / +0x1cc4 reads)";
+    }
+    *site = s;
+    return NULL;
+}
+
+static const char *retarder_feed_check(uintptr_t *site)
+{
+    uintptr_t h = game_scan(L->rf_pat);
+    if (!h) return "pattern (not exactly one hit)";
+    if (!pat_at(L->rf_before, h - 8)) return "rcx / comiss at site-8";
+    if (!pat_at(L->rf_after, h + 0xc)) return "cmovbe at site+0xc";
+    *site = h;
+    return NULL;
+}
+
+void game_brake_hooks_start(int pedal, int light, int feed)
+{
+    int ok = L && L->game && (!strcmp(L->game, "eut2") || !strcmp(L->game, "ats")) && L->a_req && L->a_thr_pedal && L->a_brake_pedal;
+    static unsigned char code[96];
+    uintptr_t site = 0;
+    const char *e;
+    if (pedal) {
+        if (!ok) logline("Brake pedal hook: not supported (no brake-pedal offsets): not installed");
+        else {
+            unsigned char orig[8]; int len;
+            if (game_is_161()) { memcpy(orig, "\x48\x8B\x01\xF3\x0F\x5F\xCE", 7); len = 7; }   // mov rax,[rcx]; maxss xmm1,xmm6
+            else { memcpy(orig, "\xF3\x41\x0F\x5F\xFE", 5); len = 5; }                          // maxss xmm7,xmm14
+            if ((e = brake_pedal_check(&site)) != NULL) logline("Brake pedal hook: self-check failed (%s): not installed", e);
+            else if (!patch_call_stub(site, len, orig, code,
+                     game_is_161() ? brake_pedal_stub_code_161(code, (const void *)&game_brake_pedal_fn)
+                                     : brake_pedal_stub_code(code, (const void *)&game_brake_pedal_fn),
+                     !game_is_161()))   // 1.60's 5 bytes sit in one qword (one CAS); 1.61's 7 cross it (plain write at init)
+                logline("Brake pedal hook: self-check failed (site bytes / aligned qword / trampoline): not installed");
+            else { s_bp_in = 1; logline("Brake pedal hook: installed at %p (the raw pedal until a provider registers)", (void *)site); }
+        }
+    }
+    if (light) {
+        static const unsigned char orig[] = { 0x83, 0xA0, 0xA0, 0x02, 0x00, 0x00, 0xDF };   // and dword [rax+0x2a0],0xffffffdf
+        if (!ok) logline("Brake light hook: not supported (no brake-pedal offsets): not installed");
+        else if ((e = brake_light_check(&site)) != NULL) logline("Brake light hook: self-check failed (%s): not installed", e);
+        else if (!patch_call_stub(site, 7, orig, code, brake_light_stub_code(code, &s_bl), 0))
+            logline("Brake light hook: self-check failed (site bytes / trampoline): not installed");
+        else { s_bl_in = 1; logline("Brake light hook: installed at %p (the game's lights until a request)", (void *)site); }
+    }
+    if (feed) {
+        unsigned char orig[8] = { 0x8B, 0x00, 0x89, 0x81, 0, 0, 0, 0 };   // mov eax,[rax]; mov [rcx+retarder],eax
+        unsigned r = L->i_retarder;
+        for (int i = 0; i < 4; i++) orig[4 + i] = (unsigned char)(r >> (8 * i));
+        if (!ok) logline("Retarder feed hook: not supported (no brake-pedal offsets): not installed");
+        else if ((e = retarder_feed_check(&site)) != NULL) logline("Retarder feed hook: self-check failed (%s): not installed", e);
+        else if (!patch_call_stub(site, 8, orig, code, retarder_feed_stub_code(code, &s_rf), 0))
+            logline("Retarder feed hook: self-check failed (site bytes / trampoline): not installed");
+        else { s_rf_in = 1; logline("Retarder feed hook: installed at %p (the game's retarder demand until a feed)", (void *)site); }
+    }
 }

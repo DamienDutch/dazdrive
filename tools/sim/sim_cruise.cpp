@@ -7,26 +7,31 @@
 #include "core/suite.h"
 #include "sim_env.h"  // SIM_SET=section.key=value,... overrides ini defaults (sweeps)
 #include "core/game.h"
+#include "sim_layout.h"
 #include "core/route.h"
+#include "core/vclass.h"
+#include "core/traffic.h"   // the blind-spot detector the overtake assist reads (stubbed below)
 #include <math.h>
 #include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
 #include <initializer_list>
+#include <time.h>
+#include <vector>
 
 telemetry T;
 char g_dir[MAX_PATH];
-const layout *L;
+const layout *L = &sim_layout;
 game_addrs G;
-volatile int g_rolling, g_cruise_smooth, g_crawl_on;
+volatile int g_rolling, g_cruise_smooth;
 volatile float g_roll_boost_kmh;
 volatile double g_rb_cancel_at = -1e9;
 volatile int g_pcc_on;
 volatile int g_pedal_mapped;
-volatile int g_lcx;
 volatile float g_overspeed_cap = 5;
+volatile float g_overspeed_pct = 0;
 volatile float g_pcc_need_kmh = NAN;
-volatile float g_decel_need;
+float ts_brake_down_eta_hard(float) { return NAN; }
 float ts_brake_down_eta(float) { return NAN; }   // (TrueShift is not in this sim: no shift is expected)
 float g_rpm_by_engine;                            // (rpmspan.h; the engine-span scaling is off here)
 const char *g_truck_unsupported;
@@ -51,18 +56,34 @@ void csv_cap(FILE **, const char *) {}
 FILE *open_out(const char *, const char *) { return NULL; }
 FILE *open_incident(const char *, const char *, double, char *s, size_t n) { if (n) s[0] = 0; return NULL; }
 static int verbose;
+static int g_ot_on_lines, g_ot_off_lines;   // the overtake assist's on/off log lines (counted even when not printing)
+static int g_gas_lines;   // "AEB: overruled by the gas pedal" lines (one per overrule, not one per tick)
+static int g_merger_lines, g_ot_withheld_lines, g_sg_wait_lines, g_lead_lines;   // WP-SP3: the layers' log lines (a predicted merger, a withheld assist, a Stop&Go wait, a lead that came or went)
 void logline(const char *fmt, ...)
 {
+    if (strstr(fmt, "overtake assist on")) g_ot_on_lines++;
+    else if (strstr(fmt, "overtake assist off")) g_ot_off_lines++;
+    if (strstr(fmt, "overruled by the gas pedal")) g_gas_lines++;
+    if (strstr(fmt, "predicted merger")) g_merger_lines++;
+    else if (strstr(fmt, "overtake assist withheld")) g_ot_withheld_lines++;
+    else if (strstr(fmt, "Stop&Go: stood")) g_sg_wait_lines++;
+    else if (strstr(fmt, "Cruise (layers): lead ") || strstr(fmt, "Cruise (layers): no lead")) g_lead_lines++;
     if (!verbose) return;
     va_list ap; va_start(ap, fmt); printf("%7.1f  ", t_now); vprintf(fmt, ap); printf("\n"); va_end(ap);
 }
 void play_cue(int) {}
 int input_pressed(int, int) { return 0; }
+static int g_cab_park_auto, g_cab_ss_off;   // per-test stubs of the cab module's two flags
+int cab_park_auto_on() { return g_cab_park_auto; }
+int cab_ss_engine_off() { return g_cab_ss_off; }
 int input_held(int) { return 0; }
 static float g_cvar_adaptive = 3;
 float game_adaptive() { return g_cvar_adaptive; }
-void *game_cvar(const char *) { return NULL; }
-float game_cvar_get(void *) { return NAN; }
+static float g_sim_use_limiter = 0;   // the option g_use_speed_limiter: off, so the rows above 100 run uncapped (on with no game value caps a heavy vehicle at 100, the bus); the limiter rows switch it on
+int speed_limiter_on();
+static void sim_use_limiter(float on) { g_sim_use_limiter = on; t_now += 1.5; (void)speed_limiter_on(); }   // the option is read once a second
+void *game_cvar(const char *n) { return n && !strcmp(n, "g_use_speed_limiter") ? (void *)&g_sim_use_limiter : NULL; }
+float game_cvar_get(void *c) { return c == (void *)&g_sim_use_limiter ? g_sim_use_limiter : NAN; }
 void game_cvar_set(void *, float) {}
 uintptr_t game_scan(const char *) { return 0; }
 int game_patch_call(uintptr_t, void *) { return 0; }
@@ -76,14 +97,26 @@ int mem_readable(const void *p, size_t) { return p != NULL; }
 static float g_sim_mass = 26000;
 static engine_info g_sim_eng;
 float game_mass() { return g_sim_mass; }
-float game_grade_deg(void *) { return NAN; }   // the vehicle model asks; Cruise decides on the pitch
+static float g_sim_own_mass = NAN;   // the towing vehicle's own mass for the class detection; NAN = the sim has no trailer, so it is the whole mass
+float game_mass_own() { return g_sim_own_mass == g_sim_own_mass ? g_sim_own_mass : g_sim_mass; }
+int game_vehicle_is_car() { return 0; }   // the mass rule drives the class in the sims
+static float g_sim_car_limit = NAN;   // the ATS car limit (m/s) the game would report for a light vehicle; NAN = none
+float game_car_speed_limit_ms() { return g_sim_car_limit; }
+static float g_sim_gd = NAN;   // (the limiter test on the model gives it the grade, as the game does)
+float game_grade_deg(void *) { return g_sim_gd; }   // the vehicle model asks; Cruise decides on the pitch
+float game_ebrake_level(void *) { return -1; }   // (the fuel learner in vehicle.cpp asks; this sim has no engine brake stages)
 void *game_gearbox() { return (void *)&g_sim_eng; }
 int gb_engine(void *, engine_info *e) { *e = g_sim_eng; return 1; }
 float curve_factor(const engine_info *e, float rpm) { return rpm < 1000 ? 0.8f + 0.2f * rpm / 1000 : rpm < 1500 ? 1.0f : 1.0f - (rpm - 1500) / 3000; }
 float wheel_radius() { return 0.5f; }
-int pedal_wish(float p, float, int, float *out) { *out = p; return 0; }   // the wish pedal (modules/pedal.cpp) is off here: the old pedal curves
+int pedal_wish(float p, float, int, float *out) { *out = p; return 0; }   // the wish pedal (modules/pedal.cpp) is off here: the pedal is the game's own, unchanged
 static char GA[0x20000];
 char *game_actor_safe() { return GA; }
+unsigned game_ebrake_cap(char *) { return 0; }
+int game_ebrake_state(char *, int *, int *, unsigned *, int *) { return 0; }
+void game_ebrake_set(char *, int, unsigned, int) {}
+void game_ebrake_put(char *, int, unsigned) {}
+int game_ebrake_setter(const char **) { return 0; }
 static int g_route;
 static float (*g_road)(double s);
 static double g_s;
@@ -94,8 +127,16 @@ float route_max_grade(float d0, float d1) { if (!route_ok()) return NAN; float b
 float route_crest_m(float max_d) { if (!route_ok() || route_grade(0, 50) < 0.5f) return -1; for (float d = 25; d + 50 <= max_d; d += 25) if (route_grade(d, d + 50) < 0.2f) return d + 25; return -1; }
 float route_valley_m(float) { return -1; }
 static float g_bend_ms = NAN;
+static float g_bend_at_m = NAN;   // WP-SP2b: the scenario's bend lies this far ahead (m); NAN = right here (the classic scenarios' bend is "the speed allowed now")
 float route_curve_speed(float, float, float) { return route_ok() ? g_bend_ms : NAN; }
 float route_bend_speed(float, float) { return route_ok() ? g_bend_ms : NAN; }   // the scenario's bend is a road bend, not a junction
+int route_bend_points(float, route_bend_t *out, int max)   // the same scenario as a point: the scenario's number is "the speed allowed now", so it is a point right here (or g_bend_at_m ahead)
+{
+    if (!route_ok() || !(g_bend_ms == g_bend_ms) || !out || max <= 0) return 0;
+    out[0].v_ms = g_bend_ms; out[0].d_m = g_bend_at_m == g_bend_at_m ? fmaxf(0.0f, g_bend_at_m) : 0;
+    return 1;
+}
+float route_ahead_m() { return route_ok() ? 1575 : 0; }
 float route_junction_m() { return -1; }
 int route_junction_known(float) { return 0; }
 void route_junction_dump(char *b, size_t n) { snprintf(b, n, "none"); }
@@ -121,12 +162,32 @@ int low_sg_zone() { return s_low_on && s_low_zone; }
 static float s_low_force = NAN;   // the force at the wheels of the owner's commanded clutch (a launch under the smooth start's law), NAN = none
 float low_drive_force() { return s_low_force; }
 
+// the traffic probe / blind spot (modules/traffic.cpp is not part of this sim): a scenario sets these
+static traffic_around g_sim_ta;
+static int g_sim_probe = 1;
+int traffic_probe_on() { return g_sim_probe; }
+void traffic_around_get(traffic_around *o) { *o = g_sim_ta; }
+
 #include "core/rpmspan.h"
+// game_actor fields of the layout, as the sim pokes them into its fake game_actor (cruise.cpp spelled these macros until WP-S moved its reads to core/sense.h and its writes to core/act.h)
+#define GA_ON         (L->a_cruise_on)
+#define GA_SET        (L->a_cruise_set)
+#define GA_ACC_TARGET (L->a_acc_target)
+#define GA_LEAD_M     (L->a_lead_m)
+#define GA_BRAKE_REQ  (L->a_req)
+#define GA_LIM        (L->a_lim)
+#define GA_LIM_ON     (L->a_lim_on)
 #include "modules/cruise.cpp"
 #include "core/display.cpp"
 #include "core/rsc.cpp"
 #include "core/actuate.cpp"
 #include "core/vehicle.cpp"
+#include "core/speedtarget.cpp"
+#include "core/bands.cpp"
+#define g_params br_g_params   // (core/brake.cpp has its own [brake] table: Cruise asks the brake channel)
+#include "core/brake.cpp"
+#undef g_params
+#include "brake_hooks_sim.h"   // the game side of the brake hooks: all "not in" here (the channel runs on +0x17c alone)
 namespace dc {   // the deceleration assist (its statics share names with Cruise's), for the stop by the lever
 #include "modules/decel.cpp"
 }
@@ -187,7 +248,7 @@ static void no_cruise_test()
     printf("no-Cruise test: %s\n", bad ? "FAIL" : "ok");
     if (bad) exit(1);
     // a fresh start for everything below
-    act_reset(RESET_HARD, "sim"); memset(GA, 0, sizeof GA); memset(&T, 0, sizeof T); stock_thr = 0; t_now = 0;
+    act_reset(RESET_HARD, "sim"); m_brake.reset(RESET_HARD, "sim"); memset(GA, 0, sizeof GA); memset(&T, 0, sizeof T); stock_thr = 0; t_now = 0;
 }
 
 // ---- truck
@@ -359,36 +420,164 @@ static void keys_test()
         printf("keys: resume while on, limit %.0f, set %.0f -> %.0f (expect %.0f)\n", rc[i].lim_kmh, rc[i].start, sv, want[i]);
         bad |= sv != want[i];
     }
+    // The lane key with needs_cruise and the cruise off (cruise_lane_engage, 15-11): the cruise comes on as Resume does with ISA: limit + offset, else the last set, else the speed
+    {
+        int psave_isa = p_isa; float pm = p_min_kmh; float save_cls = g_vehicle_class;
+        p_isa = 1; p_isa_off = 3; p_min_set = 20; p_min_kmh = 5; p_limiter = 0; T.engine_on = 1; T.gear = 6; T.dgear = 6;
+        g_vehicle_class = VC_TRUCK; vclass_sync();
+        auto engage = [&](float kmh, float limit_kmh, float stored, float *set, const char **why, int *on) {
+            T.speed = kmh / 3.6f; T.speed_limit = limit_kmh / 3.6f; t_now += 5;
+            *(unsigned char *)(GA + GA_ON) = 0; *(float *)(GA + GA_SET) = stored;
+            int r = cruise_lane_engage(why, set);
+            *on = *(unsigned char *)(GA + GA_ON); if (r) *set = *(float *)(GA + GA_SET);
+            return r;
+        };
+        struct { const char *what; float kmh, limit, stored; int isa; float want; } ec[] = {
+            { "ISA on, limit 80, speed 70", 70, 80, 95, 1, 83 }, { "ISA on, limit 15 (under min_set)", 70, 15, 95, 1, 20 },
+            { "no limit known, last set 95", 70, 0, 95, 1, 95 }, { "no limit, nothing stored, 71.4 km/h", 71.4f, 0, 0, 1, 71 },
+            { "ISA off, limit 80, last set 95", 70, 80, 95, 0, 95 }, { "ISA off, nothing stored, 71.6 km/h", 71.6f, 80, 0, 0, 72 },
+        };
+        for (auto &e : ec) {
+            p_isa = e.isa; float set = 0; const char *why = ""; int on = 0;
+            int r = engage(e.kmh, e.limit, e.stored, &set, &why, &on);
+            printf("lane key, cruise off: %-36s -> %d, on %d, set %.0f (expect %.0f)\n", e.what, r, on, set, e.want);
+            bad |= !r || !on || set != e.want;
+        }
+        p_isa = 1;
+        { float set = 0; const char *why = ""; int on = 0;   // the speed limiter caps it
+          *(unsigned char *)(GA + GA_LIM_ON) = 1; *(float *)(GA + GA_LIM) = 82; sim_use_limiter(1);
+          int r = engage(70, 80, 0, &set, &why, &on);
+          *(unsigned char *)(GA + GA_LIM_ON) = 0; *(float *)(GA + GA_LIM) = 0; sim_use_limiter(0);
+          printf("lane key, cruise off: truck limiter 82, limit 80 + 3 -> set %.0f (expect 82)\n", set);
+          bad |= !r || set != 82;
+          r = engage(70, 80, 0, &set, &why, &on);
+          bad |= !(fabsf(wall_s() - s_res_press_at) < 0.01 && fabsf(wall_s() - s_key_at) < 0.01);
+          printf("lane key, cruise off: marked as a resume (ISA follows the limit, a 'set' would keep the speed): %s\n", fabsf(wall_s() - s_res_press_at) < 0.01 ? "yes" : "NO"); }
+        { float set = 0; const char *why = ""; int on = 0;   // under the cruise's minimum switch-on speed, reversing, already on
+          int r = engage(3, 80, 95, &set, &why, &on);
+          printf("lane key, cruise off: 3 km/h (min 5) -> %d, on %d, why '%s' (expect refused)\n", r, on, why);
+          bad |= r || on;
+          r = engage(-10, 80, 95, &set, &why, &on);
+          printf("lane key, cruise off: reversing -> %d, on %d (expect refused)\n", r, on);
+          bad |= r || on;
+          T.speed = 70 / 3.6f; *(unsigned char *)(GA + GA_ON) = 1; *(float *)(GA + GA_SET) = 88;
+          r = cruise_lane_engage(&why, &set);
+          printf("lane key, cruise already on: -> %d, set %.0f (expect 1, 88 untouched)\n", r, *(float *)(GA + GA_SET));
+          bad |= !r || *(float *)(GA + GA_SET) != 88; }
+        { float set = 0; const char *why = ""; int on = 0;   // the retarder goes off like on any cruise key
+          *(unsigned *)(GA + 0x180) = 2; ret_calls = 0;
+          int r = engage(70, 80, 0, &set, &why, &on);
+          printf("lane key, cruise off: retarder level 2 -> level %u, setter calls %d (expect 0, 1)\n", *(unsigned *)(GA + 0x180), ret_calls);
+          bad |= !r || *(unsigned *)(GA + 0x180) != 0 || ret_calls != 1; }
+        { float set = 0; const char *why = ""; int on = 0;   // mph: limit 65 mph + 3 mph
+          const float M = 1.609344f; cruise_units_prime(1);
+          int r = engage(100, 65 * M, 0, &set, &why, &on);
+          printf("lane key, cruise off, mph: limit 65 mph -> set %.2f km/h = %.2f mph (expect 68)\n", set, set / M);
+          bad |= !r || fabsf(set / M - 68) > 0.02f;
+          cruise_units_prime(-2); }
+        { float set = 0; const char *why = ""; int on = 0;   // with the layers: the last set is the state's memory, and the limiter (LIM) is not a cruise to switch on
+          float se = p_engine, ss = p_smooth; p_engine = 1; p_smooth = 1; cs_reset(&g_cs); g_cs.mem_set[CSM_CC] = 77;
+          int r = engage(70, 0, 95, &set, &why, &on);
+          printf("lane key, cruise off, layers on: no limit, memory 77 -> set %.0f (expect 77)\n", set);
+          bad |= !r || set != 77;
+          cs_reset(&g_cs); g_cs.mode = CSM_LIM;
+          r = engage(70, 0, 95, &set, &why, &on);
+          printf("lane key, cruise off, layers on, LIM: -> %d, on %d, why '%s' (expect refused)\n", r, on, why);
+          bad |= r || on;
+          cs_reset(&g_cs); p_engine = se; p_smooth = ss; }
+        T.speed_limit = 0; p_isa = psave_isa; p_min_kmh = pm; g_vehicle_class = save_cls; vclass_sync();
+        *(unsigned char *)(GA + GA_ON) = 0; *(unsigned *)(GA + 0x180) = 0;
+    }
+    // The truck's speed limiter (the game's byte, 65 mph = 104.6 km/h in ATS) caps a truck's set speed, never a light vehicle's (ride 31-10, the ATS pickup:
+    // 'cannot go higher than 65 mph'): + from 159 lands on 160 for the pickup and on the limiter for the truck
+    {
+        float save_cls = g_vehicle_class;
+        *(unsigned char *)(GA + GA_LIM_ON) = 1; *(float *)(GA + GA_LIM) = 104.6f; sim_use_limiter(1);
+        // (the module set and the profile follow the class the dispatcher adopted, vclass_sync(): a sim that changes the class syncs it)
+        g_vehicle_class = VC_LIGHT;  vclass_sync(); float lt = key_run(1, 0.15, 0, 159, 1);
+        g_vehicle_class = VC_TRUCK;  vclass_sync(); float tr = key_run(1, 0.15, 0, 159, 1);
+        g_vehicle_class = VC_LIGHT;  vclass_sync(); float up = key_run(1, 0.15, 0, 100, 1);
+        g_vehicle_class = save_cls;  vclass_sync();
+        *(unsigned char *)(GA + GA_LIM_ON) = 0; *(float *)(GA + GA_LIM) = 0; sim_use_limiter(0);
+        printf("keys: limiter byte on at 104.6, tap + from 159: light vehicle -> %.0f (expect 160), truck -> %.1f (expect 104.6); light from 100 -> %.0f (105)\n", lt, tr, up);
+        bad |= lt != 160 || fabsf(tr - 104.6f) > 0.1f || up != 105;
+    }
+    // The class from the engine at the 'truck config' event, before the mass is read: a pickup engine (rpm limit 3900) is light at once after a reset
+    {
+        float sm = g_sim_mass, sr = T.rpm_limit;
+        g_sim_mass = NAN; T.rpm_limit = 3900; vehicle_reset(RESET_HARD); vehicle_update(NULL);
+        int l1 = vehicle_light();
+        g_sim_mass = sm; T.rpm_limit = sr; vehicle_reset(RESET_HARD); vehicle_update(NULL); vclass_sync();
+        printf("class before the mass read: rpm limit 3900 -> light %d (expect 1)\n", l1);
+        bad |= l1 != 1;
+    }
+    // mph (ATS g_mph 1): the taps are 5 mph, the holds 1 mph, the set speed on switching on a whole mph, the ISA offset 3 mph; km/h stays as before
+    {
+        cruise_units_prime(1);
+        const float M = 1.609344f;
+        float a1 = key_run(1, 0.15, 0, 100, 1), a2 = key_run(1, 0.15, 0, 65 * M, 1), a3 = key_run(2, 0.15, 0, 65 * M, 1), a4 = key_run(2, 0.15, 0, 62 * M, 1);
+        printf("mph keys: tap + 100 km/h (62.1 mph) -> %.2f km/h = %.2f mph (expect 65), + at 65 -> %.2f mph (70), - at 65 -> %.2f mph (60), - at 62 -> %.2f mph (60)\n", a1, a1 / M, a2 / M, a3 / M, a4 / M);
+        bad |= fabsf(a1 / M - 65) > 0.02f || fabsf(a2 / M - 70) > 0.02f || fabsf(a3 / M - 60) > 0.02f || fabsf(a4 / M - 60) > 0.02f;
+        float h = key_run(1, 1.2, 0, 60 * M, 1);
+        printf("mph keys: hold + 1.2 s from 60 mph -> %.2f mph (about 66-67: whole mph steps after 0.4 s at 8/s)\n", h / M);
+        bad |= fabsf(h / M - roundf(h / M)) > 0.02f || h / M < 65 || h / M > 68;
+        float on = key_run(1, 0.2, 1, 100.7f, 0);
+        printf("mph keys: switching on at 100.7 km/h -> set %.2f km/h = %.2f mph (expect a whole mph: 63)\n", on, on / M);
+        bad |= fabsf(on / M - roundf(on / M)) > 0.02f;
+        p_res_lim = 1; p_isa_off = 3; p_min_set = 20;
+        T.speed_limit = 65 * M / 3.6f;
+        *(unsigned char *)(GA + GA_ON) = 1; *(float *)(GA + GA_SET) = 90;
+        key_event(GA, act_buf[3]); *(float *)(GA + GA_SET) = 110; keys_tick(GA);
+        float sv = *(float *)(GA + GA_SET);
+        printf("mph keys: resume while on, limit 65 mph -> set %.2f km/h = %.2f mph (expect 68: the offset is mph too)\n", sv, sv / M);
+        bad |= fabsf(sv / M - 68) > 0.02f;
+        T.speed_limit = 0;
+        cruise_units_prime(0);
+        float k1 = key_run(1, 0.15, 0, 83, 1);
+        printf("km/h again: tap + 83 -> %.0f (85)\n", k1);
+        bad |= k1 != 85;
+        cruise_units_prime(-2);
+    }
     // overspeed cap: limit 80, set 83, cap 5 -> 2 km/h of room; no limit known or cap 0 -> no cap
     { float save = g_overspeed_cap; T.speed_limit = 80 / 3.6f; g_overspeed_cap = 5;
       float r1 = overspeed_room(83 / 3.6f), r2 = overspeed_room(90 / 3.6f); T.speed_limit = 0; float r3 = overspeed_room(83 / 3.6f);
       T.speed_limit = 80 / 3.6f; g_overspeed_cap = 0; float r4 = overspeed_room(83 / 3.6f); g_overspeed_cap = save; T.speed_limit = 0;
       printf("overspeed cap: room %.1f (expect 2), set over the cap %.1f (expect 0), no limit %s, cap 0 %s\n", r1, r2, r3 > 1e8f ? "no cap" : "CAP", r4 > 1e8f ? "no cap" : "CAP");
       bad |= fabsf(r1 - 2) > 0.01f || r2 != 0 || r3 < 1e8f || r4 < 1e8f; }
+    // the distance to the fine line (the dashboard number): ETS2 limit 90 + 5 - 84 = 11; over the line it is negative; ATS 65 mph (104.6 km/h) + 10 % - 100 = 15.1; no limit / cap 0 -> none
+    { float save = g_overspeed_cap, savep = g_overspeed_pct; T.speed_limit = 90 / 3.6f; g_overspeed_cap = 5;
+      float f1 = fine_room_kmh(84 / 3.6f), f2 = fine_room_kmh(97 / 3.6f); g_overspeed_pct = 10; T.speed_limit = 65 * 1.609344f / 3.6f; float f3 = fine_room_kmh(100 / 3.6f); g_overspeed_pct = 0;
+      T.speed_limit = 0; float f4 = fine_room_kmh(84 / 3.6f); T.speed_limit = 90 / 3.6f; g_overspeed_cap = 0; float f5 = fine_room_kmh(84 / 3.6f); g_overspeed_cap = save; g_overspeed_pct = savep; T.speed_limit = 0;
+      printf("fine line distance: %.1f (expect 11), over it %.1f (expect -2), ATS %.1f (expect %.1f), no limit %.1f, cap 0 %.1f (both expect nan)\n", f1, f2, f3, 65 * 1.609344f * 1.1f - 100, f4, f5);
+      bad |= fabsf(f1 - 11) > 0.01f || fabsf(f2 + 2) > 0.01f || fabsf(f3 - (65 * 1.609344f * 1.1f - 100)) > 0.05f || f4 == f4 || f5 == f5; }
     // smart overspeed: full on the flat, gliding down to the steep-descent value between -1 % and -2 %, less with a heavy trailer
-    { float sp = p_smart_kmh, dc = p_desc_kmh, cr = T.cruise; p_smart_kmh = 3; p_desc_kmh = 2; T.cruise = 80 / 3.6f;
-      auto at = [](float g) { T.place.orientation.pitch = atanf(g / 100) / 6.2831853f; vehicle_frame(); return smart_dynamic(); };   // the pitch reaches Cruise through the vehicle model's frame
+    { float sp = p_os_cruise, dc = p_desc_kmh, cr = T.cruise; p_os_cruise = 3; p_desc_kmh = 2; T.cruise = 80 / 3.6f;
+      auto at = [](float g) { T.place.orientation.pitch = atanf(g / 100) / 6.2831853f; vehicle_frame(); return smart_dynamic(pitch_grade()); };   // the pitch reaches Cruise through the vehicle model's frame
       float w0 = at(0), w1 = at(-1.5f), w2 = at(-3), w3 = at(+2);
-      printf("smart overspeed: flat %.2f, -1.5 %% %.2f, -3 %% %.2f, uphill %.2f (expect 3.2, between, 2.0, 3.2)\n", w0, w1, w2, w3);
-      bad |= !(w0 > 3.0f && w0 < 3.4f) || !(w1 < w0 && w1 > w2) || !(w2 > 1.9f && w2 < 2.2f) || fabsf(w3 - w0) > 0.01f;
+      printf("smart overspeed: flat %.2f, -1.5 %% %.2f, -3 %% %.2f, uphill %.2f (expect 3.0 less the trailer's share, between, 2.0, same as flat)\n", w0, w1, w2, w3);
+      bad |= !(w0 > 2.8f && w0 < 3.05f) || !(w1 < w0 && w1 > w2) || !(w2 > 1.9f && w2 < 2.2f) || fabsf(w3 - w0) > 0.01f;
       float sm = g_sim_mass; g_sim_mass = NAN; vehicle_reset(RESET_HARD); float wu = at(-3); g_sim_mass = sm; vehicle_reset(RESET_HARD);
       printf("smart overspeed, mass unknown: -3 %% %.2f (%.0f t known %.2f; expect not more)\n", wu, sm / 1000, w2);
       bad |= !(wu <= w2 + 0.001f);
-      T.place.orientation.pitch = 0; vehicle_frame(); p_smart_kmh = sp; p_desc_kmh = dc; T.cruise = cr; }
-    // pedal curve after a mode change: stays while the pedal is held, blends with the pedal travel
-    { float se = p_pc_eco, sp = p_pc_pw, st = p_pc_travel; p_pc_eco = 1.35f; p_pc_pw = 1.6f; p_pc_travel = 1.0f;
-      float e0 = pedal_blend(MODE_ECO, 0.5f);                       // first call: Eco curve
-      float held = 0; for (int i = 0; i < 100; i++) held = pedal_blend(MODE_POWER, 0.5f);   // switched to Power, pedal held: still Eco
-      float mid = 0; for (float p = 0.5f; p <= 0.9f; p += 0.05f) mid = pedal_blend(MODE_POWER, p);    // 0.4 of travel
-      float end = 0; for (int k = 0; k < 6; k++) { pedal_blend(MODE_POWER, 0.2f); end = pedal_blend(MODE_POWER, 0.5f); }  // plenty of travel
-      printf("pedal blend: eco %.2f, held after the switch %.2f (expect 0.39 both), mid %.2f, end %.2f (expect Power 0.67)\n", e0, held, mid, end);
-      bad |= fabsf(e0 - 0.39f) > 0.01f || fabsf(held - e0) > 0.001f || !(mid > e0 && mid < 0.9f) || fabsf(end - 0.67f) > 0.01f;
-      p_pc_eco = se; p_pc_pw = sp; p_pc_travel = st; }
+      T.place.orientation.pitch = 0; vehicle_frame(); p_os_cruise = sp; p_desc_kmh = dc; T.cruise = cr; }
+    // the overspeed number is the distance to the fine line (WP-1112-brake): cruise OFF = limit 80 + 5 - the set speed (0 here: 85), at most overspeed_room_max_kmh when set; cruise ON = overspeed_cruise_kmh, flat (a set 40 on an
+    // 80 road holds near 40, not 85), and the fine line caps it where it is written (overspeed_room); no limit known: overspeed_cruise_kmh either way; -1 = the player's own setting
+    { float sp = p_os_cruise, rm = p_os_room_max, cr = T.cruise, sav = g_overspeed_cap, savp = g_overspeed_pct; p_os_cruise = 5; g_overspeed_cap = 5; g_overspeed_pct = 0; T.speed_limit = 80 / 3.6f;
+      T.cruise = 0; p_os_room_max = 0; float a0 = smart_base(); p_os_room_max = 9; float a1 = smart_base();
+      T.cruise = 40 / 3.6f; p_os_room_max = 0; float b0 = smart_base(), b1 = smart_dynamic(0); T.cruise = 78 / 3.6f; float b2 = overspeed_room(T.cruise);
+      T.speed_limit = 0; T.cruise = 0; float c0 = smart_base();
+      printf("overspeed number: cruise off %.1f (expect 85), clamped at 9 %.1f (expect 9), cruise on at 40 %.1f (expect 5), refined %.2f (expect 5 less the trailer), room at 78 on an 80 road %.1f (expect 7), no limit %.1f (expect 5)\n", a0, a1, b0, b1, b2, c0);
+      bad |= fabsf(a0 - 85) > 0.01f || fabsf(a1 - 9) > 0.01f || fabsf(b0 - 5) > 0.01f || !(b1 > 4.4f && b1 <= 5.0f) || fabsf(b2 - 7) > 0.01f || fabsf(c0 - 5) > 0.01f;
+      p_os_cruise = sp; p_os_room_max = rm; T.cruise = cr; g_overspeed_cap = sav; g_overspeed_pct = savp; T.speed_limit = 0; }
+    // the cruise has no pedal curves of its own (P6.4, owner 03-11): one pedal definition everywhere, the torque pedal's map per mode (modules/pedal.cpp); with [pedal] wish 0 the pedal is the game's own
+    { int n = 0; for (int i = 0; i < (int)(sizeof g_params / sizeof g_params[0]); i++) if (!strncmp(g_params[i].key, "pedal_curve", 11)) n++;
+      printf("no pedal curves in the cruise: %d pedal_curve_* params (expect 0)\n", n);
+      bad |= n != 0; }
     // parking brake after a long Auto Hold: engaged after auto_hold_park_s, confirmed by the game, released by gas (and the hold is taken over)
     {
         float sp = p_ah_park; p_ah_park = 2; g_low_ok = 1; p_ah = 1; p_ah_req = 0.6f;
         memset(&T, 0, sizeof T); T.engine_on = 1; T.gear = 1; T.dgear = 1; T.in_brake = 0.3f; T.fwd_gears = 12;
-        memset(&AH, 0, sizeof AH); s_park_on = s_park_ok = s_park_bad = 0; s_ah_hold_since = 0; g_sg_hold = 0; g_crawl_on = 0;
+        memset(&AH, 0, sizeof AH); s_park_on = s_park_ok = s_park_bad = 0; s_ah_hold_since = 0; g_sg_hold = 0; g_lv.crawl_toggle = 0;
         GA[0x15c] = 0; *(float *)(GA + 0x160) = 0;
         vehicle_frame();   // flat (T was cleared)
         for (int i = 0; i < 60 * 3; i++, t_now += 1 / 60.0) { auto_hold(GA, 1 / 60.0f); T.parking_brake = GA[0x15c] == 1; }  // the game shows what we wrote
@@ -405,6 +594,28 @@ static void keys_test()
         printf("auto hold park: requested %d, confirmed %d (hold %d), released by gas %d, reverted when unconfirmed %d\n", requested, confirmed, still_holding, released, reverted);
         bad |= !(requested && confirmed && still_holding && released && reverted);
         p_ah_park = sp; s_park_bad = 0; memset(&AH, 0, sizeof AH);
+    }
+    // Auto Hold hands the truck over to the parking brake during OUR start-stop stop: the brake stays on and the hold stays, so the
+    // start-stop has no "not holding any more" to restart on; only gas takes the brake off (the cab starts the engine first).
+    {
+        float sp = p_ah_park; p_ah_park = 2; g_low_ok = 1; p_ah = 1; p_ah_req = 0.6f;
+        g_cab_park_auto = 1; g_cab_ss_off = 1;
+        memset(&T, 0, sizeof T); T.engine_on = 1; T.gear = 1; T.dgear = 1; T.in_brake = 0.3f; T.fwd_gears = 12;
+        memset(&AH, 0, sizeof AH); s_park_on = s_park_ok = s_park_bad = 0; s_ah_hold_since = 0; g_sg_hold = 0; g_lv.crawl_toggle = 0;
+        GA[0x15c] = 0; *(float *)(GA + 0x160) = 0;
+        vehicle_frame();
+        for (int i = 0; i < 60; i++, t_now += 1 / 60.0) { auto_hold(GA, 1 / 60.0f); T.parking_brake = GA[0x15c] == 1; }   // arm the hold
+        T.in_brake = 0; T.engine_on = 0;   // the start-stop stops the engine, the pedal is up
+        for (int i = 0; i < 60 * 4; i++, t_now += 1 / 60.0) { auto_hold(GA, 1 / 60.0f); T.parking_brake = GA[0x15c] == 1; }   // past auto_hold_park_s: brake requested + confirmed
+        int held_on = s_park_on && s_park_ok && GA[0x15c] == 1 && AH.st == AH_HOLD;
+        for (int i = 0; i < 60; i++, t_now += 1 / 60.0) { auto_hold(GA, 1 / 60.0f); T.parking_brake = GA[0x15c] == 1; }   // a second more: it stays
+        int stays = s_park_on && s_park_ok && GA[0x15c] == 1 && AH.st == AH_HOLD;
+        T.in_thr = 0.3f;
+        for (int i = 0; i < 10; i++, t_now += 1 / 60.0) { auto_hold(GA, 1 / 60.0f); T.parking_brake = GA[0x15c] == 1; }
+        int released = !s_park_on && GA[0x15c] == 0 && (AH.st == AH_LAUNCH || AH.st == AH_OFF);
+        printf("auto hold park under start-stop: held on %d, stays %d, released by gas %d\n", held_on, stays, released);
+        bad |= !(held_on && stays && released);
+        p_ah_park = sp; s_park_bad = 0; g_cab_park_auto = 0; g_cab_ss_off = 0; memset(&AH, 0, sizeof AH);
     }
     // own speed limiter 95: a climb at 92 keeps the throttle, a flat road at 93.5 fades, a fast approach cuts early
     { float sl = p_own_lim, sb = p_own_bias; p_own_lim = 95; p_own_bias = 0;
@@ -536,19 +747,6 @@ static void reset_test()
                   s_cr_prev != s_cr_prev && s_cr_rate != s_cr_rate && s_cr_since < 0;
     printf("reset SOFT: steer / junction-ignore / stuck timers, acceleration filter, descent hysteresis, crossing filter cleared: %s\n", soft_ok ? "yes" : "NO");
     bad |= !soft_ok;
-    // the pedal curve blend after a mode change: a SOFT reset (pause menu) keeps a blend that is under way, a HARD one (other truck, teleport) drops it
-    float se = p_pc_eco, sp = p_pc_pw, st = p_pc_travel; p_pc_eco = 1.35f; p_pc_pw = 1.6f; p_pc_travel = 1.0f;
-    s_pb.from = s_pb.to = -1; s_pb.travel = 0; s_pb.prev = -1; s_pb.b = 1;
-    pedal_blend(MODE_ECO, 0.5f);
-    float held = pedal_blend(MODE_POWER, 0.5f);        // switched to Power, pedal held: still the Eco curve (0.39)
-    cr_reset(RESET_SOFT, "sim");
-    float after_soft = pedal_blend(MODE_POWER, 0.5f);  // still blending: Eco
-    cr_reset(RESET_HARD, "sim");
-    float after_hard = pedal_blend(MODE_POWER, 0.5f);  // no blend in progress any more: the Power curve (0.67)
-    printf("reset and the pedal blend: held %.2f, after SOFT %.2f (both 0.39, the blend goes on), after HARD %.2f (0.67, Power at once)\n", held, after_soft, after_hard);
-    bad |= fabsf(held - 0.39f) > 0.01f || fabsf(after_soft - 0.39f) > 0.01f || fabsf(after_hard - 0.67f) > 0.01f;
-    p_pc_eco = se; p_pc_pw = sp; p_pc_travel = st;
-    s_pb.from = s_pb.to = -1; s_pb.travel = 0; s_pb.prev = -1; s_pb.b = 1;
     printf("reset test: %s\n", bad ? "FAIL" : "ok");
     if (bad) exit(1);
 }
@@ -611,7 +809,7 @@ static ahres ah_run(const char *name, float grade_pct, int hard, int gate, float
     s_low_force = NAN;
     memset(GA, 0, sizeof GA);
     memset(&AH, 0, sizeof AH);
-    g_low_ok = 1; g_sg_hold = 0; g_crawl_on = 0; s_gate_ok = gate; s_thr_pass = 0; s_req_ours = 0; s_want_hold = s_want_hill = 0;
+    g_low_ok = 1; g_sg_hold = 0; g_lv.crawl_toggle = 0; s_gate_ok = gate; s_thr_pass = 0; s_req_ours = 0; s_want_hold = s_want_hill = 0;
     act_brake(ACT_HOLD, 0); act_brake(ACT_HILL, 0);
     p_ah = old_hill_start ? 0 : 1; p_hill = old_hill_start == 2 ? 0 : 1; p_hill_pct = 3; p_hill_s = 3;
     g_sim_eng.torque = 2400; g_sim_eng.n_curve = 0; g_sim_eng.rpm_limit = 2200;
@@ -704,11 +902,14 @@ static ahres ah_run(const char *name, float grade_pct, int hard, int gate, float
 // drop: the most the request fell under its peak from 0.5 km/h on until the gas (the hand-over from the assist to the hold).
 struct lvres { double t_stop; float held_min, roll_m, req_end, t_move, req_after, hold_after, drop; };
 static double g_lv_prime = 0;   // > 0: [core] brake_learn on, the vehicle model's estimate primed to this share of the lever plant's gain
-static lvres lever_run(const char *name, float grade_pct, float mass_t, int ah, int lever_key, int engine_only, int owner_late, float gain = 4)
+// WP-FX1 round 3 (owner decision 59, "Ja, zoals een echte retarder"): the lever gives its step's force times the fade and nothing more, so on a descent a mid step weaker than the slope lets the truck roll;
+// stopping on a slope is the driver's brake pedal, after which Auto Hold holds. pedal_t >= 0: the driver presses the pedal (0.4, 6 m/s2 at 1.0 as in the cruise plants) from that second until 1 s after the stop;
+// the request is judged from 1.2 s after the stop (the pedal has let go, Auto Hold's request carries the hold). Before, the lever's assist brought the truck to the stop and the hold on its own.
+static lvres lever_run(const char *name, float grade_pct, float mass_t, int ah, int lever_key, int engine_only, int owner_late, float gain = 4, float pedal_t = -1)
 {
     memset(GA, 0, sizeof GA);
     memset(&AH, 0, sizeof AH);
-    g_low_ok = 1; g_sg_hold = 0; g_crawl_on = 0; s_gate_ok = 1; s_thr_pass = 0; s_req_ours = 0; s_want_hold = s_want_hill = 0;
+    g_low_ok = 1; g_sg_hold = 0; g_lv.crawl_toggle = 0; s_gate_ok = 1; s_thr_pass = 0; s_req_ours = 0; s_want_hold = s_want_hill = 0;
     for (int o = 0; o < ACT_N; o++) act_brake(o, 0);
     s_dec_was = 0; s_aeb_was = s_hill_was = s_hold_was = 0; s_br_at = t_now;
     p_ah = (float)ah; p_ah_lever = (float)lever_key; p_hill = 1; p_hill_pct = 3; p_hill_s = 3; s_ah_k = 1;
@@ -741,6 +942,7 @@ static lvres lever_run(const char *name, float grade_pct, float mass_t, int ah, 
         float tl = t_launch < 0 ? -1 : (float)(t - t_launch);
         thr = tl < 0 ? 0 : fminf(0.35f, 0.35f * tl / 1.0f);
         T.in_thr = thr; T.speed = (float)v;
+        T.in_brake = pedal_t >= 0 && t >= pedal_t && (t_stop < 0 || t < t_stop + 1.0) ? 0.4f : 0.0f;
         // the owner's standstill (< 0.3 km/h) declared 0.15 s late
         if (fabs(v) * 3.6 < 0.3) { if (t_slow < 0) t_slow = t; } else t_slow = -1;
         s_low_stopped = t_slow >= 0 && t - t_slow >= 0.15;
@@ -764,15 +966,16 @@ static lvres lever_run(const char *name, float grade_pct, float mass_t, int ah, 
         float kmh = (float)fabs(v) * 3.6f;
         float fade = kmh >= 6 ? 1 : kmh <= 4.5f ? 0 : (kmh - 4.5f) / 1.5f;
         float a_r = lever ? a_ret * fminf(1, (float)t / 0.4f) * fade : 0;
-        float Fb = y * m * gain + (v > 1e-4 ? a_r * m : 0);
+        const float Fped = T.in_brake * m * 6.0f;   // (the driver's pedal; 0 in every other row)
+        float Fb = y * m * gain + (v > 1e-4 ? a_r * m : 0) + Fped;
         float te = g_sim_eng.torque * curve_factor(&g_sim_eng, T.rpm) * T.eff_thr;
         float Fd = T.gear == 1 ? te * ratio * diff * 0.9f * (1 - clutch) / R : 0;
         float Fg = m * 9.81f * sing + (v > 1e-4 ? m * 9.81f * 0.006f : v < -1e-4 ? -m * 9.81f * 0.006f : 0);
         float Fnet = Fd - Fg;
-        if (fabs(v) < 1e-4 && fabsf(Fnet) <= y * m * gain) v = 0;
+        if (fabs(v) < 1e-4 && fabsf(Fnet) <= y * m * gain + Fped) v = 0;
         else {
             float Fres = Fb * (v >= 0 ? 1.0f : -1.0f);
-            if (fabs(v) < 1e-4) Fres = y * m * gain * (Fnet > 0 ? 1.0f : -1.0f);
+            if (fabs(v) < 1e-4) Fres = (y * m * gain + Fped) * (Fnet > 0 ? 1.0f : -1.0f);
             double vn = v + (Fnet - Fres) / m * dt;
             if (v != 0 && ((v > 0) != (vn > 0)) && fabsf(Fnet) <= Fb) vn = 0;   // the brake stops it at zero
             v = vn;
@@ -781,7 +984,7 @@ static lvres lever_run(const char *name, float grade_pct, float mass_t, int ah, 
         if (t_launch < 0 && (peak >= 0 || fabs(v) * 3.6 < 0.5)) { peak = fmaxf(peak, req); r.drop = fmaxf(r.drop, peak - req); }
         if (t_stop >= 0 && t_launch < 0) {
             xmin = fminf(xmin, (float)x); xmax = fmaxf(xmax, (float)x);
-            r.held_min = fminf(r.held_min, req);
+            if (pedal_t < 0 || t > t_stop + 1.2) r.held_min = fminf(r.held_min, req);
             if (t > t_stop + 1 && t < t_stop + 4) { r.req_after = fmaxf(r.req_after, req); r.hold_after = fmaxf(r.hold_after, s_want_hold); }
         }
         if (t_launch >= 0 && v > 0.1 && t_mv < 0) t_mv = t - t_launch;
@@ -803,12 +1006,12 @@ static lvres lever_run(const char *name, float grade_pct, float mass_t, int ah, 
 // opens the clutch at idle + 150 rpm (4.5 km/h) and the truck coasts on (rolling resistance, 0.06 m/s2) with the grade pulling; the service brake gain m/s2 per
 // request 1.0 behind a 0.15 s lag; [decel] enabled 0 (the stop assist is its own feature). Cruise and the actuator in the game tick (60 Hz), modules/decel.cpp in its
 // frame. Measured: when the assist started (km/h), the stop (mean deceleration), how far the truck moved in the 4 s after the stop, the request 2-4 s after it and Auto Hold's.
-struct sa2res { int started; float v_start, mean, moved, req_after, hold_after, req_max; double t_stop; };
+struct sa2res { int started; float v_start, mean, moved, req_after, hold_after, req_max, v_hi, v_end; double t_stop; };
 static sa2res sa_run(const char *name, int mode, float grade_pct, float mass_t, int ah_lever, float gain = 4)
 {
     memset(GA, 0, sizeof GA);
     memset(&AH, 0, sizeof AH);
-    g_low_ok = 1; g_sg_hold = 0; g_crawl_on = 0; s_gate_ok = 1; s_thr_pass = 0; s_req_ours = 0; s_want_hold = s_want_hill = 0;
+    g_low_ok = 1; g_sg_hold = 0; g_lv.crawl_toggle = 0; s_gate_ok = 1; s_thr_pass = 0; s_req_ours = 0; s_want_hold = s_want_hill = 0;
     for (int o = 0; o < ACT_N; o++) act_brake(o, 0);
     s_dec_was = 0; s_aeb_was = s_hill_was = s_hold_was = 0; s_br_at = t_now;
     p_ah = 1; p_ah_lever = (float)ah_lever; p_hill = 1; p_hill_pct = 3; p_hill_s = 3; s_ah_k = 1;
@@ -827,6 +1030,7 @@ static sa2res sa_run(const char *name, int mode, float grade_pct, float mass_t, 
     o_cruise = stock_cruise; p_smooth = 1; *(unsigned char *)(GA + GA_ON) = 0;
     float gr = grade_pct / 100, sing = gr / sqrtf(1 + gr * gr);
     T.place.orientation.pitch = atanf(gr) / 6.2831853f;
+    g_sim_gd = atanf(gr) * 57.29578f;   // (the vehicle model reads the road's grade as the game gives it: the stop assist's push on a descent)
     const float v_open = 750.0f / 9.5493f * R / (ratio * diff);
     double v = 12 / 3.6, x = 0, t0 = t_now, t_stop = -1, t_start = -1;
     float y = 0, rpm = 900, xmin = 0, xmax = 0, v_start = 0, x_stop = 0;
@@ -835,6 +1039,7 @@ static sa2res sa_run(const char *name, int mode, float grade_pct, float mass_t, 
         double t = t_now - t0, dt = 1 / 60.0;
         bool opened = v <= v_open || T.gear == 0;
         if (t_start < 0 && (dc::SA.st == dc::SA_RUN || dc::SA.st == dc::SA_HAND)) { t_start = t; v_start = (float)v * 3.6f; r.started = 1; }
+        if (t_start >= 0) r.v_hi = fmaxf(r.v_hi, (float)v * 3.6f);
         if (t_stop < 0 && t_start >= 0 && v <= 0.03) { t_stop = t; x_stop = xmin = xmax = (float)x; }
         T.speed = (float)v;
         T.gear = opened ? 0 : 3; T.dgear = T.gear; T.eff_clutch = opened ? 1 : 0;
@@ -867,8 +1072,8 @@ static sa2res sa_run(const char *name, int mode, float grade_pct, float mass_t, 
         if (verbose && k % 6 == 0 && (t_stop < 0 ? v * 3.6 < 1.5 : t < t_stop + 0.8) && opened)
             printf("   t=%6.2f v %6.3f km/h  sa %.3f st %d  hold %.3f  req %.3f  brake %.3f nohold %d\n", t, v * 3.6, dc::SA.u, dc::SA.st, s_want_hold, req, y, g_sa_nohold);
     }
-    s_hooked = hooked; p_ah = 1; p_ah_lever = 1; dc::p_sa = 1;
-    r.v_start = v_start; r.t_stop = t_stop;
+    s_hooked = hooked; p_ah = 1; p_ah_lever = 1; dc::p_sa = 1; g_sim_gd = NAN;
+    r.v_start = v_start; r.t_stop = t_stop; r.v_end = (float)v * 3.6f;
     r.mean = t_stop > t_start && t_start >= 0 ? v_start / 3.6f / (float)(t_stop - t_start) : 0;
     r.moved = t_stop < 0 ? 99 : fmaxf(x_stop - xmin, xmax - x_stop);
     printf("%-46s mode %d: assist from %.1f km/h, stop after %.2f s (mean %.2f m/s2), the truck moved %.3f m in the 4 s after it, request 2-4 s after %.2f (Auto Hold %.2f), assist request max %.3f\n",
@@ -883,8 +1088,9 @@ static sa2res sa_run(const char *name, int mode, float grade_pct, float mass_t, 
 // emergency part (gap < D/2: brake (D/2 - gap)/(D/2), up to 6 m/s2).
 static float g_fake_radar[5];
 static float *fake_radar(void *, float *) { return g_fake_radar; }
-struct accres { float min_gap, peak_dec, max_jerk, emerg_s, min_kmh, end_kmh, mean_gap_err; int same; };
+struct accres { float min_gap, peak_dec, max_jerk, emerg_s, min_kmh, end_kmh, end_gap, mean_gap_err; int same; };
 static int g_acc_flips;   // the brake request starting or ending (over 0.02) during an acc_run: pumping shows here
+static int g_acc_cruise_on = 1;   // acc_run: the cruise is on (1, as always) or off (sim_cruise_layers.cpp: the AEB with the driver coasting)
 static accres acc_run(const char *name, int own, int scen)
 {
     g_acc_flips = 0; float req_prev = 0;
@@ -893,10 +1099,10 @@ static accres acc_run(const char *name, int own, int scen)
     o_cruise = stock_cruise; stock_thr = 0;
     T.engine_on = 1; T.gear = 8; T.eff_clutch = 0; T.parking_brake = 0;
     const float m = 26000, set = 90;
-    double t0 = t_now, x = 0, v = scen == 6 ? 40 / 3.6 : scen == 7 ? 90 / 3.6 : scen == 8 ? 50 / 3.6 : 80 / 3.6, lx = 0, lv = 0, jerk_prev_a = 0, a_prev = 0;
-    float set_kmh = scen == 6 ? 40 : set;
-    *(unsigned char *)(GA + GA_ON) = 1; *(float *)(GA + GA_SET) = set_kmh;
-    accres r = { 1e9f, 0, 0, 0, 1e9f, 0, 0, 0 };
+    double t0 = t_now, x = 0, v = scen == 6 ? 40 / 3.6 : scen == 7 ? 90 / 3.6 : scen == 8 ? 50 / 3.6 : scen == 9 ? 3.5 / 3.6 : 80 / 3.6, lx = 0, lv = 0, jerk_prev_a = 0, a_prev = 0;
+    float set_kmh = scen == 6 ? 40 : scen == 9 ? 50 : set;
+    *(unsigned char *)(GA + GA_ON) = g_acc_cruise_on; *(float *)(GA + GA_SET) = set_kmh;
+    accres r = { 1e9f, 0, 0, 0, 1e9f, 0, 0, 0, 0 };
     int lead_on = 0; float stock_acc_prev = 0;
     double sum_err = 0; int nerr = 0;
     for (; t_now - t0 < 60; t_now += 1 / 60.0) {
@@ -919,6 +1125,7 @@ static accres acc_run(const char *name, int own, int scen)
             if (lead_on && t >= 11.5 && lv > 33 / 3.6) lv = fmax(33 / 3.6, lv - 1.1 * dt);
         }
         else if (scen == 8) { if (!lead_on) { lead_on = 1; lx = x + 90; lv = 0; } }                                // a stopped lead 90 m ahead (a queue): the stop behind it
+        else if (scen == 9) { if (!lead_on) { lead_on = 1; lx = x + 8; lv = 4 / 3.6; } }                             // a lead creeping away at 4 km/h (walking pace), 8 m ahead: follow it, don't stop
         else if (scen == 6) {                                                                                       // a car crossing 45 m ahead (roundabout): 25 km/h across, gone after 3 s
             if (t >= 10 && t < 12 && !lead_on) { lead_on = 1; lx = x + 40; lv = 0; }
             if (t >= 12) lead_on = 0;
@@ -982,9 +1189,188 @@ static accres acc_run(const char *name, int own, int scen)
         stock_acc_prev = game_target;
     }
     r.end_kmh = (float)(v * 3.6);
+    r.end_gap = lead_on ? (float)(lx - x) : 0;
     r.mean_gap_err = nerr ? (float)(sum_err / nerr) : 0;
-    printf("%-52s %s min gap %5.1f m, peak decel %.2f m/s2, jerk %.2f m/s3, emergency %.1f s, min %.0f / end %.0f km/h, |gap-D|/D %.2f, brake request on/off x%d\n", name, own ? "ours" : "game", r.min_gap, r.peak_dec, r.max_jerk, r.emerg_s,
-           r.min_kmh, r.end_kmh, r.mean_gap_err, g_acc_flips);
+    printf("%-52s %s min gap %5.1f m, peak decel %.2f m/s2, jerk %.2f m/s3, emergency %.1f s, min %.0f / end %.0f km/h, end gap %5.1f m, |gap-D|/D %.2f, brake request on/off x%d\n", name, own ? "ours" : "game", r.min_gap, r.peak_dec, r.max_jerk, r.emerg_s,
+           r.min_kmh, r.end_kmh, r.end_gap, r.mean_gap_err, g_acc_flips);
+    return r;
+}
+
+// ======================================================================= ACC sweep (env mode): one generalized ACC / Stop&Go run
+// Driven by env ACC_SCEN (see sweep_acc.py); SIM_SET overrides the [cruise] params (own_acc_*, acc_*, stop_go*) as usual.
+// One run per process, prints one CSV line "ACC,scen,mass_t,...". Columns:
+//   scen          the ACC_SCEN name
+//   mass_t        gross weight (t)
+//   min_gap_m     closest distance to the lead (m) while it is present
+//   min_ttc_s     smallest gap / closing speed while closing > 0.3 m/s (99 if never)
+//   collision     1 if the gap reached 0
+//   stand_gap_m   mean gap (m) while stopped behind the lead (-1 if never stopped behind it)
+//   peak_decel    strongest braking of the plant (m/s2)
+//   max_jerk      largest |da/dt| of the smoothed acceleration (m/s3)
+//   emerg_s       seconds the game's ACC emergency part was active (only with ACC_AEB=0: by default our AEB is hooked in, as in the game)
+//   brake_flips   the brake request starting/ending (g_acc_flips)
+//   mean_gap_err  mean |gap - wanted gap| / wanted gap while following (the own ACC's dstar)
+//   drive_off_s   mean delay from the lead moving off to us moving > 1 km/h (-1 if none)
+//   stops         times we came to a standstill
+//   time_s        settle time (s): when the gap was last off its final value (the wanted gap at the lead's speed) by more than 10 % + 0.5 m
+//   throttle_int  sum of throttle x dt (an energy proxy)
+//   dist_m        distance driven (m)
+// The plant is the same as acc_run: throttle 40 kN (<= 30 km/h) / 20 kN, rolling + aero drag, but the service brake and the
+// game's emergency part scale with mass like aeb_run (heavier = weaker). Stop&Go is live (g_sg_ok = 1, p_sg from the params),
+// so in the jam scenarios the truck stops behind the lead and drives off with it.
+struct accsw {
+    float min_gap, min_ttc, stand_gap, peak_dec, max_jerk, emerg_s, mean_gap_err, max_close_low, drive_off_s, time_s, throttle_int, dist_m;
+    int collision, brake_flips, stops;
+};
+static float g_queue_decel = 1.0f;   // the queuedecel scenario's lead deceleration (m/s2)
+static int acc_scen_idx(const char *n)
+{
+    if (!strcmp(n, "jam")) return 0;
+    if (!strcmp(n, "jam_fast")) return 1;
+    if (!strcmp(n, "cutin")) return 2;
+    if (!strcmp(n, "cutin_close")) return 3;
+    if (!strcmp(n, "hardbrake")) return 4;
+    if (!strcmp(n, "approach")) return 5;
+    if (!strcmp(n, "slowlead")) return 6;
+    if (!strcmp(n, "wave")) return 7;
+    if (!strcmp(n, "pullaway")) return 8;
+    if (!strcmp(n, "closein")) return 9;
+    if (!strcmp(n, "closein_slow")) return 10;
+    if (!strcmp(n, "queuedecel")) return 11;
+    return -1;
+}
+static accsw acc_sweep_run(const char *scen_name, float mass, int gap_level)
+{
+    int scen = acc_scen_idx(scen_name);
+    g_acc_flips = 0; float req_prev = 0;
+    memset(GA, 0, sizeof GA); memset(&C, 0, sizeof C); memset(&OA, 0, sizeof OA); memset(&s_radar, 0, sizeof s_radar);
+    memset(&AE, 0, sizeof AE); AE.gap_prev = AE.rate = AE.vl_prev = NAN;
+    s_req_ours = 0; s_want_aeb = 0; s_aeb_was = 0; s_br_at = 0; s_air_low = 0; s_want_acc = 0;
+    s_aeb_owns = getenv("ACC_AEB") ? atoi(getenv("ACC_AEB")) != 0 : 1;   // our AEB hooked in, as in the game (0: the game's emergency part instead)
+    p_smooth = 1; p_own_acc = 1; g_radar_ok = 1; o_radar = fake_radar; g_low_ok = 1; g_level = gap_level;
+    g_sg_ok = 1; p_ah = 0; p_hill = 0; g_stopped_at = 0; g_sg_hold = 0; g_feed = 0; s_sg_wait = 0;
+    o_cruise = stock_cruise; stock_thr = 0;
+    memset(&T, 0, sizeof T);
+    g_sim_mass = mass; vehicle_reset(RESET_HARD);
+    T.engine_on = 1; T.gear = 8; T.dgear = 8; T.eff_clutch = 0; T.parking_brake = 0; T.air_psi = 120;
+
+    // scenario: start speed, set speed, the lead's start
+    float v0 = 80 / 3.6f, set_kmh = 85, gap0 = 44;   // defaults (cutin-ish)
+    int lead_on = 0; float lx = 0, lv = 0;
+    float vmax = 30 / 3.6f, jam_acc = 1.0f, jam_brk = 1.5f;   // jam cycle
+    int phase = 0; double tp = 0;
+    if (scen == 0) { v0 = 0; set_kmh = 50; lead_on = 1; lx = 6; lv = 0; }                    // jam: start behind a stopped lead
+    else if (scen == 1) { v0 = 0; set_kmh = 60; lead_on = 1; lx = 6; lv = 0; vmax = 50 / 3.6f; jam_brk = 3.0f; }   // jam_fast
+    else if (scen == 2) { v0 = 80 / 3.6f; set_kmh = 85; gap0 = 20; }                          // cutin
+    else if (scen == 3) { v0 = 85 / 3.6f; set_kmh = 85; gap0 = 12; }                          // cutin_close
+    else if (scen == 4) { v0 = 80 / 3.6f; set_kmh = 85; lead_on = 1; lx = 2 * 80 / 3.6f; lv = 80 / 3.6f; }  // hardbrake
+    else if (scen == 5) { v0 = 80 / 3.6f; set_kmh = 80; lead_on = 1; lx = 150; lv = 0; }      // approach
+    else if (scen == 6) { v0 = 80 / 3.6f; set_kmh = 80; lead_on = 1; lx = 99; lv = 25 / 3.6f; }  // slowlead
+    else if (scen == 7) { v0 = 80 / 3.6f; set_kmh = 90; lead_on = 1; lx = 2 * 80 / 3.6f; lv = 80 / 3.6f; }   // wave
+    else if (scen == 8) { v0 = 40 / 3.6f; set_kmh = 90; lead_on = 1; lx = 22; lv = 40 / 3.6f; }  // pullaway
+    else if (scen == 9) { v0 = 80 / 3.6f; set_kmh = 85; lead_on = 1; lx = 95; lv = 60 / 3.6f; }   // closein: a truck at 60 on the motorway, seen at 95 m
+    else if (scen == 10) { v0 = 50 / 3.6f; set_kmh = 50; lead_on = 1; lx = 70; lv = 20 / 3.6f; }  // closein_slow: town, 50 onto a 20
+    else if (scen == 11) { v0 = 50 / 3.6f; set_kmh = 80; lead_on = 1; lv = 50 / 3.6f; lx = desired_gap(50 / 3.6f); }  // queuedecel: follow a queue that then brakes 50 -> 0 at 1 m/s2
+    if (scen < 0) { printf("ACC,%s,unknown scenario\n", scen_name); return {}; }
+
+    *(unsigned char *)(GA + GA_ON) = 1; *(float *)(GA + GA_SET) = set_kmh;
+    accsw r = { 1e9f, 99, -1, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0 };
+    double t0 = t_now, x = 0, v = v0, a_prev = 0, jerk_prev_a = 0;
+    double sum_err = 0, sum_off = 0, sum_stand = 0; int nerr = 0, noff = 0, nstand = 0;
+    int was_stopped = 0, lead_was_stopped = 0; double lead_off_t = -1;
+    double out_last = 0;   // settle: the last time the gap was off its final value (the wanted gap at the lead's speed) by more than 10 % + 0.5 m
+    float bkw = 1.0f / fmaxf(1.0f, mass / 30000.0f);   // heavier = weaker brakes, like aeb_run
+    double brk = 0;                                     // the applied brake after the game's slew (5/s), as in aeb_run
+    for (; t_now - t0 < 120; t_now += 1 / 60.0) {
+        double t = t_now - t0, dt = 1 / 60.0;
+        // scripts
+        if (scen == 0 || scen == 1) {                                                                  // jam cycles
+            if (phase == 0) { lv = 0; if (tp >= 8) { phase = 1; tp = 0; } }
+            else if (phase == 1) { lv = fminf(vmax, lv + jam_acc * (float)dt); if (lv >= vmax) { phase = 2; tp = 0; } }
+            else if (phase == 2) { if (tp >= 4) { phase = 3; tp = 0; } }
+            else { lv = fmaxf(0, lv - jam_brk * (float)dt); if (lv <= 0) { phase = 0; tp = 0; } }
+            tp += dt;
+        }
+        else if (scen == 2) { if (!lead_on && t >= 10) { lead_on = 1; lx = x + gap0; lv = 60 / 3.6f; } }
+        else if (scen == 3) { if (!lead_on && t >= 10) { lead_on = 1; lx = x + gap0; lv = 70 / 3.6f; } if (lead_on && lv > 50 / 3.6f) lv = fmaxf(50 / 3.6f, lv - 2.0f * (float)dt); }
+        else if (scen == 4) { if (lead_on && t >= 3 && lv > 0) lv = fmaxf(0, lv - 6.0f * (float)dt); }
+        else if (scen == 7) { lv = (80 + 10 * sinf((float)(2 * M_PI * t / 40))) / 3.6f; }
+        else if (scen == 8) { if (lead_on && lv < 90 / 3.6f) lv = fminf(90 / 3.6f, lv + 1.0f * (float)dt); }
+        else if (scen == 11) { if (lead_on && t >= 5 && lv > 0) lv = fmaxf(0, lv - g_queue_decel * (float)dt); }   // queuedecel: hold 5 s, then g_queue_decel to a stop
+        if (lead_on) lx += lv * dt;
+        float gap = lead_on ? (float)(lx - x) : 0;
+        if (lead_on && gap <= 0) { r.collision = 1; gap = 0; lx = x; }
+        T.speed = (float)v; T.cruise = set_kmh / 3.6f; T.accel = (float)a_prev; T.accel_fast = (float)a_prev; T.air_psi = 120;
+        float D = fmaxf(4, 2.0f * (float)v);
+        // game's ACC fn
+        float acc_t = set_kmh, lead_seen = 0;
+        if (lead_on && gap > 0 && gap < 100) {
+            lead_seen = gap;
+            float e_gap = gap - D;
+            if (lv * 3.6f >= set_kmh) acc_t = set_kmh;
+            else {
+                float a_ = 132840.0f / mass;
+                acc_t = lv * 3.6f + fminf(expf(fabsf(e_gap) * 2.302585f / a_), 10.0f) * e_gap;
+                acc_t = acc_t < 0 ? 0 : acc_t > set_kmh ? set_kmh : acc_t;
+            }
+            g_fake_radar[0] = gap; g_fake_radar[1] = (float)lv;
+        } else { g_fake_radar[0] = 3.4e38f; g_fake_radar[1] = 0; }
+        g_fake_radar[2] = 3.4e38f; g_fake_radar[3] = 0; g_fake_radar[4] = 0;
+        radar_stub(GA, g_fake_radar);
+        *(float *)(GA + GA_LEAD_M) = lead_seen;
+        *(float *)(GA + GA_ACC_TARGET) = acc_t;
+        *(float *)(GA + GA_BRAKE_REQ) = 0;
+        vehicle_frame();
+        float u = act_stub(GA, (float)dt, 0);
+        { float rq = act_request(); g_acc_flips += (rq > 0.02f) != (req_prev > 0.02f); req_prev = rq; }
+        float T_used = *(float *)(GA + GA_ACC_TARGET);
+        float kmh = (float)v * 3.6f, Aov = T_used + 0.25f;
+        float dec = 0, ov = kmh - Aov;
+        if (ov > 0) dec += fminf(ov, 1.0f) * 0.7f + fminf(ov * 0.15f, 0.15f) * 4.0f;
+        { double req = *(float *)(GA + GA_BRAKE_REQ); brk = req > brk ? fmin(req, brk + 5 * dt) : fmax(req, brk - 5 * dt); }   // the game's slew
+        dec += (float)(brk * 10) * bkw;   // aeb_run's fit: 10 m/s2 per request at 30 t and less
+        float emerg = 0;
+        if (!s_aeb_owns && lead_seen > 0 && lead_seen < D * 0.5f) { emerg = fminf(1, (D * 0.5f - lead_seen) / (D * 0.5f)); dec += emerg * 6.0f * bkw; r.emerg_s += (float)dt; }
+        if (dec > 0) u = 0;
+        float F = u * (kmh > 30 ? 20000.0f : 40000.0f);
+        float res = mass * 9.81f * 0.006f + 0.5f * 1.2f * 6 * (float)(v * v);
+        double a = (F - res) / mass - dec;
+        static const int acc_tr = getenv("ACC_TRACE") != NULL;
+        if (acc_tr && fmod(t, 0.25) < dt) printf("   t %5.2f gap %5.1f v %5.1f lead %5.1f req %.3f dec %.2f u %.2f want_acc %.3f ask %.2f ttc %.1f\n", t, gap, v * 3.6, lv * 3.6, *(float *)(GA + GA_BRAKE_REQ), dec, u, s_want_acc, brake_asked(BRQ_ACC), v > lv + 0.3 ? gap / (v - lv) : 99.0);
+        v = fmax(0, v + a * dt);
+        x += v * dt;
+        // metrics
+        if (lead_on) {
+            { float Dl = desired_gap(fmaxf(0, lv)); if (fabsf(gap - Dl) > 0.1f * Dl + 0.5f) out_last = t; }
+            r.min_gap = fminf(r.min_gap, gap);
+            float closing = (float)(v - lv);
+            if (closing > 0.3f && gap > 0) r.min_ttc = fminf(r.min_ttc, gap / closing);
+            if (closing > 0 && v * 3.6f < 15.0f && gap < 2.0f * desired_gap(fmaxf(0, lv))) r.max_close_low = fmaxf(r.max_close_low, closing);
+            if (s_dstar == s_dstar && gap > 0) { sum_err += fabsf(gap - s_dstar) / s_dstar; nerr++; }
+            if (v < 0.1f && gap > 0) { sum_stand += gap; nstand++; }
+            bool lead_stopped = lv < 0.3f;
+            if (lead_stopped) lead_was_stopped = 1;
+            else { if (lead_was_stopped && v < 1.0f / 3.6f && lead_off_t < 0) lead_off_t = t; lead_was_stopped = 0; }
+        } else lead_was_stopped = 0;
+        if (lead_off_t >= 0 && v > 1.0f / 3.6f) { sum_off += t - lead_off_t; noff++; lead_off_t = -1; }
+        if (v < 0.1f) { if (!was_stopped) { r.stops++; was_stopped = 1; } } else was_stopped = 0;
+        if (t > 1) {
+            r.peak_dec = fmaxf(r.peak_dec, (float)-a);
+            double a_s = a_prev + (a - a_prev) * (dt / (0.3 + dt));
+            r.max_jerk = fmaxf(r.max_jerk, (float)(fabs(a_s - jerk_prev_a) / dt));
+            jerk_prev_a = a_s; a_prev = a_s;
+        } else { a_prev = a; jerk_prev_a = a; }
+        r.throttle_int += u * (float)dt;
+    }
+    r.stand_gap = nstand ? (float)(sum_stand / nstand) : -1;
+    r.mean_gap_err = nerr ? (float)(sum_err / nerr) : 0;
+    r.drive_off_s = noff ? (float)(sum_off / noff) : -1;
+    r.brake_flips = g_acc_flips;
+    r.time_s = (float)out_last;   // (the settle time: when the gap last was off its final value)
+    r.dist_m = (float)x;
+    printf("ACC,%s,%.0f,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%.3f,%d,%.4f,%.3f,%d,%.2f,%.4f,%.1f\n",
+           scen_name, mass / 1000, r.min_gap, r.min_ttc, r.collision, r.stand_gap, r.peak_dec, r.max_jerk, r.emerg_s,
+           r.brake_flips, r.mean_gap_err, r.drive_off_s, r.stops, r.time_s, r.throttle_int, r.dist_m);
     return r;
 }
 
@@ -1034,6 +1420,10 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
                 if (t >= 5) lv = fmax(0, lv - 4 * dt); break;
         case 17: if (!lead_on) { lead_on = 1; lx = x + 6; }                                               // town traffic: the lead weaves 28-33 km/h
                  lv = (30.5 + 2.5 * sin(2 * M_PI * t / 16)) / 3.6; break;
+        case 19: if (!lead_on) { lead_on = 1; lx = x + 2.0f; lv = 0; } pedal = 0; break;                  // pulling away at 5 km/h, a stopped lead 2.0 m ahead: a stop takes ~0.7 m/s2 (below aeb_min_kmh: no AEB)
+        case 18: if (!lead_on) { lead_on = 1; lx = x + 5; lv = 0; } break;                               // a crawl onto a stopped lead 5 m ahead (below aeb_min_kmh)
+        case 20: if (!lead_on) { lead_on = 1; lx = x + 200; lv = 0; } pedal = 0; break;                   // 13-10 'very sensitive': coasting (throttle 0, brake 0) toward standing traffic
+        case 21: break;                                                                                    // 31-10 town: no real lead, the radar reads a phantom wall at 0.1 m (the lost-lead-hold; fed below)
         }
         if (lead_on) lx += lv * dt;
         float gap = lead_on ? (float)(lx - x) : 0;
@@ -1063,9 +1453,10 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
             pedal = (float)fmin(1, fmax(0, (a_des + 0.4) / (20000.0 / mass)));
         }
         T.in_thr = pedal; T.in_brake = pbrake;
-        T.speed = (float)v; T.accel = (float)a_f; T.air_psi = (float)psi;
+        T.speed = (float)v; T.accel = (float)a_f; T.accel_fast = (float)a_f; T.air_psi = (float)psi;
         T.place.orientation.pitch = 0;
-        if (lead_on && gap > 0 && gap < 100) { g_fake_radar[0] = gap; g_fake_radar[1] = cross_v > 0 ? cross_v : (float)lv; }
+        if (scen == 21) { g_fake_radar[0] = 0.1f; g_fake_radar[1] = 0; }   // the phantom wall the lost-lead-hold left (under the radar's 0.3 m freshness floor)
+        else if (lead_on && gap > 0 && gap < 100) { g_fake_radar[0] = gap; g_fake_radar[1] = cross_v > 0 ? cross_v : (float)lv; }
         else { g_fake_radar[0] = 3.4e38f; g_fake_radar[1] = 0; }
         radar_stub(GA, g_fake_radar);
         float req_before = *(float *)(GA + GA_BRAKE_REQ);
@@ -1116,6 +1507,8 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
     return r;
 }
 
+#include "sim_aeb_lat_rows.inc"   // the AEB's sideways reading: the radar's lead must be in our path (core/aeblat.h)
+
 // ======================================================================= force_mode: the controller asks a force, the throttle gives it in this gear
 // A 12-speed box on the vehicle model (the Volvo ratios of sim.cpp, diff 2.85, this file's engine: 2400 Nm, flat 1000-1500 rpm, limit 2200),
 // the force = throttle x the gear's full-throttle force (vehicle_force_at), a 0.5 s torque gap per shift. The box shifts by rpm and pull (up
@@ -1123,10 +1516,10 @@ static aebres aeb_run(const char *name, int scen, float mass, float psi0)
 // throttle when the lower gear stays under 1700): the same box for both units, so the difference is the controller's.
 static const float FM_RATIO[12] = { 11.73f, 9.21f, 7.09f, 5.57f, 4.35f, 3.41f, 2.7f, 2.12f, 1.63f, 1.28f, 1.0f, 0.78f };
 static int g_fm_plant;   // the force_mode runs: the wish pedal's reference on this plant (the other runs: the model cannot tell, the old unit)
-// A full wish at v as the wish pedal finds it with ref_now 1: the best gear at full throttle whose revs lie in 1000 ... 1900 rpm (its window on
+// A full wish at v as the wish pedal finds it (the best-gear reference): the best gear at full throttle whose revs lie in 1000 ... 1900 rpm (its window on
 // this engine), the first gear at 1000 rpm as the cap (pedal.cpp: wish_ref)
 static int g_full_power;
-float pedal_wish_full(float v)
+float wish_full(float v)
 {
     if (!g_fm_plant) return 0;
     float best = 0;
@@ -1144,7 +1537,7 @@ static fmres fm_run(float mass, int fm, float cvar, float eco_cap, float (*road)
     fmres r = {}; r.jump = -1; r.t82 = -1;
     memset(GA, 0, sizeof GA); memset(&T, 0, sizeof T); memset(&C, 0, sizeof C); memset(&AH, 0, sizeof AH);
     for (int o = 0; o < ACT_N; o++) act_brake(o, 0);
-    act_reset(RESET_HARD, "sim"); cr_reset(RESET_HARD, "sim");
+    act_reset(RESET_HARD, "sim"); m_brake.reset(RESET_HARD, "sim"); cr_reset(RESET_HARD, "sim");
     g_fm_plant = 1; p_force_mode = (float)fm; p_eco_cap = eco_cap; g_cvar_adaptive = cvar;
     g_sim_eng = engine_info(); g_sim_eng.torque = 2400; g_sim_eng.n_curve = 0; g_sim_eng.rpm_limit = 2200; g_sim_mass = mass;
     for (int i = 0; i < 12; i++) T.ratio[i] = FM_RATIO[i];
@@ -1195,6 +1588,104 @@ static fmres fm_run(float mass, int fm, float cvar, float eco_cap, float (*road)
     g_fm_plant = 0; p_force_mode = 0; p_eco_cap = 1; g_cvar_adaptive = 3;
     return r;
 }
+
+// Own speed limiter on the vehicle model (29-10, Damien: with the engine at x5 the old fade took far too much pull): the 12-speed box of
+// the force_mode test, full pedal from 60 km/h, the plant's torque x k (a chiptune; the model reads the same torque, or x1 while it has
+// not seen the new one: mismatch), a torque lag, the telemetry's acceleration 0.5 s late (the old fade reads it). Per run: where the
+// throttle first fades, the time to 100 (the shown limit), the overshoot, the pumping (throttle travel per second over the last 30 s)
+// and the speed it holds.
+extern float g_lim_tau;
+struct limres { float v_fade, t100, over, pump, v_end; };   // pump: throttle travel per second over the last 30 s beyond its net change
+static limres lim_gear_run(float mass, float k_plant, float k_model, float grade, float tau, float lag_e, int quiet = 1)
+{
+    limres r = { -1, -1, 0, 0, 0 };
+    memset(GA, 0, sizeof GA); memset(&T, 0, sizeof T); memset(&C, 0, sizeof C); memset(&AH, 0, sizeof AH);
+    for (int o = 0; o < ACT_N; o++) { act_brake(o, 0); act_thr_cap(o, 1); act_thr_scale(o, 1); }
+    act_reset(RESET_HARD, "sim"); m_brake.reset(RESET_HARD, "sim"); cr_reset(RESET_HARD, "sim");
+    float sl = p_own_lim, sb = p_own_bias, st = g_lim_tau; p_own_lim = 100; p_own_bias = 0.5f; g_lim_tau = tau;
+    g_fm_plant = 1;
+    g_sim_eng = engine_info(); g_sim_eng.torque = 2400 * k_model; g_sim_eng.n_curve = 0; g_sim_eng.rpm_limit = 2200; g_sim_mass = mass;
+    for (int i = 0; i < 12; i++) T.ratio[i] = FM_RATIO[i];
+    T.diff = 2.85f; T.fwd_gears = 12; T.wheels = 1; T.engine_on = 1; T.air_psi = 120;
+    vehicle_reset(RESET_HARD);
+    o_cruise = stock_cruise; stock_thr = 0; p_smooth = 1; g_low_ok = 1; g_feed = 0;
+    float v = 60 / 3.6f, u = 0, u_prev = -1, f_eng = 0, u90 = -1, u_last = 0; double t0 = t_now, shift_end = -1, a_f = 0, sum_v = 0; int n_v = 0;
+    int gear = 9, next = gear;
+    for (; t_now - t0 < 120; t_now += 1 / 60.0) {
+        double t = t_now - t0; float kmh = v * 3.6f;
+        T.speed = v; T.place.orientation.pitch = atanf(grade / 100) / 6.2831853f; T.accel = (float)a_f; g_sim_gd = atanf(grade / 100) * 57.29578f;
+        if (shift_end >= 0 && t_now >= shift_end) { gear = next; shift_end = -1; }
+        int shifting = shift_end >= 0;
+        if (!shifting) {
+            float rpm = vehicle_rpm_at(gear, v);
+            if (gear < 12 && rpm > 1500 && vehicle_rpm_at(gear + 1, v) >= 950) next = gear + 1;
+            else if (gear > 1 && rpm < 950) next = gear - 1;
+            if (next != gear) { shift_end = t_now + 0.5; shifting = 1; }
+        }
+        T.gear = T.dgear = gear; T.rpm = vehicle_rpm_at(gear, v); T.eff_clutch = shifting ? 1 : 0; T.in_thr = 1;
+        vehicle_frame();
+        u = act_stub(GA, 1 / 60.0f, 1.0f);
+        T.eff_thr = u;
+        if (!shifting && r.v_fade < 0 && u < 0.98f) r.v_fade = kmh;
+        if (r.t100 < 0 && kmh >= 100) r.t100 = (float)t;
+        if (r.t100 >= 0) r.over = fmaxf(r.over, kmh - (tau > 0 ? 100.25f : 100.5f));
+        if (t > 90 && u_prev >= 0 && !shifting) { r.pump += fabsf(u - u_prev); if (u90 < 0) u90 = u; u_last = u; }   // (travel beyond a monotone settle)
+        u_prev = shifting ? -1 : u;
+        if (t > 100) { sum_v += kmh; n_v++; }
+        // the plant: the engine's torque follows the throttle with lag_e, x k_plant; the model's ratio, radius and efficiency
+        float f_full = vehicle_force_at(gear, v, 1.0f) * k_plant / k_model;
+        float f_want = shifting ? 0 : u * f_full;
+        f_eng = lag_e > 0 ? f_eng + (f_want - f_eng) * fminf(1.0f, (1 / 60.0f) / lag_e) : f_want;
+        if (shifting) f_eng = 0;
+        float res = mass * 9.81f * (sinf(atanf(grade / 100)) + 0.006f) + 0.5f * 1.2f * 6 * v * v;
+        double a = (f_eng - res) / mass;
+        v = fmaxf(0, v + (float)a / 60);
+        a_f += (a - a_f) * fmin(1.0, (1 / 60.0) / 0.5);
+        if (!quiet && fmod(t, 1.0) < 1 / 60.0) printf("      t %5.1f  %6.2f km/h  gear %2d  thr %.3f\n", t, kmh, gear, u);
+    }
+    r.v_end = n_v ? (float)(sum_v / n_v) : 0;
+    r.pump = u90 >= 0 ? (r.pump - fabsf(u_last - u90)) / 30 : 0;   // throttle travel per second over the last 30 s, beyond the net change
+    p_own_lim = sl; p_own_bias = sb; g_lim_tau = st; g_fm_plant = 0; g_sim_gd = NAN;
+    for (int o = 0; o < ACT_N; o++) { act_thr_cap(o, 1); act_thr_scale(o, 1); }
+    return r;
+}
+static void limiter_gear_test()
+{
+    struct { const char *name; float mass, kp, km, grade; } C_[] = {
+        { "40 t x1 flat", 40000, 1, 1, 0 }, { "40 t x1.17 flat", 40000, 1.17f, 1.17f, 0 }, { "40 t x5 flat", 40000, 5, 5, 0 },
+        { "8 t x1 flat", 8000, 1, 1, 0 }, { "8 t x5 flat", 8000, 5, 5, 0 }, { "40 t x5, model x1", 40000, 5, 1, 0 },
+        { "40 t x1.17, model x1", 40000, 1.17f, 1, 0 }, { "40 t x1, 1 %", 40000, 1, 1, 1 }, { "40 t x5 1 %", 40000, 5, 5, 1 },
+        { "40 t x1 -1 %", 40000, 1, 1, -1 }, { "8 t x5 -0.5 %", 8000, 5, 5, -0.5f } };
+    const char *ts = getenv("LIM_TAUS");
+    float taus[8] = { 0, g_lim_tau }; int nt = 2;
+    if (ts) { nt = 0; for (const char *p = ts; *p && nt < 8; ) { taus[nt++] = strtof(p, (char **)&p); while (*p == ',') p++; } }
+    float lags[2] = { 0, 0.3f };
+    if (getenv("LIM_LAG")) lags[1] = strtof(getenv("LIM_LAG"), NULL);
+    int bad = 0;
+    const int NC = sizeof C_ / sizeof C_[0];
+    limres old_r[2][NC];
+    for (int li = 0; li < 2; li++) for (int ci = 0; ci < NC; ci++) old_r[li][ci] = lim_gear_run(C_[ci].mass, C_[ci].kp, C_[ci].km, C_[ci].grade, 0, lags[li]);
+    for (int li = 0; li < 2; li++) for (int ti = 0; ti < nt; ti++) {
+        float tau = taus[ti], lag = lags[li];
+        printf("own limiter 100 on the model, %s, torque lag %.1f s:\n", tau > 0 ? "cap" : "old fade", lag);
+        for (int ci = 0; ci < NC; ci++) {
+            auto &c = C_[ci];
+            limres r = lim_gear_run(c.mass, c.kp, c.km, c.grade, tau, lag, !getenv("LIM_TRACE"));
+            printf("   tau %.2f  %-22s fade from %6.1f  100 at %5.1f s  over %.2f  pump %.3f/s  holds %.2f\n", tau, c.name, r.v_fade, r.t100, r.over, r.pump, r.v_end);
+            if (tau > 0 && fabsf(tau - g_lim_tau) < 1e-3f && c.kp / c.km < 2) {
+                // the shipped tau (the model's torque within 2x of the engine's; x5 against x1 is informational: a chiptune the model has
+                // not read yet): at most 0.25 km/h over its target, no pumping, the limit held where the engine can, and 100 no later than
+                // the old fade reached it (where it did)
+                bool can = !(c.grade > 0 && c.kp < 2);
+                const limres &o = old_r[li][ci];
+                bad |= r.over > 0.25f || r.pump > 0.01f || (can && fabsf(r.v_end - 100.25f) > 0.25f) || (o.t100 >= 0 && !(r.t100 >= 0 && r.t100 <= o.t100));
+            }
+        }
+    }
+    printf("own limiter on the model test: %s\n", bad ? "FAIL" : "ok");
+    if (bad) exit(1);
+}
+
 // ======================================================================= a junction ahead and a climb in between (ride 8, 27-10, log 496-535 s)
 // 33 t on the 12-speed box of fm_run, set 63, 41 km/h and a 74 deg junction (21 km/h, margin 10) 290 m ahead. A climb begins 50 m on (6 % from
 // 90 m, tapering from 190 m to 2.5 % at the junction). The player: coasting at first, then full throttle toward the set speed, then off again.
@@ -1214,7 +1705,7 @@ static jnres jn_climb_run(const char *name, float (*road)(double), float mass, f
     g_jn_flips = 0;
     memset(GA, 0, sizeof GA); memset(&T, 0, sizeof T); memset(&C, 0, sizeof C); memset(&AH, 0, sizeof AH);
     for (int o = 0; o < ACT_N; o++) act_brake(o, 0);
-    act_reset(RESET_HARD, "sim"); cr_reset(RESET_HARD, "sim");
+    act_reset(RESET_HARD, "sim"); m_brake.reset(RESET_HARD, "sim"); cr_reset(RESET_HARD, "sim");
     g_fm_plant = 1; g_full_power = 1; p_force_mode = 0; g_cvar_adaptive = 3;
     g_sim_eng = engine_info(); g_sim_eng.torque = 2400; g_sim_eng.n_curve = 0; g_sim_eng.rpm_limit = 2200; g_sim_mass = mass;
     for (int i = 0; i < 12; i++) T.ratio[i] = FM_RATIO[i];
@@ -1347,7 +1838,7 @@ static void kp_init(float set_kmh)
 {
     memset(GA, 0, sizeof GA); memset(&C, 0, sizeof C); memset(&AH, 0, sizeof AH);
     for (int o = 0; o < ACT_N; o++) act_brake(o, 0);
-    act_reset(RESET_HARD, "sim"); cr_reset(RESET_HARD, "sim");
+    act_reset(RESET_HARD, "sim"); m_brake.reset(RESET_HARD, "sim"); cr_reset(RESET_HARD, "sim");
     o_cruise = stock_cruise; stock_thr = 0;
     p_smooth = 1; g_low_ok = 1; g_sg_ok = 1; g_sg_hold = 0; g_feed = 0; g_stopped_at = 0; s_cb_was_on = 0; s_jn_cancel_at = -1e9; g_rb_cancel_at = -1e9;
     p_ah = 0; p_hill = 0; g_radar_ok = 0; p_own_acc = 0;
@@ -1525,13 +2016,244 @@ static int force_mode_test()
     return bad;
 }
 
+// ======================================================================= overtake assist ([cruise] overtake_assist)
+// Following a slower lead (70 km/h) at 80 km/h with the set speed at 90, the left signal in Normal makes the ACC close in (a
+// shorter wanted gap) and pull toward the set speed; TrueShift reads cruise_overtake_on() to skip the cruise's force wish, so
+// the pull does not kick down. In Eco and with the left lane occupied nothing happens; turning the signal off hands the
+// normal gap back smoothly. The plant and the game's ACC are the acc_run ones; the blind spot is stubbed via g_sim_ta.
+struct otres { int on; float gap0, gap_min, v_max, v_end, end_gap, jerk_back; int on_end, flips, on_lines, off_lines; };
+static otres ot_run(float mode_cvar, int left_occ, double sig_on_at, double sig_off_at, double secs,
+                    double brake_on_at = -1, double brake_off_at = -1)
+{
+    memset(GA, 0, sizeof GA); memset(&C, 0, sizeof C); memset(&OA, 0, sizeof OA);
+    memset(&s_radar, 0, sizeof s_radar); memset(&OT, 0, sizeof OT);
+    g_ot_on_lines = g_ot_off_lines = 0;
+    p_smooth = 1; p_own_acc = 1; p_overtake = 1; g_radar_ok = 1; o_radar = fake_radar; g_low_ok = 1;
+    g_level = 1; g_sg_ok = 0; p_ah = 0; p_hill = 0;
+    o_cruise = stock_cruise; stock_thr = 0;
+    g_cvar_adaptive = mode_cvar;
+    g_sim_probe = 1; memset(&g_sim_ta, 0, sizeof g_sim_ta); g_sim_ta.ok = 1; g_sim_ta.bs_on = 1; g_sim_ta.bs_left = left_occ ? 1 : 0;
+    g_sim_mass = 26000;
+    T.engine_on = 1; T.gear = 8; T.dgear = 8; T.eff_clutch = 0; T.parking_brake = 0; T.in_brake = 0; T.in_thr = 0; T.place.orientation.pitch = 0;
+    const float m = 26000, set = 90;
+    *(unsigned char *)(GA + GA_ON) = 1; *(float *)(GA + GA_SET) = set;
+    double t0 = t_now, x = 0, v = 80 / 3.6, lx = 40, lv = 70 / 3.6;
+    otres r = { 0, 0, 1e9f, 0, 0, -1, 0, 0, 0, 0, 0 };
+    double a_prev = 0, a_s = 0, a_s_prev = 0;
+    int on_prev = 0;
+    for (; t_now - t0 < secs; t_now += 1 / 60.0) {
+        double t = t_now - t0, dt = 1 / 60.0;
+        int sig = t >= sig_on_at && t < sig_off_at;
+        T.blink_l = sig;
+        T.in_brake = brake_on_at >= 0 && t >= brake_on_at && t < brake_off_at ? 1.0f : 0.0f;
+        lx += lv * dt;
+        float gap = (float)(lx - x);
+        T.speed = (float)v; T.cruise = set / 3.6f; T.accel = (float)a_prev;
+        float D = fmaxf(4, 2.0f * (float)v);
+        float acc_t = set, lead_seen = 0;
+        if (gap > 0 && gap < 100) {
+            lead_seen = gap;
+            float e_gap = gap - D;
+            acc_t = lv * 3.6f + fminf(expf(fabsf(e_gap) * 2.302585f / (132840.0f / m)), 10.0f) * e_gap;
+            acc_t = acc_t < 0 ? 0 : acc_t > set ? set : acc_t;
+            g_fake_radar[0] = gap; g_fake_radar[1] = (float)lv;
+        } else { g_fake_radar[0] = 3.4e38f; g_fake_radar[1] = 0; }
+        g_fake_radar[2] = 3.4e38f; g_fake_radar[3] = 0; g_fake_radar[4] = 0;
+        radar_stub(GA, g_fake_radar);
+        *(float *)(GA + GA_LEAD_M) = lead_seen;
+        *(float *)(GA + GA_ACC_TARGET) = acc_t;
+        *(float *)(GA + GA_BRAKE_REQ) = 0;
+        vehicle_frame();
+        float u = act_stub(GA, (float)dt, 0);
+        int on_now = cruise_overtake_on();
+        if (on_now != on_prev) r.flips++;
+        on_prev = on_now;
+        float T_used = *(float *)(GA + GA_ACC_TARGET);
+        float kmh = (float)v * 3.6f, Aov = T_used + 0.25f, dec = 0, ov = kmh - Aov;
+        if (ov > 0) dec += fminf(ov, 1.0f) * 0.7f + fminf(ov * 0.15f, 0.15f) * 4.0f;
+        dec += *(float *)(GA + GA_BRAKE_REQ) * 7.0f;
+        if (dec > 0) u = 0;
+        float F = u * (kmh > 30 ? 20000.0f : 40000.0f);
+        float res = m * 9.81f * 0.006f + 0.5f * 1.2f * 6 * (float)(v * v);
+        double a = (F - res) / m - dec;
+        v = fmaxf(0, v + a * dt);
+        x += v * dt;
+        a_s = a_prev + (a - a_prev) * (dt / (0.3 + dt));
+        if (t >= sig_on_at - 1.0 && t < sig_on_at && s_dstar == s_dstar) r.gap0 = s_dstar;   // the normal wanted gap before the signal
+        if (sig) {
+            if (cruise_overtake_on()) r.on = 1;
+            if (s_dstar == s_dstar) r.gap_min = fminf(r.gap_min, s_dstar);
+            r.v_max = fmaxf(r.v_max, (float)(v * 3.6));
+        }
+        if (sig_off_at >= 0 && t >= sig_off_at && t < sig_off_at + 3.0)
+            r.jerk_back = fmaxf(r.jerk_back, (float)(fabs(a_s - a_s_prev) / dt));   // the hand-back must be smooth
+        a_s_prev = a_s; a_prev = a_s;
+    }
+    r.v_end = (float)(v * 3.6);
+    r.end_gap = s_dstar == s_dstar ? s_dstar : -1;
+    r.on_end = cruise_overtake_on();
+    r.on_lines = g_ot_on_lines; r.off_lines = g_ot_off_lines;
+    g_cvar_adaptive = 3; memset(&g_sim_ta, 0, sizeof g_sim_ta);
+    return r;
+}
+
+// A direct tick harness for the state machine: no plant, just the signal, the terminating conditions and the times.
+static void ot_guard_setup()
+{
+    memset(GA, 0, sizeof GA); memset(&T, 0, sizeof T); memset(&OT, 0, sizeof OT);
+    memset(&s_radar, 0, sizeof s_radar); memset(&OA, 0, sizeof OA); memset(&C, 0, sizeof C);
+    p_smooth = 1; p_own_acc = 1; p_overtake = 1; g_radar_ok = 1; o_radar = fake_radar; g_low_ok = 1;
+    g_level = 1; p_ah = 0; p_hill = 0; g_cvar_adaptive = 3.0f;
+    g_sim_probe = 1; memset(&g_sim_ta, 0, sizeof g_sim_ta); g_sim_ta.ok = 1; g_sim_ta.bs_on = 1;
+    T.speed = 80 / 3.6f; T.blink_l = 0; T.in_brake = 0; s_want_acc = 0; AE.st = AEB_OFF;
+    *(unsigned char *)(GA + GA_ON) = 1; *(float *)(GA + GA_SET) = 90;
+    overtake_tick(GA, 40, 70 / 3.6f);   // no signal: nothing starts
+}
+static void ot_guard_hold(double secs)
+{
+    for (double t = 0; t < secs; t += 1 / 60.0) { t_now += 1 / 60.0; overtake_tick(GA, 40, 70 / 3.6f); }
+}
+
+static void overtake_test()
+{
+    int bad = 0;
+    printf("--- overtake assist: 80 km/h behind a 70 km/h lead, set 90, the left signal prepares the lane change\n");
+    // settle ~12 s, then the signal for 10 s; the truck closes in and speeds up, and cruise_overtake_on() is set (TrueShift
+    // reads it to skip the cruise's force wish, so the pull does not kick down within the first seconds)
+    otres a = ot_run(3.0f, 0, 12, 22, 30);
+    printf("   Normal: gap %.0f -> %.0f m, speed %.0f -> %.0f km/h, overtake on %d\n", a.gap0, a.gap_min, 70.0f, a.v_max, a.on);
+    bad |= !a.on || !(a.gap_min < a.gap0 - 1.0f) || !(a.v_max > 71.0f);
+    // Eco: nothing (no assist, no shorter gap, no pull)
+    otres e = ot_run(3.5f, 0, 12, 22, 30);
+    printf("   Eco: gap %.0f -> %.0f m, speed max %.0f km/h, overtake on %d\n", e.gap0, e.gap_min, e.v_max, e.on);
+    bad |= e.on || e.gap_min < e.gap0 - 0.5f || e.v_max > 71.0f;
+    // the left lane occupied: nothing
+    otres o = ot_run(3.0f, 1, 12, 22, 30);
+    printf("   left lane occupied: gap %.0f -> %.0f m, speed max %.0f km/h, overtake on %d\n", o.gap0, o.gap_min, o.v_max, o.on);
+    bad |= o.on || o.gap_min < o.gap0 - 0.5f || o.v_max > 71.0f;
+    // the signal off: the gap returns to the normal one smoothly (bounded jerk)
+    otres r = ot_run(3.0f, 0, 12, 20, 30);
+    printf("   signal off at 20 s: gap %.0f -> %.0f -> %.0f m, jerk on the hand-back %.1f m/s3\n", r.gap0, r.gap_min, r.end_gap, r.jerk_back);
+    bad |= r.end_gap < r.gap0 - 1.0f || r.jerk_back > 6.0f;
+    // the ~8 s timeout must stay ended while the signal is held (a stale on-time must not re-arm it)
+    otres t = ot_run(3.0f, 0, 12, 100, 30);
+    printf("   signal held past the 8 s timeout: overtake on at the end %d, on/off flips %d\n", t.on_end, t.flips);
+    bad |= t.on_end || t.flips > 3;
+    // a brake ends it, and it stays ended until the signal is released and set again
+    otres b = ot_run(3.0f, 0, 12, 100, 30, 18, 18.5);
+    printf("   brake at 18 s, signal still held: overtake on at the end %d, flips %d, on/off lines %d/%d\n",
+           b.on_end, b.flips, b.on_lines, b.off_lines);
+    bad |= b.on_end || b.flips > 3 || b.on_lines > 2 || b.off_lines > 2;
+    // a brake held: the start path must refuse to re-arm (no tick-rate flapping / log spam)
+    otres bh = ot_run(3.0f, 0, 12, 100, 30, 18, 100);
+    printf("   brake held from 18 s: overtake on at the end %d, flips %d, on/off lines %d/%d\n",
+           bh.on_end, bh.flips, bh.on_lines, bh.off_lines);
+    bad |= bh.on_end || bh.flips > 3 || bh.on_lines > 2 || bh.off_lines > 2;
+    // the start path checks the own ACC braking and the AEB too: neither re-arms it while the signal is held
+    for (int k = 0; k < 2; k++) {
+        ot_guard_setup();
+        T.blink_l = 1; ot_guard_hold(0.3);
+        int started = OT.on;
+        if (k == 0) s_want_acc = 0.1f; else AE.st = AEB_PARTIAL;
+        g_ot_on_lines = g_ot_off_lines = 0;
+        int flips = 0, prev = OT.on, n_on = 0;
+        for (int i = 0; i < 120; i++) {
+            t_now += 1 / 60.0;
+            overtake_tick(GA, 40, 70 / 3.6f);
+            if (OT.on != prev) { flips++; prev = OT.on; }
+            n_on += OT.on;
+        }
+        printf("   signal held, %s: started %d, then flips %d, on ticks %d, on/off lines %d/%d\n",
+               k == 0 ? "own ACC braking" : "AEB", started, flips, n_on, g_ot_on_lines, g_ot_off_lines);
+        bad |= !started || flips > 1 || n_on != 0 || g_ot_on_lines > 1 || g_ot_off_lines > 1;
+        s_want_acc = 0; AE.st = AEB_OFF;
+    }
+    // the timeout ends it, it stays off while the signal is held, and a fresh signal cycle starts it again
+    {
+        ot_guard_setup();
+        T.blink_l = 1; ot_guard_hold(0.3);
+        int started = OT.on;
+        ot_guard_hold(8.2);
+        int off_after = !OT.on;
+        ot_guard_hold(1.0);
+        int stayed_off = !OT.on;
+        T.blink_l = 0; ot_guard_hold(0.4);
+        T.blink_l = 1; ot_guard_hold(0.3);
+        int restarted = OT.on;
+        printf("   timeout while held: started %d, off after 8 s %d, stayed off %d, restarted on a new cycle %d\n",
+               started, off_after, stayed_off, restarted);
+        bad |= !started || !off_after || !stayed_off || !restarted;
+        memset(&g_sim_ta, 0, sizeof g_sim_ta); g_cvar_adaptive = 3;
+    }
+    // the overtake gap is never larger than the normal gap: a sub-1 s normal gap must not be widened to the 1 s floor
+    {
+        float gm = p_gap_m, k = p_acc_fast_k, from = p_acc_fast_from, full = p_acc_fast_full;
+        g_level = 1; p_acc_fast_k = 1.0f; p_acc_fast_from = 0; p_acc_fast_full = 0;
+        float v = 80 / 3.6f;
+        p_gap_m = 0.8f; OT.on = 0; float n1 = gap_s(v); OT.on = 1; float o1 = gap_s(v);
+        p_gap_m = 1.5f; OT.on = 0; float n2 = gap_s(v); OT.on = 1; float o2 = gap_s(v);
+        printf("   gap: normal %.2f s -> overtake %.2f s; normal %.2f s -> overtake %.2f s\n", n1, o1, n2, o2);
+        bad |= o1 > n1 + 1e-4f || o2 > n2 + 1e-4f || !(o2 < n2);
+        OT.on = 0; p_gap_m = gm; p_acc_fast_k = k; p_acc_fast_from = from; p_acc_fast_full = full;
+    }
+    printf("overtake assist test: %s\n", bad ? "FAIL" : "ok");
+    if (bad) exit(1);
+}
+
+// The US rule of thumb for the ACC gap ([cruise] acc_us_rule): 1 s per 10 ft of vehicle length below 40 mph, 1 s more above, the extra second
+// ramped in between 36 and 44 mph; 70 ft with a trailer and 25 ft without unless acc_length_ft says; the steps 0.8 / 1 / 1.2 times; capped
+// at the radar's reach (95 m); off = the ini times, as before.
+static void us_rule_test()
+{
+    int bad = 0;
+    float us = p_acc_us, ft = p_acc_ft, gm = p_gap_m, fk = p_acc_fast_k;
+    int lv = g_level, tr = T.trailer;
+    OT.on = 0; p_acc_fast_k = 1.0f;
+    auto at = [&](float kmh, int level) { g_level = level; return gap_s(kmh / 3.6f); };
+    auto near = [&](float a, float b) { return fabsf(a - b) < 0.02f; };
+    p_acc_us = 0; p_gap_m = 1.25f; T.trailer = 1;
+    float off = at(80, 1);
+    p_acc_us = 1; p_acc_ft = 0;
+    float c20 = at(20, 1), c100 = at(100, 1), c64 = at(64.4f, 1), c_s = at(100, 0), c_l = at(100, 2);
+    T.trailer = 0;
+    float s20 = at(20, 1), s100 = at(100, 1);
+    T.trailer = 1; p_acc_ft = 60;
+    float f20 = at(20, 1), f100 = at(100, 1);
+    p_acc_ft = 0;
+    float mg = acc_max_gap(), dg = desired_gap(100 / 3.6f);
+    p_acc_us = 0; float mg_off = acc_max_gap();
+    printf("   US rule: combination %.2f s at 20 km/h, %.2f s at 100 km/h, %.2f s at 40 mph (short %.2f, long %.2f); alone %.2f / %.2f s; 60 ft %.2f / %.2f s; "
+           "longest gap %.0f m (%.0f m off), gap at 100 km/h %.0f m; off: %.2f s\n", c20, c100, c64, c_s, c_l, s20, s100, f20, f100, mg, mg_off, dg, off);
+    bad |= !near(c20, 7.0f) || !near(c100, 8.0f) || !near(c64, 7.5f) || !near(c_s, 6.4f) || !near(c_l, 9.6f) || !near(s20, 2.5f) || !near(s100, 3.5f) ||
+           !near(f20, 6.0f) || !near(f100, 7.0f) || mg != 95.0f || mg_off != p_max_m || dg != 95.0f || !near(off, 1.25f);
+    p_acc_us = us; p_acc_ft = ft; p_gap_m = gm; p_acc_fast_k = fk; g_level = lv; T.trailer = tr;
+    printf("US gap rule test: %s\n", bad ? "FAIL" : "ok");
+    if (bad) exit(1);
+}
+
 int main(int argc, char **argv)
 {
     sim_env_apply("cruise", m_cruise.params, m_cruise.n_params); sim_env_apply("decel", dc::g_params, sizeof dc::g_params / sizeof dc::g_params[0]);
+    sim_env_apply("brake", m_brake.params, m_brake.n_params);   // SIM_SET=brake.channel=1: Cruise asks through the brake channel
+    for (int i = 0; i < m_brake.n_params; i++) *m_brake.params[i].val = m_brake.params[i].def;
     verbose = argc > 1;
     for (int i = 0; i < m_cruise.n_params; i++) *m_cruise.params[i].val = m_cruise.params[i].def;
+    // env mode (sweep_acc.py): one generalized ACC / Stop&Go run, then exit. SIM_SET was applied above, so the [cruise]
+    // own_acc_* / acc_* / stop_go* overrides are already in the params before the run.
+    if (const char *scen = getenv("ACC_SCEN")) {
+        float mass = getenv("ACC_MASS") ? (float)atof(getenv("ACC_MASS")) : 26000;
+        int gap = getenv("ACC_GAP") ? atoi(getenv("ACC_GAP")) : 1;
+        if (const char *md = getenv("ACC_MODE")) g_cvar_adaptive = !strcmp(md, "eco") ? 3.5f : !strcmp(md, "power") ? 1.0f : !strcmp(md, "m") ? 0.0f : 2.5f;   // the game's adaptive-shift cvar (mode_of)
+        act_reset(RESET_HARD, "sim"); m_brake.reset(RESET_HARD, "sim");
+        memset(GA, 0, sizeof GA); memset(&T, 0, sizeof T); stock_thr = 0;
+        cr_attach();
+        if (g_brake_channel >= 0.5f) brake_attach();   // (after Cruise's: the channel's tick runs after Cruise has asked)
+        acc_sweep_run(scen, mass, gap);
+        return 0;
+    }
     no_cruise_test();   // first: the actuator alone, before the module's phases are attached
     cr_attach();        // the module's three phases in the actuator's tick (cr_start does this in the game)
+    if (g_brake_channel >= 0.5f) brake_attach();   // SIM_SET=brake.channel=1: the whole sim through the brake channel
     keys_test();
     g_keys_ok = 0; g_ret_ok = 0;
     memset(GA, 0, sizeof GA);
@@ -1612,6 +2334,11 @@ int main(int argc, char **argv)
         accres g[8], o[8];
         for (int sc = 0; sc < 8; sc++) { g[sc] = acc_run(nm[sc], 0, sc); o[sc] = acc_run(nm[sc], 1, sc); }
         acc_run("a stopped lead 90 m ahead (queue), we 50", 1, 8);
+        {   // a lead creeping away at walking pace (4 km/h) must still be followed: no stop, the gap held (the crawl
+            // brake must not fire against a lead moving away from us)
+            accres c = acc_run("lead creeping away at 4 km/h, we 3.5, 8 m gap", 1, 9);
+            bad |= c.min_kmh < 2.0f || c.end_gap > 20.0f;
+        }
         // own ACC: no emergency braking where the game's target needed it, no harder decel than the game, calm cut-in really calm
         // own ACC brakes itself early: no emergency braking where we can avoid it, never more than ~4 m/s2 (the emergency
         // hazards threshold), gaps not smaller than the game's
@@ -1647,6 +2374,49 @@ int main(int argc, char **argv)
         printf("ACC test: %s\n", bad ? "FAIL" : "ok");
         if (bad) return 1;
     }
+    // own ACC standstill gap per distance step (ride 30-10: it stopped at ~4 m whatever the distance setting) and the approach
+    // to a queue that decelerates 50 -> 0 km/h at 1 m/s2 (the truck stayed 2-6 km/h over the lead down to 5 m, then crept).
+    {
+        int bad = 0;
+        const float want_stop[] = { 3, 4, 5 };
+        // the standstill gap follows the distance step: close 3 m, middle 4 m, far 5 m (a step count > 3 interpolates)
+        printf("--- own ACC standstill gap per distance step (stop_gap at 0 km/h)\n");
+        for (int lv = 0; lv <= 2; lv++) {
+            g_level = lv;
+            float got = stop_gap(0);
+            printf("     step %d: %.2f m (want %.0f)\n", lv, got, want_stop[lv]);
+            bad |= fabsf(got - want_stop[lv]) > 0.01f;
+        }
+        // the plan's allowed closing shrinks at low speed and short gaps (ride 30-10: 1-1.9 m/s onto a slowing queue)
+        {
+            float pp = p_own_plan; p_own_plan = 0.3f;
+            float hi = plan_close(6.0f, 12.0f, 50.0f, 1.0f);        // motorway: the plain sqrt(2 a room)
+            float lo = plan_close(6.0f, 12.0f, 15.0f, 1.0f);        // 15 km/h: the speed gate shrinks it
+            float sh = plan_close(1.0f, 12.0f, 15.0f, 1.0f);        // ... and little room left: toward zero
+            printf("--- own ACC plan close: motorway %.2f m/s, 15 km/h %.2f m/s, 15 km/h short gap %.2f m/s (plain sqrt(2 a 6) = %.2f)\n", hi, lo, sh, sqrtf(0.6f * 6.0f));
+            bad |= !(lo < hi && sh < lo);
+            p_own_plan = pp;
+        }
+        // the queue decel: never closer than 2.5 m, no gross over-closing, and it stops at the per-step gap within +-0.5 m,
+        // for the light and the heavy truck and for a 1 and a 2 m/s2 lead decel.
+        {
+            const float masses[] = { 18000, 40000 }, decels[] = { 1.0f, 2.0f };
+            printf("--- own ACC behind a queue decelerating 50 -> 0 km/h, per distance step, mass and lead decel (final standstill gap)\n");
+            for (float m : masses)
+                for (float d : decels)
+                    for (int lv = 0; lv <= 2; lv++) {
+                        cr_reset(RESET_HARD, "sim");   // the own-ACC filters (s_dstar_sm and friends) must not carry over between steps
+                        g_queue_decel = d;
+                        accsw r = acc_sweep_run("queuedecel", m, lv);
+                        printf("     %2.0f t, decel %.0f m/s2, step %d: stop %.2f m (want %.0f), min gap %.2f m, close under 15 km/h within 2x gap %.2f m/s\n",
+                               m / 1000, d, lv, r.stand_gap, want_stop[lv], r.min_gap, r.max_close_low);
+                        bad |= r.min_gap < 2.5f || r.max_close_low > 2.0f || fabsf(r.stand_gap - want_stop[lv]) > 0.5f;
+                    }
+            g_queue_decel = 1.0f;
+        }
+        printf("own ACC queue decel test: %s\n", bad ? "FAIL" : "ok");
+        if (bad) return 1;
+    }
     // own AEB
     {
         int bad = 0;
@@ -1666,6 +2436,32 @@ int main(int argc, char **argv)
         a = aeb_run("slow truck, at the warning: indicator left + steer left", 10, 26000, 140); bad |= a.hit || a.after_kd > 0;
         printf("   request 0.8-1.5 s after the evasion: %.2f (must be 0)\n", a.after_kd);
         a = aeb_run("slow truck, at the warning: indicator left, no steering", 11, 26000, 140); bad |= a.hit || a.max_st < AEB_PARTIAL;
+        {   // a crawl onto a stopped lead (below aeb_min_kmh): the AEB must cover it by the distance, not the time to collision
+            g_aeb_v0 = 10;
+            a = aeb_run("crawl at 10 km/h onto a stopped lead 5 m ahead", 18, 26000, 140); bad |= a.hit || a.min_gap < 0.5f;
+            g_aeb_v0 = 5;   // pulling away from a standstill 2 m behind a stopped car (the 01-11 ride): a stop takes ~0.7 m/s2, so no warning and no brake below aeb_min_kmh at 2 m
+            a = aeb_run("pulling away at 5 km/h, a stopped lead 2.0 m ahead", 19, 8000, 110); bad |= a.hit || a.warn_gap > 1.2f;   // (the truck coasts on with nobody braking: the guard may step in only when the stop is really threatened, ~0.8 m, not at 2 m)
+            printf("   first AEB stage at %.2f m from the lead (must be under 1.2 m: at 2 m the stop only takes ~0.7 m/s2)\n", a.warn_gap);
+            g_aeb_v0 = 80;
+        }
+        {   // 13-10 'very sensitive' (the friend ride, notes 7.4): all four incidents had throttle 0 and brake 0 while rolling
+            // toward standing traffic. Decided no change: a coast toward stopped traffic is a real emergency, so the row asserts
+            // the AEB stops the truck (no hit) and does brake (partial or full), exactly as today.
+            a = aeb_run("coasting (throttle 0, brake 0) onto a stopped queue at 80 km/h", 20, 26000, 140);
+            bad |= a.hit || a.max_st < AEB_PARTIAL;
+            printf("   coasting toward standing traffic: highest stage %d, min gap %.1f m (brakes, no hit)\n", a.max_st, a.min_gap);
+        }
+        {   // 31-10 town (notes 7.4): a cut-in at 67 km/h and a radar jump -- the lost-lead-hold left a phantom wall at 0.1 m --
+            // once asked the planner 5.8 m/s2 "urgent" and an emergency brake 7.7 m/s2 with hazards. The gap now comes from the
+            // radar call, and a gap under the radar's 0.3 m freshness floor is not a lead: the row feeds a phantom 0.1 m and asserts
+            // the AEB stays off (no brake, so no hazards), for a light vehicle (8.3 t pickup).
+            g_aeb_v0 = 67;
+            a = aeb_run("town, a phantom wall at 0.1 m (the lost-lead-hold)", 21, 8300, 140);
+            bad |= a.hit || a.max_st != AEB_OFF || a.max_req > 0;
+            printf("   phantom wall at 0.1 m: highest stage %d, max request %.2f (must stay off)\n", a.max_st, a.max_req);
+            g_aeb_v0 = 80;
+        }
+        bad |= lw_rows();
         printf("AEB test: %s\n", bad ? "FAIL" : "ok");
         if (bad) return 1;
     }
@@ -1736,7 +2532,7 @@ int main(int argc, char **argv)
             struct { const char *n; int crawl, rev, park, sg; } bl[] = { { "crawl on", 1, 0, 0, 0 }, { "reverse", 0, 1, 0, 0 }, { "parking brake", 0, 0, 1, 0 }, { "Stop&Go hold", 0, 0, 0, 1 } };
             for (auto &b : bl) {
                 memset(&AH, 0, sizeof AH); memset(GA, 0, sizeof GA);
-                g_low_ok = 1; p_ah = 1; g_crawl_on = b.crawl; g_sg_hold = b.sg; T.parking_brake = b.park; T.gear = b.rev ? -1 : 0; T.dgear = T.gear;
+                g_low_ok = 1; p_ah = 1; g_lv.crawl_toggle = b.crawl; g_sg_hold = b.sg; T.parking_brake = b.park; T.gear = b.rev ? -1 : 0; T.dgear = T.gear;
                 T.engine_on = 1; T.speed = 0; T.in_brake = 0.5f; T.in_thr = 0; s_req_ours = 0;
                 for (int k = 0; k < 120; k++) { t_now += 1 / 60.0; auto_hold(GA, 1 / 60.0f); act_brake(ACT_HOLD, s_want_hold); act_brake_write(GA); }
                 T.in_brake = 0;
@@ -1745,7 +2541,7 @@ int main(int argc, char **argv)
                 printf("Auto Hold blocked by %-14s: max request %.2f (must be 0)\n", b.n, mx);
                 bad |= mx > 0;
             }
-            g_crawl_on = 0; g_sg_hold = 0; T.parking_brake = 0; T.gear = 0; T.dgear = 0;
+            g_lv.crawl_toggle = 0; g_sg_hold = 0; T.parking_brake = 0; T.gear = 0; T.dgear = 0;
         }
         printf("Auto Hold test: %s\n", bad ? "FAIL" : "ok");
         if (bad) return 1;
@@ -1754,6 +2550,9 @@ int main(int argc, char **argv)
     junction_test();
     reset_test();
     limiter_test();
+    limiter_gear_test();
+    overtake_test();
+    us_rule_test();
     // own AEB by distance (aeb_mode 1) against the time stages (aeb_mode 0). The driver holds the speed and does not react.
     // After the tests above on purpose: its long runs move the clock, which would shift the timing of the Auto Hold runs.
     {
@@ -1860,23 +2659,24 @@ int main(int argc, char **argv)
     // Auto Hold after a stop by the lever. Last on purpose: its runs move the clock and the actuator's memory.
     {
         int bad = 0;
-        printf("--- Auto Hold after a stop by the retarder lever (step 2 of 4) from 30 km/h, the deceleration assist on; lever off 2 s after the stop, gentle gas 4 s after it\n");
+        printf("--- Auto Hold after a stop by the retarder lever (step 2 of 4) from 30 km/h, the deceleration assist on; lever off 2 s after the stop, gentle gas 4 s after it.\n"
+               "    On a descent (owner decision 59: the lever is a real retarder, it gives its step's force x the fade and does not have to stop the truck) the driver's pedal at 6 s stops it, he lets go 1 s after the stop and Auto Hold holds: no roll, no fall of the request\n");
         float gr[] = { 0, 6, -6 }, ms[] = { 18, 36 };
         for (float m : ms)
             for (float g : gr) {
                 char nm[96]; snprintf(nm, sizeof nm, "lever stop %2.0f t %+2.0f%%", m, g);
-                lvres r = lever_run(nm, g, m, 1, 1, 0, 0);
+                lvres r = lever_run(nm, g, m, 1, 1, 0, 0, 4, g < 0 ? 6.0f : -1.0f);   // (on the descent the driver's pedal at 6 s stops the truck: owner decision 59)
                 bad |= r.t_stop < 0 || r.held_min < 0.3f || r.drop > 0.1f || r.roll_m > 0.05f || r.req_end != 0 || r.t_move < 0;
             }
         lvres r;
-        r = lever_run("lever stop 36 t -10%, weak brake (2.5 m/s2 at 1.0)", -10, 36, 1, 1, 0, 0, 2.5f); bad |= r.held_min < 0.3f || r.drop > 0.1f || r.roll_m > 0.05f || r.req_end != 0 || r.t_move < 0;
+        r = lever_run("lever stop 36 t -10%, weak brake (2.5 m/s2 at 1.0), the pedal at 6 s", -10, 36, 1, 1, 0, 0, 2.5f, 6.0f); bad |= r.held_min < 0.3f || r.drop > 0.1f || r.roll_m > 0.05f || r.req_end != 0 || r.t_move < 0;
         r = lever_run("lever stop 36 t +6%, engine brake alone", 6, 36, 1, 1, 1, 0); bad |= r.held_min < 0.3f || r.drop > 0.1f || r.roll_m > 0.05f || r.req_end != 0 || r.t_move < 0;
         r = lever_run("lever stop 36 t +6%, owner's standstill 0.15 s late", 6, 36, 1, 1, 0, 1); bad |= r.held_min < 0.3f || r.drop > 0.1f || r.roll_m > 0.05f || r.req_end != 0 || r.t_move < 0;
         // [core] brake_learn: the hold sized from the learned gain for the grade (twice the slope's pull + 0.8 m/s2, 0.2-1) in place of the ini's 0.6.
         // The estimate exact, and 25 % too high (the margin has to carry it). Asserted: it stops and holds (moved <= 0.05 m), no request left after the
         // gas, the truck moves off; printed: the lowest request while standing (the ini's is 0.6; a flat stop holds with 0.2).
         lever_run("(for comparison, brake_learn 0) lever stop 36 t +12%, ini 0.6", 12, 36, 1, 1, 0, 0, 4);
-        lever_run("(for comparison, brake_learn 0) lever stop 36 t -10%, ini 0.6, 2.5 m/s2", -10, 36, 1, 1, 0, 0, 2.5f);
+        lever_run("(for comparison, brake_learn 0) lever stop 36 t -10%, ini 0.6, 2.5 m/s2, the pedal at 6 s", -10, 36, 1, 1, 0, 0, 2.5f, 6.0f);
         printf("--- Auto Hold with the learned brake gain (brake_learn 1): the hold sized for the grade\n");
         for (double lp : { 1.0, 1.25 })
             for (float m : ms)
@@ -1884,7 +2684,7 @@ int main(int argc, char **argv)
                     for (float g : { 0.0f, 6.0f, -6.0f, 12.0f, -10.0f }) {
                         char nm[110]; snprintf(nm, sizeof nm, "learned x%.2f: lever stop %2.0f t %+3.0f%% brake %.1f m/s2", lp, m, g, gn);
                         g_lv_prime = lp;
-                        lvres rl = lever_run(nm, g, m, 1, 1, 0, 0, gn);
+                        lvres rl = lever_run(nm, g, m, 1, 1, 0, 0, gn, g < 0 ? 6.0f : -1.0f);
                         g_lv_prime = 0;
                         bad |= rl.t_stop < 0 || rl.held_min < 0.19f || rl.roll_m > 0.05f || rl.req_end != 0 || rl.t_move < 0;
                     }
@@ -1897,14 +2697,22 @@ int main(int argc, char **argv)
             }
         // The stop assist ([decel] stop_assist) with the real Auto Hold: mode 1 lets go at the standstill and Auto Hold stays off (g_sa_nohold), mode 2 hands
         // over to Auto Hold at the standstill (held: no roll back over 0.05 m), mode 2 without Auto Hold's lever setting is mode 1, mode 0 does nothing.
+        // PREMISE = OWNER DECISION 65 (WP-K2): the stop assist rolls out. These rows asked a stop at a mean of 0.3 - 0.7 m/s2 (the old 0.5 taper); now: on the flat and uphill it stops on its own
+        // resistance with no request of the assist at all (uphill sooner), on a descent it does not stop, holds the speed (the rise after its start is the push for the time the loop is blind) and brakes.
+        // Unmoved: the assist starts, mode 1 leaves no request and no hold after the stop, mode 2 hands over to the real Auto Hold (a request 2-4 s after, no roll back over 0.05 m), mode 0 / no lever setting.
         printf("--- the stop assist (decel enabled 0) from 12 km/h, the box opens the clutch at 4.5 km/h: mode 1 lets go, mode 2 hands over to Auto Hold\n");
         for (float m : ms)
             for (float g : { 0.0f, 2.0f, -2.0f }) {
                 char nm[96];
                 snprintf(nm, sizeof nm, "%2.0f t %+2.0f%%", m, g);
                 sa2res a1 = sa_run(nm, 1, g, m, 1), a2 = sa_run(nm, 2, g, m, 1);
-                bad |= !a1.started || a1.t_stop < 0 || a1.req_after != 0 || a1.hold_after != 0 || a1.mean < 0.3f || a1.mean > 0.7f;
-                bad |= !a2.started || a2.t_stop < 0 || a2.req_after < 0.19f || a2.moved > 0.05f || a2.mean < 0.3f || a2.mean > 0.7f;
+                if (g >= 0) {
+                    bad |= !a1.started || a1.t_stop < 0 || a1.req_after != 0 || a1.hold_after != 0 || a1.req_max != 0;
+                    bad |= !a2.started || a2.t_stop < 0 || a2.req_after < 0.19f || a2.moved > 0.05f || a2.req_max != 0;
+                } else {
+                    bad |= !a1.started || a1.t_stop >= 0 || a1.req_max <= 0 || a1.v_hi > a1.v_start + 0.6f;
+                    bad |= !a2.started || a2.t_stop >= 0 || a2.req_max <= 0 || a2.v_hi > a2.v_start + 0.6f;
+                }
             }
         {
             sa2res a0 = sa_run("flat 36 t", 0, 0, 36, 1), a3 = sa_run("flat 36 t, auto_hold_lever 0", 2, 0, 36, 0);
@@ -1934,6 +2742,132 @@ int main(int argc, char **argv)
         }
         s_ah_k = k0;
         printf("Auto Hold with the owner's commanded force: %s\n", bad ? "FAIL" : "ok");
+        if (bad) return 1;
+    }
+    // ======================================================================= the light-vehicle (car) mode
+    // A car: class detection by own mass (<= 3.5 t), no truck speed limiter, car ACC gaps/standstill, the car AEB ceiling and the
+    // car ISA limit. Last, so it starts from a clean vehicle model and nothing above depends on its state.
+    {
+        // The set speed cap follows the game's own speed limiter value (ride 14-11: a bus held at our fixed 90 while the game lets it do 100):
+        // the game knows the vehicle, so the cap is that one fact; limiter_kmh > 0 caps lower still; the option off = no cap.
+        int bad = 0;
+        printf("--- set speed cap = the game's speed limiter (bus 100, truck 90)\n");
+        float save_p = p_limiter, save_use = g_sim_use_limiter; int save_tr = T.trailer; T.trailer = 0;
+        unsigned char save_on = *(unsigned char *)(GA + GA_LIM_ON); float save_v = *(float *)(GA + GA_LIM);
+        struct { float game, own, use, want; const char *what; } c[] = {
+            { 100, 0, 1, 100, "game 100, limiter_kmh 0" }, { 90, 0, 1, 90, "truck: game 90, limiter_kmh 0" },
+            { 100, 85, 1, 85, "game 100, limiter_kmh 85 (owner lower)" }, { 90, 95, 1, 90, "game 90, limiter_kmh 95 (game lower)" },
+            { 100, 0, 0, 0, "the game's limiter option off" }, { 0, 0, 1, 100, "bus: the game gives no value -> 100 (EU)" }, { 0, 85, 1, 85, "no game value, limiter_kmh 85" } };
+        for (auto &k : c) {
+            *(unsigned char *)(GA + GA_LIM_ON) = k.game > 0; *(float *)(GA + GA_LIM) = k.game; p_limiter = k.own; sim_use_limiter(k.use);
+            float cap = limiter_cap();
+            printf("   %-42s cap %.0f (want %.0f)%s\n", k.what, cap, k.want, fabsf(cap - k.want) > 0.01f ? "  FAIL" : "");
+            bad |= fabsf(cap - k.want) > 0.01f;
+        }
+        p_limiter = save_p; sim_use_limiter(save_use); T.trailer = save_tr;
+        *(unsigned char *)(GA + GA_LIM_ON) = save_on; *(float *)(GA + GA_LIM) = save_v;
+        if (bad) { printf("FAILED: set speed cap\n"); exit(1); }
+    }
+    {
+        int bad = 0;
+        printf("--- light vehicle (car mode): class detection, limiter, ACC gaps, ISA, AEB\n");
+        auto car_arm = [](float mass, float own) {   // set the sim's mass figures and read them into the vehicle model
+            g_sim_mass = mass; g_sim_own_mass = own; vehicle_reset(RESET_HARD); vehicle_mass_stale();
+            for (int i = 0; i < 3; i++) { t_now += 1 / 60.0; vehicle_frame(); }
+            vclass_sync();
+        };
+        g_sim_eng = engine_info(); g_sim_eng.torque = 250; g_sim_eng.n_curve = 0; g_sim_eng.rpm_limit = 6500;   // a car engine (low torque, high revs)
+        T.trailer = 0; g_sim_car_limit = NAN;
+        car_arm(1600, NAN);
+        printf("   car 1.6 t: class %d (light %d, own mass %.1f t)\n", vehicle_class(), vehicle_light(), vehicle_own_mass() / 1000);
+        bad |= !(vehicle_light() && vehicle_class() == VC_LIGHT);
+        // ACC car gaps and standstill gap
+        g_level = 0; float gs0 = gap_s(10); g_level = 1; float gs1 = gap_s(10); g_level = 2; float gs2 = gap_s(10);
+        printf("   ACC time gaps %.2f / %.2f / %.2f s, standstill gap %.1f m (full %.1f m)\n", gs0, gs1, gs2, stop_base(), stop_full());
+        bad |= fabsf(gs0 - k_vprof_car.acc_gap_s) > 1e-3f || fabsf(gs1 - k_vprof_car.acc_gap_m) > 1e-3f || fabsf(gs2 - k_vprof_car.acc_gap_l) > 1e-3f;
+        bad |= fabsf(stop_base() - k_vprof_car.stop_m) > 1e-3f;
+        // no truck speed limiter on a car
+        float save_lim = p_own_lim; p_own_lim = 90;
+        bad |= own_limit_k(95, 0) != 1.0f;   // a car ignores our own truck speed limiter
+        bad |= speed_top_kmh() != 0.0f;     // ... and the game's truck limiter
+        bad |= limiter_cap() != 0.0f;        // ... no cap with no trailer
+        T.trailer = 1; car_arm(4500, 2500);  // a pickup (2.5 t) with a trailer (total 4.5 t): still a light vehicle
+        printf("   pickup 2.5 t + trailer (4.5 t total): class %d (light %d), own %.1f t, top %.0f km/h, cap %.0f\n",
+               vehicle_class(), vehicle_light(), vehicle_own_mass() / 1000, speed_top_kmh(), limiter_cap());
+        bad |= !vehicle_light();
+        bad |= fabsf(speed_top_kmh() - p_car_trail_lim) > 0.5f || fabsf(limiter_cap() - p_car_trail_lim) > 0.5f;
+        T.trailer = 0;
+        // ISA: the car limit where the game has both, else none (the SDK's limit is the truck's)
+        T.speed_limit = 130 / 3.6f;
+        printf("   ISA game limit %.0f km/h -> followed %.0f km/h\n", T.speed_limit * 3.6f, isa_limit_ms() * 3.6f);
+        bad |= fabsf(isa_limit_ms() - 130 / 3.6f) > 1e-3f;
+        g_sim_car_limit = NAN; T.speed_limit = 90 / 3.6f;
+        bad |= fabsf(isa_limit_ms() - 90 / 3.6f) > 1e-3f;   // the limit the game reports (car limits in Road Trip or when set so; Damien 01-11)
+        p_own_lim = save_lim; T.speed_limit = 0;
+        // the AEB on a car: drive aeb() directly at a stopped lead; the full stage must reach the car ceiling (~9 m/s2),
+        // not the truck's 6.5 (aeb_max_decel). The gap is sized so the stop needs ~9 m/s2, so the truck would cap at 6.5.
+        memset(&AE, 0, sizeof AE); AE.gap_prev = AE.rate = AE.vl_prev = NAN;
+        s_aeb_owns = 1; g_radar_ok = 1; o_radar = fake_radar;
+        T.engine_on = 1; T.gear = 8; T.dgear = 8; T.eff_clutch = 0; T.parking_brake = 0; T.in_brake = 0; T.in_thr = 0; T.air_psi = 140; T.paused = 0;
+        float v = 80 / 3.6f, max_cmd = 0; int max_st = 0;
+        for (int i = 0; i < 120 && v > 0.5f; i++) {
+            g_fake_radar[0] = fmaxf(2.0f, v * v / (2 * 9.0f) + 3.0f); g_fake_radar[1] = 0;   // a stopped lead
+            radar_stub(GA, g_fake_radar);
+            T.speed = v; T.accel_fast = -fmaxf(0, AE.a_cmd);
+            aeb(GA, 1 / 60.0f);
+            max_cmd = fmaxf(max_cmd, AE.a_cmd); max_st = fmaxf(max_st, AE.st);
+            v = fmaxf(0, v - fmaxf(0, AE.a_cmd) / 60.0f);
+            t_now += 1 / 60.0;
+        }
+        s_aeb_owns = 0;
+        printf("   AEB car: highest stage %s, peak a_cmd %.1f m/s2 (truck would cap at %.1f)\n", aeb_name[max_st], max_cmd, p_aeb_max_dec);
+        bad |= max_st < AEB_FULL || max_cmd < 7.5f;
+        // Power (Sport) on a car: the AEB is off (a stopped lead dead ahead, still no warning and no braking)
+        memset(&AE, 0, sizeof AE); AE.gap_prev = AE.rate = AE.vl_prev = NAN;
+        s_aeb_owns = 1; g_radar_ok = 1; o_radar = fake_radar; g_cvar_adaptive = 1.0f;   // Power
+        T.speed = 80 / 3.6f; T.accel_fast = 0; int pw_st = 0; float pw_req = 0;
+        for (int i = 0; i < 60; i++) {
+            g_fake_radar[0] = 10; g_fake_radar[1] = 0;   // a stopped lead 10 m ahead (would brake hard)
+            radar_stub(GA, g_fake_radar);
+            aeb(GA, 1 / 60.0f);
+            pw_st = fmaxf(pw_st, AE.st); pw_req = fmaxf(pw_req, AE.req);
+            t_now += 1 / 60.0;
+        }
+        g_cvar_adaptive = 3.0f; s_aeb_owns = 0;
+        printf("   AEB off in Power: highest stage %s, request %.2f (expect off / 0)\n", aeb_name[pw_st], pw_req);
+        bad |= pw_st != AEB_OFF || pw_req > 0.001f;
+        // back to a truck: the truck path is untouched
+        car_arm(26000, NAN); T.trailer = 0; T.speed_limit = 0; g_sim_car_limit = NAN;
+        bad |= vehicle_light() || vehicle_class() != VC_TRUCK;
+        printf("light vehicle test: %s\n", bad ? "FAIL" : "ok");
+        if (bad) return 1;
+    }
+    // roll learning (core/roll.h): the bend the truck is IN is capped with the allowance the learned lean gives. Nothing learned = the start value
+    // (it runs last: it leaves the controller's statics where the tests above must not find them); a tall load (a lot of lean per m/s2) is slower, a stiff low one faster, never over curve_lat_max.
+    {
+        int bad = 0;
+        g_run_mass = 33000; g_road = road_flat; p_bend_now = 1; g_bn_r = 50; g_bn_s0 = 60; g_bn_len = 300;
+        printf("--- roll learning: R 50 m bend, 33 t, set 63, from 47 km/h; nothing learned / a tall load / a stiff low one\n");
+        static roll_slot tall, stiff;
+        tall = roll_slot(); tall.has_trailer = 1; tall.max_a = 3; tall.mass = 33000;
+        tall.b[0].g = 1.4f; tall.b[0].n = 20; tall.b[0].dev = 0.05f; tall.b[1].g = 2.4f; tall.b[1].n = 20; tall.b[1].dev = 0.05f;
+        stiff = roll_slot(); stiff.has_trailer = 1; stiff.max_a = 4; stiff.mass = 33000;
+        stiff.b[0].g = 0.12f; stiff.b[0].n = 20; stiff.b[0].dev = 0.05f; stiff.b[1].g = 0.15f; stiff.b[1].n = 20; stiff.b[1].dev = 0.05f;
+        float vm[3], lt[3], al[3];
+        for (int k = 0; k < 3; k++) {
+            RL = roll_state();
+            RL.cur = k == 1 ? &tall : k == 2 ? &stiff : NULL;
+            for (int i = 0; i < 300; i++) { RL.t += 1; roll_bend_lat(p_curve_lat, p_curve_lat_max); }   // (the slew has settled)
+            al[k] = bend_lat();
+            run(k == 0 ? "R 50 m, nothing learned" : k == 1 ? "R 50 m, tall load learned" : "R 50 m, stiff low truck learned", 1, 63, 30, c_none, 47);
+            vm[k] = g_bn_v_max; lt[k] = g_bn_lat_max;
+            printf("     allowance %.2f m/s2: top speed %.1f km/h in the bend, lateral peak %.2f m/s2\n", al[k], vm[k], lt[k]);
+        }
+        RL = roll_state();
+        bad |= al[0] != p_curve_lat || !(al[1] < al[0] - 0.5f) || !(al[2] > al[0] && al[2] <= p_curve_lat_max + 1e-4f);
+        bad |= !(vm[1] < vm[0] - 1.0f && vm[2] > vm[0] + 0.5f);
+        p_bend_now = 1; g_bn_r = 0; g_run_mass = 0;
+        printf("roll learning test: %s\n", bad ? "FAIL" : "ok");
         if (bad) return 1;
     }
     return 0;

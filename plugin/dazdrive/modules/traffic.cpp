@@ -1,10 +1,11 @@
-// Traffic: a LOG-ONLY reader of the game's AI traffic list. Nothing in the suite acts on it (no braking, no tones, no steering).
+// Traffic: a reader of the game's AI traffic list. It logs it; the one thing that acts on it is the AEB (core/aeblat.h: is the radar's lead in our path, or beside it?), which brakes less
+// for a vehicle beside the path and nothing else (no tones, no steering).
 //
 // Purpose: to check on a ride that the list is read right, as the foundation for a blind-spot warning (real vehicles only, by
 // distance, following the trailer), a cut-in-aware ACC and a turn assist later.
 //
 // Where it comes from (ets2la_plugin, MIT, gitlab.com/ETS2LA/ets2la_plugin, commit c925bd9, built for ETS2 1.60; notes/research.md § 6):
-//   - game_traffic_u* global: pattern src/patterns.win32.hpp game_traffic (+6, rip-relative) = pattern k_pat below.
+//   - game_traffic_u* global: pattern src/patterns.win32.hpp game_traffic (+6, rip-relative) = pattern k_pat in core/sense_traffic.cpp, where the whole walk lives since WP-S step S3.
 //   - game_traffic_u (src/prism/traffic/traffic.hpp, Windows offsets): spawned_vehicles_1 +0xF0, spawned_vehicles_2 +0x118 (entries
 //     of 0x10: traffic_ai_vehicle_t* then 8 bytes), traffic_objects_1 +0x1E0 (traffic_object_t*, any type), traffic_player_vehicles_1
 //     +0x208 and traffic_player_trailers_1 +0x230 (pointers; the truck and trailers we drive, convoy players, trailers parked in
@@ -22,247 +23,55 @@
 // ever written to the game. Read on the game's own thread (frame_end), so the lists do not change under the walk.
 #include "../core/suite.h"
 #include "../core/game.h"
+#include "../core/sense.h"
+#include "../core/sense_traffic.h"
 #include "../core/trafficmath.h"
 #include "../core/traffic.h"
+#include "../core/blindspot.h"
 #include <math.h>
 #include <string.h>
 #include <windows.h>
 
-static float p_probe;
+
+enum { NEAR_LOG = 8, TICK_MS = 200 };
+
+static float p_probe, p_bs;
 
 static param g_params[] = {
-    { "probe", &p_probe, 0, "1 = read the game's list of AI traffic and only log it: traffic.csv (needs the log at its highest level; 5 per second while driving, the 8 nearest vehicles with where they are relative to you) and one summary line a minute. Nothing is braked, steered or announced from it. For checking the reading on a ride. 0 = off" },
+    { "blind_spot", &p_bs, 1, "with probe=1: our own blind-spot detector, LOG ONLY (nothing warns or steers): two side zones that follow the truck and the trailer; a vehicle that moves our way inside one (not a parked one, only above 15 km/h) is logged, per minute and as a 'would warn' when your indicator points to an occupied side. 0 = off" },
+    { "probe", &p_probe, 0, "1 = read the game's list of AI traffic: the emergency braking (AEB) uses it to tell a vehicle in your path from one beside it, so it does not brake for the vehicle you are passing. Also logged: traffic.csv (needs the log at its highest level; 5 per second while driving, the 8 nearest vehicles) and one summary line a minute. 0 = off: the AEB brakes for whatever the game's radar reports" },
 };
 
-// ---------------------------------------------------------------- layout (ETS2 1.60, Windows)
+// the walk of the game's lists is core/sense_traffic.cpp (WP-S step S3); this module reads what it found (g_trs) and keeps the zones, the csv, the summary
 
-static const char *const k_pat = "48 8B D9 48 8B 0D ?? ?? ?? ?? 48 85 C9 74 ?? 48 8B 83 ?? ?? ?? ?? 48 85 C0";
-enum {
-    GT_SPAWNED1 = 0xF0, GT_SPAWNED2 = 0x118, GT_OBJECTS1 = 0x1E0, GT_PVEH = 0x208, GT_PTRL = 0x230,   // arrays inside game_traffic_u
-    ARR_DATA = 0x8, ARR_SIZE = 0x10,                                                                   // inside an array_dyn_t
-    ACT_PLACEMENT = 0x28, ACT_SLAVE = 0x68, ACT_END = 0x70,                                            // traffic_actor_t
-    AI_PHYSICS = 0x238, PH_SPEED = 0x70, PV_SPEED = 0x218, PV_END = 0x220,
-    MAX_LIST = 512, MAX_ENT = 1400, NEAR_LOG = 8, TICK_MS = 200,
-};
-enum { L_SP1 = 1, L_SP2 = 2, L_OBJ = 4, L_SLAVE = 8 };   // the lists an entry was found in (bit mask in the csv)
-enum { K_AI = 0, K_AIT = 1 };
-
-struct ent {
-    uintptr_t p;
-    double x, z;          // world metres, middle of the box
-    double ox, oz;        // world metres, the placement origin
-    float len, wid, speed, rv_l, rv_s, hdg, dx, dy, dist;
-    int mask, kind;
-    tr_pose pose;
-};
-
-static ent g_ent[MAX_ENT];
-static int g_n, g_bad;
 static FILE *g_csv;
 static char g_status[160] = "off (ini)";
 static int g_state;                    // 0 off, 1 no pattern / wrong layout, 2 waiting for the instance, 3 reading
-static uintptr_t g_slot, g_img_lo, g_img_hi;
-static int g_hits;
 static double g_ok_at = -1;            // wall time of the last good walk
-static uintptr_t g_ai_vt[4];           // vtables of the vehicles in the spawned lists
-static int g_n_ai_vt;
-static struct { uintptr_t vt; int n, ai; } g_ovt[8];   // vtables seen in traffic_objects_1 this tick
-static int g_n_ovt;
 
 struct geo { float hook_z, front_z, rear_z; };
 static geo g_truck = { NAN, NAN, NAN }, g_trailer = { NAN, NAN, NAN };
 
 // what the last tick found, for the dev feed and the summary
 static traffic_around g_around;
-static int g_cnt[8];                   // entries per list this tick: sp1, sp2, obj, obj-as-vehicle, slaves, pv, pt, dup
-static int g_pv_n, g_pt_n;
-static double g_pv_dx, g_pv_dy, g_pv_d = NAN, g_pt_dx, g_pt_dy, g_pt_d = NAN;   // nearest player vehicle / trailer origin relative to ours
 static double g_walk_ms_sum, g_walk_ms_max;
 static int g_walk_n;
 static unsigned g_ticks, g_ticks_fail;
 
-// ---------------------------------------------------------------- safe reads
-
-static int ptr_ok(const void *p, size_t n) { return p && !((uintptr_t)p & 7) && mem_readable(p, n); }
-
-// An array_dyn_t at base+off: the data pointer and the size, checked. 0 if it is not plausible.
-static int arr_get(const char *base, unsigned off, unsigned stride, const char **data, unsigned *n)
-{
-    const char *a = base + off;
-    if (!mem_readable(a, 0x18)) return 0;
-    const char *d = *(const char *const *)(a + ARR_DATA);
-    unsigned long long sz = *(const unsigned long long *)(a + ARR_SIZE);
-    if (sz == 0) { *data = d; *n = 0; return 1; }
-    if (sz > MAX_LIST || !ptr_ok(d, (size_t)sz * stride)) return 0;
-    *data = d;
-    *n = (unsigned)sz;
-    return 1;
-}
-
-static int plausible(double v, double lim) { return v == v && fabs(v) <= lim; }
-
-// One traffic_actor_t (vehicle, trailer, player vehicle): placement + box -> e. 0 if it does not look like one.
-static int read_actor(const char *p, ent *e)
-{
-    if (!ptr_ok(p, ACT_END)) return 0;
-    const char *q = p + ACT_PLACEMENT;
-    float f[6];
-    short cx, cz;
-    memcpy(f, q, 12);
-    memcpy(&cx, q + 12, 2);
-    memcpy(&cz, q + 14, 2);
-    float rot[4], box[6];
-    memcpy(rot, q + 16, 16);
-    memcpy(box, q + 0x20, 24);
-    double gx = tr_world(cx, f[0]), gz = tr_world(cz, f[2]);
-    if (!plausible(f[0], 4096) || !plausible(f[1], 5000) || !plausible(f[2], 4096) || !plausible(gx, 1e7) || !plausible(gz, 1e7)) return 0;
-    for (int i = 0; i < 4; i++) if (!plausible(rot[i], 2)) return 0;
-    for (int i = 0; i < 6; i++) if (!plausible(box[i], 60)) return 0;
-    e->p = (uintptr_t)p;
-    e->pose = tr_pose_from_quat(gx, gz, rot[0], rot[1], rot[2], rot[3]);
-    e->len = fabsf(box[5] - box[2]);
-    e->wid = fabsf(box[3] - box[0]);
-    e->x = e->ox = gx; e->z = e->oz = gz;
-    if (e->pose.ok) tr_box_centre(e->pose, 0.5 * (box[0] + box[3]), 0.5 * (box[2] + box[5]), &e->x, &e->z);
-    e->speed = NAN;
-    e->mask = 0;
-    return 1;
-}
-
-static void add_ai(const char *p, int list, int kind, float speed)
-{
-    for (int i = 0; i < g_n; i++)
-        if (g_ent[i].p == (uintptr_t)p) { g_ent[i].mask |= list; g_cnt[7]++; return; }
-    if (g_n >= MAX_ENT) return;
-    ent e;
-    if (!read_actor(p, &e)) { g_bad++; return; }
-    e.mask = list;
-    e.kind = kind;
-    e.speed = speed;
-    g_ent[g_n++] = e;
-}
-
-static float ai_speed(const char *p)
-{
-    const char *ph = *(const char *const *)(p + AI_PHYSICS);
-    if (!ptr_ok(ph, PH_SPEED + 8)) return NAN;
-    float v = *(const float *)(ph + PH_SPEED);
-    return plausible(v, 120) ? v : NAN;
-}
-
-// A vehicle and the trailers hanging on it (slave chain, at most 3, with a cycle guard).
-static void add_vehicle(const char *p, int list)
-{
-    if (!ptr_ok(p, AI_PHYSICS + 8)) { g_bad++; return; }
-    add_ai(p, list, K_AI, ai_speed(p));
-    const char *s = *(const char *const *)(p + ACT_SLAVE);
-    for (int i = 0; i < 3 && s && s != p; i++) {
-        if (!ptr_ok(s, ACT_END)) break;
-        add_ai(s, L_SLAVE, K_AIT, NAN);
-        const char *nx = *(const char *const *)(s + ACT_SLAVE);
-        if (nx == s) break;
-        s = nx;
-    }
-}
-
-static int known_ai_vt(uintptr_t vt)
-{
-    for (int i = 0; i < g_n_ai_vt; i++) if (g_ai_vt[i] == vt) return 1;
-    return 0;
-}
-
-static void learn_ai_vt(const char *p)
-{
-    if (!ptr_ok(p, 8)) return;
-    uintptr_t vt = *(const uintptr_t *)p;
-    if (vt < g_img_lo || vt >= g_img_hi || known_ai_vt(vt) || g_n_ai_vt >= 4) return;
-    g_ai_vt[g_n_ai_vt++] = vt;
-}
-
-// ---------------------------------------------------------------- the walk
-
-static void walk(const char *gt, const tr_pose &me)
-{
-    g_n = g_bad = 0;
-    memset(g_cnt, 0, sizeof g_cnt);
-    g_n_ovt = 0;
-    const char *d;
-    unsigned n;
-
-    // 1. spawned_vehicles_1 / _2: entries of 0x10 (vehicle pointer first)
-    for (int k = 0; k < 2; k++) {
-        if (!arr_get(gt, k ? GT_SPAWNED2 : GT_SPAWNED1, 0x10, &d, &n)) { g_bad++; continue; }
-        g_cnt[k] = (int)n;
-        for (unsigned i = 0; i < n; i++) {
-            const char *v = *(const char *const *)(d + i * 0x10);
-            learn_ai_vt(v);
-            add_vehicle(v, k ? L_SP2 : L_SP1);
-        }
-    }
-    // 2. traffic_objects_1: every kind of object; the vehicles are the ones with a vehicle vtable (no call into the game)
-    if (arr_get(gt, GT_OBJECTS1, 8, &d, &n)) {
-        g_cnt[2] = (int)n;
-        for (unsigned i = 0; i < n; i++) {
-            const char *o = *(const char *const *)(d + i * 8);
-            if (!ptr_ok(o, 8)) { g_bad++; continue; }
-            uintptr_t vt = *(const uintptr_t *)o;
-            int ai = known_ai_vt(vt), j;
-            for (j = 0; j < g_n_ovt && g_ovt[j].vt != vt; j++) { }
-            if (j == g_n_ovt && g_n_ovt < 8) { g_ovt[j].vt = vt; g_ovt[j].n = 0; g_ovt[j].ai = ai; g_n_ovt++; }
-            if (j < g_n_ovt) g_ovt[j].n++;
-            if (!ai) continue;
-            g_cnt[3]++;
-            add_vehicle(o, L_OBJ);
-        }
-    } else g_bad++;
-    for (int i = 0; i < g_n; i++) if (g_ent[i].kind == K_AIT) g_cnt[4]++;
-
-    // our frame
-    for (int i = 0; i < g_n; i++) {
-        ent &e = g_ent[i];
-        double dx, dy;
-        tr_rel(me, e.x, e.z, &dx, &dy);
-        e.dx = (float)dx; e.dy = (float)dy; e.dist = (float)sqrt(dx * dx + dy * dy);
-        e.hdg = (float)tr_rel_heading_deg(me, e.pose);
-        double rl, rs;
-        e.rv_l = e.rv_s = NAN;
-        if (e.speed == e.speed && tr_rel_speed(me, T.speed, e.pose, e.speed, &rl, &rs)) { e.rv_l = (float)rl; e.rv_s = (float)rs; }
-    }
-
-    // 3. the players' own vehicles and trailers: the one nearest to our placement. Ours are in there (the truck we drive and its trailers),
-    //    so the nearest one should sit within a metre or two of our placement: that checks the coordinate frame.
-    g_pv_n = g_pt_n = 0;
-    g_pv_d = g_pt_d = NAN;
-    for (int k = 0; k < 2; k++) {
-        if (!arr_get(gt, k ? GT_PTRL : GT_PVEH, 8, &d, &n)) { g_bad++; continue; }
-        if (k) g_pt_n = (int)n; else g_pv_n = (int)n;
-        for (unsigned i = 0; i < n; i++) {
-            ent e;
-            const char *v = *(const char *const *)(d + i * 8);
-            if (!read_actor(v, &e)) { g_bad++; continue; }
-            double dx, dy;
-            tr_rel(me, e.ox, e.oz, &dx, &dy);   // the origin, not the box middle: ours is the SDK placement origin
-            double dist = sqrt(dx * dx + dy * dy);
-            double &bd = k ? g_pt_d : g_pv_d;
-            if (bd != bd || dist < bd) { bd = dist; (k ? g_pt_dx : g_pv_dx) = dx; (k ? g_pt_dy : g_pv_dy) = dy; }
-        }
-    }
-}
-
 // ---------------------------------------------------------------- per tick
 
-static void pick_nearest(ent **out, int *m)
+static void pick_nearest(tr_ent **out, int *m)
 {
     *m = 0;
-    static unsigned char used[MAX_ENT];
-    memset(used, 0, (size_t)g_n);
+    static unsigned char used[TR_MAX_ENT];
+    memset(used, 0, (size_t)g_trs.n);
     for (int r = 0; r < NEAR_LOG; r++) {
         int best = -1;
-        for (int i = 0; i < g_n; i++)
-            if (!used[i] && g_ent[i].dist < 250 && (best < 0 || g_ent[i].dist < g_ent[best].dist)) best = i;
+        for (int i = 0; i < g_trs.n; i++)
+            if (!used[i] && g_trs.ent[i].dist < 250 && (best < 0 || g_trs.ent[i].dist < g_trs.ent[best].dist)) best = i;
         if (best < 0) break;
         used[best] = 1;
-        out[(*m)++] = &g_ent[best];
+        out[(*m)++] = &g_trs.ent[best];
     }
 }
 
@@ -275,24 +84,158 @@ static void csv_row(double t, const char *kind, unsigned id, int mask, double dx
             hdg, v, rl, rs, fabs(T.speed) * 3.6, ind);
 }
 
-static void summary(double now, const ent *const *near_, int m)
+static void summary(double now, const tr_ent *const *near_, int m)
 {
     static double last;
     if (now - last < 60) return;
     last = now;
     char vts[160] = "";
-    for (int i = 0; i < g_n_ovt && i < 4; i++)
-        snprintf(vts + strlen(vts), sizeof vts - strlen(vts), "%s+0x%llx x%d%s", i ? ", " : "", (unsigned long long)(g_ovt[i].vt - g_img_lo),
-                 g_ovt[i].n, g_ovt[i].ai ? " (vehicle)" : "");
+    for (int i = 0; i < g_trs.n_ovt && i < 4; i++)
+        snprintf(vts + strlen(vts), sizeof vts - strlen(vts), "%s+0x%llx x%d%s", i ? ", " : "", (unsigned long long)(g_trs.ovt[i].vt - g_trs.img_lo),
+                 g_trs.ovt[i].n, g_trs.ovt[i].ai ? " (vehicle)" : "");
     char nr[64] = "none";
     if (m > 0) snprintf(nr, sizeof nr, "%.0f m (%+.0f ahead, %+.0f left)", near_[0]->dist, near_[0]->dx, near_[0]->dy);
     logline("Traffic: %d vehicles read (spawned_1 %d, spawned_2 %d, objects_1 %d of which %d vehicles, trailers %d, in several lists %d, dropped %d), "
             "nearest %s; objects_1 types: %s; player list: %d vehicles (nearest %.1f m from our placement), %d trailers (nearest %.1f m); "
             "walk %.2f ms mean %.2f max over %d ticks, %u ticks with no list",
-            g_n, g_cnt[0], g_cnt[1], g_cnt[2], g_cnt[3], g_cnt[4], g_cnt[7], g_bad, nr, vts[0] ? vts : "-", g_pv_n, g_pv_d, g_pt_n, g_pt_d,
+            g_trs.n, g_trs.cnt[0], g_trs.cnt[1], g_trs.cnt[2], g_trs.cnt[3], g_trs.cnt[4], g_trs.cnt[7], g_trs.bad, nr, vts[0] ? vts : "-", g_trs.pv_n, g_trs.pv_d, g_trs.pt_n, g_trs.pt_d,
             g_walk_n ? g_walk_ms_sum / g_walk_n : 0.0, g_walk_ms_max, g_walk_n, g_ticks_fail);
     g_walk_ms_sum = g_walk_ms_max = 0;
     g_walk_n = 0;
+}
+
+// ---------------------------------------------------------------- blind spot (log only; geometry in core/blindspot.h)
+
+static const bs_cfg g_bs_cfg = bs_cfg_default();
+static double g_bs_until[2], g_bs_since[2], g_bs_lastlog[2], g_bs_occ_s[2], g_bs_drive_s, g_bs_t = -1, g_bs_sum_at, g_bs_warn_at = -100;
+static int g_bs_logged[2], g_bs_events[2], g_bs_warns, g_bs_warn_prev, g_bs_unknown;
+static bs_body g_bs_body;
+
+// The body the zones follow: the box from the player lists when it looks right, else the wheel positions from the configuration (the same
+// guess the phone page draws), else fixed numbers.
+static bs_body bs_build()
+{
+    bs_body b;
+    memset(&b, 0, sizeof b);
+    double w = 2.55;
+    b.tf = g_truck.front_z == g_truck.front_z ? -g_truck.front_z + 1.2 : 3.5;
+    b.tb = g_truck.rear_z == g_truck.rear_z ? g_truck.rear_z + 1.0 : 4.0;
+    if (g_trs.own_v.ok && g_trs.own_v.f >= 1 && g_trs.own_v.f <= 6 && g_trs.own_v.r >= 1 && g_trs.own_v.r <= 10 && g_trs.own_v.f + g_trs.own_v.r >= 4 && g_trs.own_v.f + g_trs.own_v.r <= 12) {
+        b.tf = g_trs.own_v.f; b.tb = g_trs.own_v.r;
+        if (g_trs.own_v.w > 2.2f && g_trs.own_v.w < 3.2f) w = g_trs.own_v.w;
+    }
+    b.hw = b.lhw = w * 0.5;
+    if (g_around.has_trailer) {
+        b.trailer = 1;
+        b.t_dx = g_around.t_dx; b.t_dy = g_around.t_dy; b.t_hdg = g_around.t_hdg;
+        b.lf = g_trailer.hook_z == g_trailer.hook_z ? -g_trailer.hook_z : 5.0;
+        b.lb = g_trailer.rear_z == g_trailer.rear_z ? g_trailer.rear_z + 1.0 : 5.5;
+        if (g_trs.own_t.ok && g_trs.own_t.f >= 2 && g_trs.own_t.f <= 12 && g_trs.own_t.r >= 2 && g_trs.own_t.r <= 14 && g_trs.own_t.f + g_trs.own_t.r >= 6 && g_trs.own_t.f + g_trs.own_t.r <= 20) {
+            b.lf = g_trs.own_t.f; b.lb = g_trs.own_t.r;
+        }
+    }
+    return b;
+}
+
+static void bs_tick(double now)
+{
+    g_around.bs_on = g_around.bs_left = g_around.bs_right = g_around.bs_warn = g_around.bs_warn_l = g_around.bs_warn_r = 0;
+    if (p_bs <= 0) return;
+    double dt = g_bs_t >= 0 && now > g_bs_t ? now - g_bs_t : 0;
+    if (dt > 0.5) dt = 0.5;
+    g_bs_t = now;
+    const bs_cfg &c = g_bs_cfg;
+    double kmh = fabs(T.speed) * 3.6;
+    int gate = T.engine_on && (kmh > c.min_kmh || ((now < g_bs_until[0] || now < g_bs_until[1]) && kmh > c.min_kmh - 3));
+    g_bs_body = bs_build();
+    g_around.bs_tf = (float)g_bs_body.tf; g_around.bs_tb = (float)g_bs_body.tb; g_around.bs_hw = (float)g_bs_body.hw;
+    g_around.bs_lf = (float)g_bs_body.lf; g_around.bs_lb = (float)g_bs_body.lb; g_around.bs_lhw = (float)g_bs_body.lhw;
+    g_around.bs_inner = (float)c.inner; g_around.bs_outer = (float)c.outer; g_around.bs_fm = (float)c.front_margin; g_around.bs_rm = (float)c.rear_margin;
+
+    int raw[2] = { 0, 0 };
+    const tr_ent *who[2] = { NULL, NULL };
+    if (gate) {
+        g_bs_drive_s += dt;
+        bs_poly z[2][4];
+        int nz[2];
+        for (int s = 0; s < 2; s++) nz[s] = bs_zone(g_bs_body, c, s ? -1 : 1, z[s]);
+        for (int i = 0; i < g_trs.n; i++) {
+            const tr_ent &e = g_trs.ent[i];
+            if (!(e.dist < 45)) continue;
+            double v = e.kind == K_AI ? e.speed : e.pspeed;
+            if (!(v == v)) { g_bs_unknown++; continue; }
+            if (!bs_eligible(c, e.hdg, v, fabs(T.speed))) continue;
+            bs_poly vp = bs_vehicle(e.dx, e.dy, e.len > 1 ? e.len : 4.5, e.wid > 0.5 ? e.wid : 2.0, e.hdg);
+            for (int s = 0; s < 2; s++) {
+                int hit = 0;
+                for (int k = 0; k < nz[s] && !hit; k++) hit = bs_overlap(z[s][k], vp);
+                if (hit) { raw[s] = 1; if (!who[s] || e.dist < who[s]->dist) who[s] = &e; }
+            }
+        }
+    }
+    int occ[2];
+    for (int s = 0; s < 2; s++) {
+        if (!gate) g_bs_until[s] = 0;
+        occ[s] = bs_hold(&g_bs_until[s], raw[s], now, c.hold_s);
+        if (occ[s]) g_bs_occ_s[s] += dt;
+        const char *nm = s ? "right" : "left";
+        if (occ[s] && !g_bs_since[s]) {
+            g_bs_since[s] = now;
+            g_bs_events[s]++;
+            if (now - g_bs_lastlog[s] > 2.0 && who[s]) {
+                g_bs_lastlog[s] = now; g_bs_logged[s] = 1;
+                logline("Blind spot: %s occupied by a %s, %.1f m %s, %.1f m %s, %.0f km/h, heading %+.0f deg (we drive %.0f km/h)", nm,
+                        who[s]->kind == K_AI ? "vehicle" : "trailer", fabs(who[s]->dx), who[s]->dx >= 0 ? "ahead" : "behind",
+                        fabs(who[s]->dy), who[s]->dy >= 0 ? "left" : "right",
+                        (who[s]->kind == K_AI ? who[s]->speed : who[s]->pspeed) * 3.6, who[s]->hdg, kmh);
+            }
+        } else if (!occ[s] && g_bs_since[s]) {
+            if (g_bs_logged[s]) { logline("Blind spot: %s free again after %.1f s", nm, now - g_bs_since[s]); g_bs_lastlog[s] = now; }
+            g_bs_logged[s] = 0;
+            g_bs_since[s] = 0;
+        }
+    }
+    // the indicator: the lever (SDK) or the game's own flag bits (+0x1d0: 4 = left, 8 = right, the way lane.cpp reads them)
+    unsigned fl = sense_lights_aligned(sense_actor());
+    int ind_l = T.blink_l || (fl & 4), ind_r = T.blink_r || (fl & 8);
+    int warn = gate && ((ind_l && occ[0]) || (ind_r && occ[1]));
+    if (warn && !g_bs_warn_prev) {
+        g_bs_warns++;
+        if (now - g_bs_warn_at > 1.0) {
+            g_bs_warn_at = now;
+            logline("Blind spot: WOULD WARN, indicator %s and that side is occupied (we drive %.0f km/h)",
+                    ind_l && occ[0] && ind_r && occ[1] ? "both" : (ind_l && occ[0] ? "left" : "right"), kmh);
+        }
+    }
+    g_bs_warn_prev = warn;
+    g_around.bs_on = gate;
+    g_around.bs_left = occ[0]; g_around.bs_right = occ[1]; g_around.bs_warn = warn;
+    g_around.bs_warn_l = gate && ind_l && occ[0]; g_around.bs_warn_r = gate && ind_r && occ[1];
+
+    // traffic.csv: one row "B" per tick while the detector runs: lists = bits (1 left, 2 right, 4 would warn), dx/dy/len/wid/hdg/speed = the
+    // nearest vehicle in a zone (nan = none)
+    if (g_csv && gate) {
+        const tr_ent *w = who[0] && (!who[1] || who[0]->dist <= who[1]->dist) ? who[0] : who[1];
+        int ind = (T.blink_l ? 1 : 0) | (T.blink_r ? 2 : 0);
+        int bits = occ[0] | (occ[1] << 1) | (warn << 2);
+        if (w) csv_row(now, "B", 0, bits, w->dx, w->dy, w->dist, w->len, w->wid, w->hdg, w->kind == K_AI ? w->speed : w->pspeed, NAN, NAN, ind);
+        else csv_row(now, "B", 0, bits, NAN, NAN, NAN, NAN, NAN, NAN, NAN, NAN, NAN, ind);
+    }
+    // once a minute: seconds occupied, and what the zones were made of (the boxes from the lists against the wheel guess)
+    if (now - g_bs_sum_at >= 60) {
+        g_bs_sum_at = now;
+        if (g_bs_drive_s > 0.5) {
+            logline("Blind spot: last minute at >%.0f km/h for %.0f s: left occupied %.1f s (%d times), right %.1f s (%d times), would warn %d times, "
+                    "%d vehicles of unknown speed skipped; zones: truck %.1f ahead %.1f behind, half width %.2f%s; trailer %.1f ahead %.1f behind of its origin%s; "
+                    "boxes from the lists: truck %s (%.1f ahead %.1f behind, %.2f wide, origin %.1f m off), trailer %s (%.1f ahead %.1f behind, %.2f wide, origin %.1f m off)",
+                    c.min_kmh, g_bs_drive_s, g_bs_occ_s[0], g_bs_events[0], g_bs_occ_s[1], g_bs_events[1], g_bs_warns, g_bs_unknown,
+                    g_bs_body.tf, g_bs_body.tb, g_bs_body.hw, g_trs.own_v.ok ? "" : " (wheel guess)", g_bs_body.lf, g_bs_body.lb, g_bs_body.trailer ? "" : " (no trailer)",
+                    g_trs.own_v.ok ? "found" : "none", g_trs.own_v.f, g_trs.own_v.r, g_trs.own_v.w, g_trs.own_v.dist < 1e8f ? g_trs.own_v.dist : -1.f,
+                    g_trs.own_t.ok ? "found" : "none", g_trs.own_t.f, g_trs.own_t.r, g_trs.own_t.w, g_trs.own_t.dist < 1e8f ? g_trs.own_t.dist : -1.f);
+        }
+        g_bs_drive_s = g_bs_occ_s[0] = g_bs_occ_s[1] = 0;
+        g_bs_events[0] = g_bs_events[1] = g_bs_warns = g_bs_unknown = 0;
+    }
 }
 
 static void tr_frame()
@@ -304,31 +247,29 @@ static void tr_frame()
     last = now;
     g_ticks++;
 
-    char *gt = ptr_ok((void *)g_slot, 8) ? *(char **)g_slot : NULL;
-    if (!gt || !ptr_ok(gt, GT_PTRL + 0x20)) {
+    unsigned long long vt_off;
+    if (!trs_instance(&vt_off)) {   // no object at the slot, or not an object of the game
         g_ticks_fail++;
         g_around.ok = 0;
         return;
     }
-    uintptr_t vt = *(uintptr_t *)gt;
-    if (vt < g_img_lo || vt >= g_img_hi) { g_ticks_fail++; g_around.ok = 0; return; }   // not an object of the game
     if (g_state == 2) {
         g_state = 3;
-        logline("Traffic: game_traffic instance found (vtable +0x%llx), reading its lists (log only)", (unsigned long long)(vt - g_img_lo));
+        logline("Traffic: game_traffic instance found (vtable +0x%llx), reading its lists", vt_off);
     }
 
     LARGE_INTEGER f0, a, b;
     QueryPerformanceFrequency(&f0);
     QueryPerformanceCounter(&a);
     tr_pose me = tr_pose_from_heading(T.place.position.x, T.place.position.z, T.place.orientation.heading);
-    walk(gt, me);
+    trs_walk(me);
     QueryPerformanceCounter(&b);
     double ms = (double)(b.QuadPart - a.QuadPart) * 1000.0 / (double)f0.QuadPart;
     g_walk_ms_sum += ms; g_walk_n++;
     if (ms > g_walk_ms_max) g_walk_ms_max = ms;
     g_ok_at = now;
 
-    ent *nr[NEAR_LOG];
+    tr_ent *nr[NEAR_LOG];
     int m;
     pick_nearest(nr, &m);
 
@@ -336,17 +277,36 @@ static void tr_frame()
     g_around.ok = 1;
     g_around.n = 0;
     {
-        static unsigned char used[MAX_ENT];
-        memset(used, 0, (size_t)g_n);
+        static unsigned char used[TR_MAX_ENT];
+        memset(used, 0, (size_t)g_trs.n);
         for (int r = 0; r < 12; r++) {
             int best = -1;
-            for (int i = 0; i < g_n; i++)
-                if (!used[i] && g_ent[i].dist < 60 && (best < 0 || g_ent[i].dist < g_ent[best].dist)) best = i;
+            for (int i = 0; i < g_trs.n; i++)
+                if (!used[i] && g_trs.ent[i].dist < 60 && (best < 0 || g_trs.ent[i].dist < g_trs.ent[best].dist)) best = i;
             if (best < 0) break;
             used[best] = 1;
-            const ent &e = g_ent[best];
+            const tr_ent &e = g_trs.ent[best];
             traffic_obj &o = g_around.obj[g_around.n++];
             o.dx = e.dx; o.dy = e.dy; o.dist = e.dist; o.v = e.speed; o.hdg = e.hdg; o.len = e.len; o.wid = e.wid; o.kind = e.kind;
+            o.id = id_of(e.p); o.rv_long = e.rv_l; o.rv_lat = e.rv_s;
+        }
+    }
+    // the wider list for the cut-in reading
+    g_around.read_t = now;
+    g_around.n_ahead = 0;
+    {
+        static unsigned char used[TR_MAX_ENT];
+        memset(used, 0, (size_t)g_trs.n);
+        for (int r = 0; r < 16; r++) {
+            int best = -1;
+            for (int i = 0; i < g_trs.n; i++)
+                if (!used[i] && g_trs.ent[i].dist < 130 && g_trs.ent[i].dx > -15 && fabsf(g_trs.ent[i].dy) < 25 && (best < 0 || g_trs.ent[i].dist < g_trs.ent[best].dist)) best = i;
+            if (best < 0) break;
+            used[best] = 1;
+            const tr_ent &e = g_trs.ent[best];
+            traffic_obj &o = g_around.ahead[g_around.n_ahead++];
+            o.dx = e.dx; o.dy = e.dy; o.dist = e.dist; o.v = e.speed; o.hdg = e.hdg; o.len = e.len; o.wid = e.wid; o.kind = e.kind;
+            o.id = id_of(e.p); o.rv_long = e.rv_l; o.rv_lat = e.rv_s;
         }
     }
     // our trailer from the SDK
@@ -356,19 +316,20 @@ static void tr_frame()
         tp = tr_pose_from_heading(T.trailer_place.position.x, T.trailer_place.position.z, T.trailer_place.orientation.heading);
         double dx, dy;
         tr_rel(me, tp.x, tp.z, &dx, &dy);
-        if (plausible(dx, 100) && plausible(dy, 100)) {
+        if (trs_plausible(dx, 100) && trs_plausible(dy, 100)) {
             g_around.has_trailer = 1;
             g_around.t_dx = (float)dx; g_around.t_dy = (float)dy; g_around.t_hdg = (float)tr_rel_heading_deg(me, tp);
         }
     }
     g_around.truck_front_z = g_truck.front_z; g_around.truck_rear_z = g_truck.rear_z; g_around.truck_hook_z = g_truck.hook_z;
     g_around.trailer_hook_z = g_trailer.hook_z; g_around.trailer_rear_z = g_trailer.rear_z;
+    bs_tick(now);
 
     // the csv: only while the engine runs
     if (g_csv && T.engine_on) {
         int ind = (T.blink_l ? 1 : 0) | (T.blink_r ? 2 : 0);
         for (int i = 0; i < m; i++) {
-            const ent *e = nr[i];
+            const tr_ent *e = nr[i];
             csv_row(now, e->kind == K_AI ? "A" : "AT", id_of(e->p), e->mask, e->dx, e->dy, e->dist, e->len, e->wid, e->hdg, e->speed,
                     e->rv_l, e->rv_s, ind);
         }
@@ -378,14 +339,16 @@ static void tr_frame()
         }
         static unsigned slow;
         if (++slow % 5 == 0) {   // 1 per second: where the game's list puts us and our trailer, against the SDK
-            if (g_pv_d == g_pv_d) csv_row(now, "PV", g_pv_n, 0, g_pv_dx, g_pv_dy, g_pv_d, 0, 0, NAN, NAN, NAN, NAN, ind);
-            if (g_pt_d == g_pt_d) csv_row(now, "PT", g_pt_n, 0, g_pt_dx, g_pt_dy, g_pt_d, 0, 0, NAN, NAN, NAN, NAN, ind);
+            if (g_trs.pv_d == g_trs.pv_d) csv_row(now, "PV", g_trs.pv_n, 0, g_trs.pv_dx, g_trs.pv_dy, g_trs.pv_d, 0, 0, NAN, NAN, NAN, NAN, ind);
+            if (g_trs.pt_d == g_trs.pt_d) csv_row(now, "PT", g_trs.pt_n, 0, g_trs.pt_dx, g_trs.pt_dy, g_trs.pt_d, 0, 0, NAN, NAN, NAN, NAN, ind);
         }
         static double flushed;
         if (now - flushed > 2) { flushed = now; fflush(g_csv); csv_cap(&g_csv, "traffic.csv"); }
     }
     summary(now, nr, m);
 }
+
+int traffic_probe_on() { return p_probe > 0; }
 
 void traffic_around_get(traffic_around *out)
 {
@@ -400,6 +363,7 @@ void traffic_around_get(traffic_around *out)
 // The vehicle outlines for the page: the hook and the wheel positions (vehicle space, z backward).
 static void tr_config(const scs_telemetry_configuration_t *c)
 {
+    if (!c) return;
     int truck = !strcmp(c->id, "truck"), trl = !strcmp(c->id, "trailer.0");
     if (!truck && !trl) return;
     geo g = { NAN, NAN, NAN };
@@ -418,49 +382,26 @@ static void tr_config(const scs_telemetry_configuration_t *c)
 static void tr_start()
 {
     if (p_probe <= 0) return;
-    if (!L || strcmp(L->name, "1.60")) {
-        snprintf(g_status, sizeof g_status, "off: the traffic layout is ETS2 1.60 only");
-        logline("Traffic: probe is on, but the list layout is for the 1.60 layout only: not reading");
-        return;
-    }
-    unsigned stamp, size;
-    if (!game_exe_stamp(&stamp, &size)) { snprintf(g_status, sizeof g_status, "off: game image unreadable"); return; }
-    g_img_lo = (uintptr_t)GetModuleHandleW(NULL);
-    g_img_hi = g_img_lo + size;
-    uintptr_t hits[4];
-    g_hits = game_scan_hits(k_pat, hits, 4);
-    if (g_hits != 1) {
-        g_state = 1;
-        snprintf(g_status, sizeof g_status, "probe on, game_traffic pattern not found (%d hits)", g_hits);
-        logline("Traffic: game_traffic pattern: %d hits (need exactly 1): not reading", g_hits);
-        return;
-    }
-    int32_t rel;
-    memcpy(&rel, (const void *)(hits[0] + 6), 4);
-    g_slot = hits[0] + 10 + (intptr_t)rel;
-    if (g_slot < g_img_lo || g_slot >= g_img_hi) {
-        g_state = 1;
-        snprintf(g_status, sizeof g_status, "probe on, game_traffic slot outside the image");
-        logline("Traffic: game_traffic pattern hit 1 but the slot is outside the game image (+0x%llx): not reading", (unsigned long long)(g_slot - g_img_lo));
-        return;
-    }
-    g_state = 2;
+    g_state = trs_discover(g_status, sizeof g_status);   // the pattern scan is core/sense_traffic.cpp; 0 = no layout / no image (state stays 0), 1 = no pattern
+    if (g_state != 2) return;
     g_csv = open_out("traffic.csv", "w");
     if (g_csv) fputs("t,kind,id,lists,dx,dy,dist,len,wid,hdg,speed,rv_long,rv_lat,ego_kmh,ind\n", g_csv);
-    snprintf(g_status, sizeof g_status, "probe on (log only), game_traffic slot at +0x%llx%s", (unsigned long long)(g_slot - g_img_lo), g_csv ? "" : " (no csv)");
-    logline("Traffic: game_traffic pattern found (1 hit), global slot at image +0x%llx, probe on: log only, nothing acts on it", (unsigned long long)(g_slot - g_img_lo));
+    snprintf(g_status, sizeof g_status, "probe on (the AEB reads it), game_traffic slot at +0x%llx%s", trs_slot_off(), g_csv ? "" : " (no csv)");
+    logline("Traffic: game_traffic pattern found (1 hit), global slot at image +0x%llx, probe on: the AEB reads where its lead is sideways", trs_slot_off());
 }
 
 static void tr_reset(int level, const char *)
 {
-    g_n = 0;
+    g_trs.n = 0;
     g_around.ok = 0;
+    g_bs_until[0] = g_bs_until[1] = 0; g_bs_since[0] = g_bs_since[1] = 0; g_bs_logged[0] = g_bs_logged[1] = 0; g_bs_warn_prev = 0; g_bs_t = -1;
+    g_around.bs_on = g_around.bs_left = g_around.bs_right = g_around.bs_warn = g_around.bs_warn_l = g_around.bs_warn_r = 0;
     g_ok_at = -1;
-    if (level >= RESET_HARD) g_n_ai_vt = 0;   // another save: the vtables are learned again
+    if (level >= RESET_HARD) trs_forget_vtables();   // another save: the vtables are learned again
 }
 
 static const char *tr_status() { return g_status; }
 
 static void tr_stop() { if (g_csv) fflush(g_csv); }
 
-module m_traffic = { "traffic", "Traffic", g_params, sizeof g_params / sizeof g_params[0], tr_start, tr_frame, tr_config, tr_stop, tr_reset, tr_status };
+module m_traffic = { "traffic", "Traffic", g_params, sizeof g_params / sizeof g_params[0], tr_start, tr_frame, tr_config, tr_stop, tr_reset, tr_status, NULL, VCM_BOTH };

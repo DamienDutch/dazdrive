@@ -7,6 +7,8 @@
 //   node_item: int3 coords +0 = meters x 256 (x, y = height, z)
 // GPS distances are game-scaled (~19x outside cities), so real distances come
 // from the node geometry.
+#include "vehicle.h"
+#include "vclass.h"
 #include "route.h"
 #include "game.h"
 #include <math.h>
@@ -35,6 +37,21 @@ static struct R_t {
 } R;
 
 typedef unsigned long long u64;
+
+// The cumulative route geometry from the truck's front, for route_profile(): every route segment up
+// to ~6.4 km (the planner's horizon) with its start distance (s = 0 at the truck) and chord length,
+// the two nodes and their tangents (Hermite), refreshed with each route build. One flat pass over the
+// polyline per update; route_profile then walks it once left-to-right, so both are O(nodes + samples).
+enum { GEOM_MAX_M = 6400, GEOM_MAX_SEG = 720 };
+static struct G2_t {
+    int nseg;
+    float total;                       // distance (m) from the truck to the end of the last segment
+    float s0[GEOM_MAX_SEG], len[GEOM_MAX_SEG];
+    float ax[GEOM_MAX_SEG], ay[GEOM_MAX_SEG], az[GEOM_MAX_SEG];
+    float bx[GEOM_MAX_SEG], by[GEOM_MAX_SEG], bz[GEOM_MAX_SEG];
+    float tax[GEOM_MAX_SEG], taz[GEOM_MAX_SEG], tbx[GEOM_MAX_SEG], tbz[GEOM_MAX_SEG];
+    char herm[GEOM_MAX_SEG];
+} G2;
 
 // Junction look-ahead settings (cruise.cpp sets them from its ini).
 static struct { int on; float lat, rb_ms, min_deg, ratio; int herm, min_curves; } JC = { 0, 2.0f, 25 / 3.6f, 25, 1.4f, 1, 2 };
@@ -271,6 +288,40 @@ static void find_junctions(char *task, const char *items, u64 n, u64 seg, float 
     }
 }
 
+// The cumulative geometry for route_profile(): walk the polyline from the truck's projection (s = 0),
+// recording each segment's start distance, chord length, nodes and tangents (Hermite). The distance
+// measure and the Hermite parameterisation are exactly the ones build() samples with (chord lengths).
+static void build_geom(const char *items, u64 n, u64 seg, float len, float t)
+{
+    G2.nseg = 0; G2.total = 0;
+    float pa[3], pb[3];
+    if (!node_pos(items, seg, pa) || !node_pos(items, seg + 1, pb)) return;
+    float ta[2], tb[2];
+    int herm = JC.herm && seg_tangents(items, seg, pa, pb, len, ta, tb);
+    float s0 = -t;
+    u64 j = seg;
+    float seg_len = len;
+    for (;;) {
+        if (G2.nseg >= GEOM_MAX_SEG || s0 >= GEOM_MAX_M) break;
+        int k = G2.nseg++;
+        G2.s0[k] = s0; G2.len[k] = seg_len;
+        G2.ax[k] = pa[0]; G2.ay[k] = pa[1]; G2.az[k] = pa[2];
+        G2.bx[k] = pb[0]; G2.by[k] = pb[1]; G2.bz[k] = pb[2];
+        G2.tax[k] = ta[0]; G2.taz[k] = ta[1]; G2.tbx[k] = tb[0]; G2.tbz[k] = tb[1];
+        G2.herm[k] = (char)herm;
+        G2.total = s0 + seg_len;
+        s0 += seg_len;
+        j++;
+        if (j + 1 >= n) break;
+        memcpy(pa, pb, sizeof pa);
+        if (!node_pos(items, j + 1, pb)) break;
+        float ex = pb[0] - pa[0], ez = pb[2] - pa[2];
+        seg_len = sqrtf(ex * ex + ez * ez);
+        if (seg_len < 0.1f) seg_len = 0.1f;
+        herm = JC.herm && seg_tangents(items, j, pa, pb, seg_len, ta, tb);
+    }
+}
+
 static void build(char *task)
 {
     char *items = *(char **)(task + 0x58);
@@ -390,6 +441,7 @@ static void build(char *task)
     }
     R.n = i;
     R.junction_m = junction_m;
+    build_geom(items, n, seg, len, t);
     R.ok = i >= 4;
     R.why = "route ends here";
 }
@@ -421,7 +473,9 @@ void route_update()
     }
 }
 
-int route_ok() { return R.ok; }
+// A light vehicle (a car, a pickup) has no navigation-fed functions: no bend or descent braking from the route, no predictive
+// cruise or shifting (Damien 31-10: 'cars don't have that'); the route still reads for the dashboard (R.ok).
+int route_ok() { return R.ok && vprof()->route_features; }
 float route_ahead_m() { return R.ok ? (float)((R.n - 1) * STEP) : 0; }
 
 static float h_at(float d)
@@ -552,21 +606,33 @@ void route_junction_dump(char *buf, size_t n)
 // points 25 m apart). The speed allowed now so that, braking gently (a_dec),
 // every bend ahead is taken with at most a_lat sideways. NAN if unknown.
 float route_bend_speed(float a_lat, float a_dec);
+
+// The junction/roundabout limit shared by the point query and the profile:
+// the speed (m/s) to be at by the entry (NAN = this junction does not limit:
+// a shallow turn below JC.min_deg). round = 1 for a roundabout.
+static float jn_limit(const R_t::Jn &j, int *round)
+{
+    *round = j.round;
+    if (j.round) return JC.rb_ms;
+    if (fabsf(j.turn) * 57.2958f < JC.min_deg) return NAN;
+    return fmaxf(sqrtf(JC.lat * j.radius), 15 / 3.6f);
+}
+
 float route_junction_speed(float a_dec, route_junction_t *info)
 {
     if (!R.ok || !JC.on) return NAN;
     float best = NAN;
     for (int i = 0; i < R.njn; i++) {
         const R_t::Jn &j = R.jn[i];
-        float deg = fabsf(j.turn) * 57.2958f, v;
-        if (j.round) v = JC.rb_ms;
-        else if (deg < JC.min_deg) continue;
-        else v = fmaxf(sqrtf(JC.lat * j.radius), 15 / 3.6f);
-        float d = j.d_in - (j.round ? 45 : 25);             // be down to v well before the entry (Damien: roundabouts too fast)
+        int round;
+        float v = jn_limit(j, &round);
+        if (v != v) continue;
+        float deg = fabsf(j.turn) * 57.2958f;
+        float d = j.d_in - (round ? 45 : 25);               // be down to v well before the entry (Damien: roundabouts too fast)
         float v_now = sqrtf(v * v + 2 * a_dec * (d > 0 ? d : 0));
         if (best != best || v_now < best) {
             best = v_now;
-            if (info) { info->dist_m = j.d_in; info->turn_deg = deg; info->limit_ms = v; info->roundabout = j.round; info->curves = j.curves; info->ratio = j.ratio; }
+            if (info) { info->dist_m = j.d_in; info->turn_deg = deg; info->limit_ms = v; info->roundabout = round; info->curves = j.curves; info->ratio = j.ratio; }
         }
     }
     return best;
@@ -616,6 +682,32 @@ float route_straight_m(float max_turn)
     return (float)((R.n - 1) * STEP);
 }
 
+// The bend's radius (m) at sample i from the heading change over K samples of arc on each side
+// (chords of the sampled positions x/z), 0 when straight enough or out of range. Shared by
+// route_bend_speed (25 m samples, K = 3 / 2 on Hermite) and route_profile (any step_m, K in metres).
+static float bend_radius(const float *x, const float *z, int n, int i, int K)
+{
+    if (i < K || i + K >= n) return 0;
+    float ax = x[i] - x[i - K], az = z[i] - z[i - K];
+    float bx = x[i + K] - x[i], bz = z[i + K] - z[i];
+    float la = sqrtf(ax * ax + az * az), lb = sqrtf(bx * bx + bz * bz);
+    if (la < 1 || lb < 1) return 0;
+    float c = (ax * bx + az * bz) / (la * lb);
+    c = c > 1 ? 1 : (c < -1 ? -1 : c);
+    float ang = acosf(c);
+    if (ang < 0.02f) return 0;
+    return 0.5f * (la + lb) / ang;
+}
+
+// The speed (m/s) the bend of that radius allows at a_lat sideways, the allowance depending on the
+// speed it gives (the Mercedes-Benz lat_scale shape). Shared by the point query and the profile.
+static float bend_v(float a_lat, float radius)
+{
+    float v = sqrtf(a_lat * radius);
+    for (int it = 0; it < 3; it++) v = sqrtf(a_lat * lat_scale(v) * radius);
+    return v;
+}
+
 float route_bend_speed(float a_lat, float a_dec)
 {
     if (!R.ok || R.n < 5) return NAN;
@@ -629,21 +721,127 @@ float route_bend_speed(float a_lat, float a_dec)
     for (int i = 2; i + 2 < R.n; i++) {
         int K = 3;
         if (R.herm[i - 2] && R.herm[i - 1] && R.herm[i] && R.herm[i + 1] && R.herm[i + 2]) K = 2;
-        if (i < K || i + K >= R.n) continue;
-        float ax = R.x[i] - R.x[i - K], az = R.z[i] - R.z[i - K];
-        float bx = R.x[i + K] - R.x[i], bz = R.z[i + K] - R.z[i];
-        float la = sqrtf(ax * ax + az * az), lb = sqrtf(bx * bx + bz * bz);
-        if (la < 1 || lb < 1) continue;
-        float c = (ax * bx + az * bz) / (la * lb);
-        c = c > 1 ? 1 : (c < -1 ? -1 : c);
-        float ang = acosf(c);                           // heading change over K steps of arc
-        if (ang < 0.02f) continue;                      // straight enough
-        float radius = 0.5f * (la + lb) / ang;
-        float v_bend = sqrtf(a_lat * radius);
-        for (int it = 0; it < 3; it++) v_bend = sqrtf(a_lat * lat_scale(v_bend) * radius);  // the allowance depends on the speed it gives
+        float radius = bend_radius(R.x, R.z, R.n, i, K);
+        if (!(radius > 0)) continue;
+        float v_bend = bend_v(a_lat, radius);
         float d = (float)(i * STEP) - 1.5f * STEP;      // distance to the bend (its window starts earlier)
         float v_now = sqrtf(v_bend * v_bend + 2 * a_dec * (d > 0 ? d : 0));
         if (best != best || v_now < best) best = v_now;
     }
     return best;
+}
+
+// route_bend_speed's loop, kept as points (route.h): the front of apex speeds, nearest first, each lower than every nearer one. A farther point that is not slower
+// than a nearer one never binds (its envelope is higher and the deceleration it needs is lower), so the lowest envelope over this front is route_bend_speed's value.
+int route_bend_points(float a_lat, route_bend_t *out, int max)
+{
+    if (!R.ok || R.n < 5 || !out || max <= 0) return 0;
+    int n = 0;
+    float low = 1e9f;
+    for (int i = 2; i + 2 < R.n; i++) {
+        int K = 3;
+        if (R.herm[i - 2] && R.herm[i - 1] && R.herm[i] && R.herm[i + 1] && R.herm[i + 2]) K = 2;
+        float radius = bend_radius(R.x, R.z, R.n, i, K);
+        if (!(radius > 0)) continue;
+        float v = bend_v(a_lat, radius);
+        if (!(v < low)) continue;
+        low = v;
+        float d = (float)(i * STEP) - 1.5f * STEP;      // as above: the window of the bend starts earlier
+        out[n].v_ms = v; out[n].d_m = d > 0 ? d : 0;
+        if (++n >= max) break;
+    }
+    return n;
+}
+
+// The road ahead as uniform arrays for the planner (route.h). The grade and the caps reuse the
+// point queries' laws: a bend's apex speed (bend_v, with the stored junction lateral JC.lat as its
+// sideways allowance) and a junction/roundabout's entry speed (jn_limit). The caps are raw (the
+// planner's PlProfile.vmax: the planner applies its own braking envelope); NAN where the route is
+// unknown. Geometry comes from the cumulative G2 (built with each route update), sampled once
+// left-to-right, so the whole call is O(n + segments).
+int route_profile(float step_m, int n, route_prof *out)
+{
+    if (out) {
+        out->step_m = step_m;
+        out->n = 0;
+        for (int i = 0; i < ROUTE_PROF_MAX; i++) {
+            out->h[i] = NAN; out->grade[i] = NAN; out->vmax[i] = NAN;
+            out->bend[i] = NAN; out->jn[i] = NAN; out->jn_kind[i] = 0; out->jn_m[i] = NAN;
+        }
+    }
+    if (!out || !R.ok || !(step_m > 0) || n < 1) return 0;
+    if (n > ROUTE_PROF_MAX) n = ROUTE_PROF_MAX;
+    out->step_m = step_m;
+    out->n = n;
+
+    // heights and x/z over the grid (one pass over G2), and the per-sample Hermite flag for the bends
+    float sx[ROUTE_PROF_MAX], sz[ROUTE_PROF_MAX];
+    char sherm[ROUTE_PROF_MAX];
+    int seg = 0, nv = 0;
+    for (int i = 0; i < n; i++) {
+        float s = i * step_m;
+        if (!(s <= G2.total)) break;                      // beyond the route end: the rest stay NAN
+        while (seg + 1 < G2.nseg && s > G2.s0[seg] + G2.len[seg]) seg++;
+        if (seg >= G2.nseg || s < G2.s0[seg]) break;
+        float u = (s - G2.s0[seg]) / G2.len[seg];
+        out->h[i] = G2.ay[seg] + (G2.by[seg] - G2.ay[seg]) * u;   // height is always linear, as build()
+        if (G2.herm[seg]) {
+            float u2 = u * u, u3 = u2 * u;
+            float h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2;
+            sx[i] = h00 * G2.ax[seg] + h10 * G2.len[seg] * G2.tax[seg] + h01 * G2.bx[seg] + h11 * G2.len[seg] * G2.tbx[seg];
+            sz[i] = h00 * G2.az[seg] + h10 * G2.len[seg] * G2.taz[seg] + h01 * G2.bz[seg] + h11 * G2.len[seg] * G2.tbz[seg];
+        } else {
+            sx[i] = G2.ax[seg] + (G2.bx[seg] - G2.ax[seg]) * u;
+            sz[i] = G2.az[seg] + (G2.bz[seg] - G2.az[seg]) * u;
+        }
+        sherm[i] = (char)G2.herm[seg];
+        nv = i + 1;
+    }
+
+    // grade: rise/run between neighbours (the planner's central difference)
+    for (int i = 0; i < n; i++) {
+        int a = i > 0 ? i - 1 : 0, b = i + 1 < n ? i + 1 : n - 1;
+        if (i < nv && b < nv && b > a) out->grade[i] = (out->h[b] - out->h[a]) / ((b - a) * step_m);
+    }
+
+    // bends: the same law as route_bend_speed, with the window kept in metres (75 m, 50 m on a
+    // Hermite stretch) instead of 25 m steps, so the radius is the same at any step_m.
+    int Kw = (int)(75.0f / step_m + 0.5f), Kh = (int)(50.0f / step_m + 0.5f);
+    if (Kw < 1) Kw = 1;
+    if (Kh < 1) Kh = 1;
+    for (int i = 0; i < nv; i++) {
+        int K = Kw;
+        if (i - Kh >= 0 && i + Kh < nv) {
+            int allh = 1;
+            for (int j = i - Kh; j <= i + Kh; j++) if (!sherm[j]) { allh = 0; break; }
+            if (allh) K = Kh;
+        }
+        float radius = bend_radius(sx, sz, nv, i, K);
+        if (!(radius > 0)) continue;
+        float v = bend_v(g_bend_lat > 0.3f ? (float)g_bend_lat : JC.lat, radius);   // (review 30-10: the cruise's curve_lat, not the junction lateral: it braked bends ~11 % slower)
+        out->bend[i] = v;
+        if (out->vmax[i] != out->vmax[i] || v < out->vmax[i]) out->vmax[i] = v;
+    }
+
+    // junctions/roundabouts: the same law as route_junction_speed, the raw entry speed spread from
+    // (entry - offset) to the exit so the truck stays capped through the junction.
+    for (int k = 0; k < R.njn; k++) {
+        const R_t::Jn &j = R.jn[k];
+        int round;
+        float v = jn_limit(j, &round);
+        if (v != v) continue;
+        float off = round ? 45 : 25;
+        int i0 = (int)ceilf((j.d_in - off) / step_m), i1 = (int)floorf(j.d_out / step_m);
+        if (i0 < 0) i0 = 0;
+        if (i1 > nv - 1) i1 = nv - 1;
+        for (int i = i0; i <= i1; i++) {
+            if (out->jn[i] != out->jn[i] || v < out->jn[i]) {
+                out->jn[i] = v;
+                out->jn_kind[i] = (signed char)(round ? 2 : 1);
+                out->jn_m[i] = j.d_in - i * step_m;
+            }
+            if (out->vmax[i] != out->vmax[i] || v < out->vmax[i]) out->vmax[i] = v;
+        }
+    }
+    return 1;
 }

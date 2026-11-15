@@ -5,7 +5,8 @@
 #
 #   dazdrive-setup.sh [--base FILE] [--out FILE] [--check]
 #     --base FILE   start from this ini (default: dazdrive.ini next to this script, or tools/../release preset;
-#                   pass dazdrive-dev.ini for the developer's settings, or your installed ini to change it)
+#                   pass dazdrive-dev.ini for the developer's settings, or your installed ini to change it; it must have the
+#                   [module.section] layout: take a fresh dazdrive.ini from the zip for an older one)
 #     --out FILE    where to write (default: the game's plugins/dazdrive folder if it exists, else ./dazdrive.ini)
 #     --check       only verify that every question below still exists in the base ini (used by make_release.sh)
 #
@@ -19,7 +20,7 @@ while [ $# -gt 0 ]; do
     --base) base=$2; shift 2 ;;
     --out) out=$2; shift 2 ;;
     --check) check=1; shift ;;
-    -h|--help) sed -n 2,13p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,14p "$0"; exit 0 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -29,34 +30,32 @@ fi
 [ -f "$base" ] || { echo "no base ini found (use --base FILE)" >&2; exit 1; }
 
 # ---- the questions: section|key|kind|label    kind: b = on/off, n = number, c:a/b/c = choice
-Q='core|log_level|c:0/1/2|How much goes into dazdrive.log (1 is fine; 2 also writes big csv files)
-trueshift|enabled|b|TrueShift: the gearbox logic
-trueshift|dash_letter|b|Show the gearbox mode (D, E, S, M) on the dashboard
-trueshift|eco_roll|b|Eco-roll: neutral on gentle descents (Eco and Normal modes)
-trueshift|smooth_stop|b|Smooth stop: open the clutch around idle when braking to a stop
-trueshift|lookahead|b|Use the navigation route ahead (climbs, tops, junctions)
-trueshift|hint_hold_s|n|Seconds a gear chosen with the shift-hint buttons is held
-trueshift|tones|b|Short tone when the gearbox mode changes
-cruise|enabled|b|Cruise module (smooth throttle, ACC extras)
-cruise|smooth|b|Smooth cruise throttle (no bursts after shifts)
-cruise|speed_limit|b|Follow speed limits with the cruise set speed
-cruise|speed_limit_offset_kmh|n|Set speed = limit plus this (km/h)
-cruise|auto_hold|b|Auto Hold: stay braked after stopping until you give gas
-cruise|stop_go|b|ACC keeps going in a jam (stop and go)
-cruise|own_acc|b|Own, smoother ACC speed target
-cruise|acc_cycle_up|b|ACC distance key steps close, middle, far (the game: far, middle, close)
-cruise|curves|b|Slow down gently before sharp bends
-cruise|junctions|b|Slow down before junction turns and roundabouts
-cruise|descent|b|Brake gently ahead of descents to hold the set speed
-cruise|predictive|b|Carry a little speed into climbs, ease off before tops
-cruise|emergency_hazards|b|Hazard lights by themselves after an emergency stop
-cruise|step_tap_kmh|n|A tap on cruise + / - changes the set speed by this (0 = the game'"'"'s step)
-cruise|min_kmh|n|Lowest speed at which cruise can be switched on (the game: 30)
-lane|mode|c:0/1/2|Lane keeping: 0 = the game'"'"'s own, 1 = calm, 2 = model-based (experimental)
-lane|tone|b|Tone when lane keeping switches on/off
-creep|enabled|b|Crawl / maneuver mode (slipping clutch in 1, 2 and R)
-creep|start_on|b|Crawl switched on when the game starts
-creep|creep_kmh|n|Crawl speed (km/h)'
+Q='core.logging|level|c:short/detailed/traces|How much goes into dazdrive.log (detailed is fine; traces also writes big csv files)
+trueshift.general|enabled|b|TrueShift: the gearbox logic
+trueshift.general|dashboard_letter_enabled|b|Show the gearbox mode (D, E, S, M) on the dashboard
+trueshift.eco_roll|enabled|b|Eco-roll: neutral on gentle descents (Eco and Normal modes)
+trueshift.stopping|smooth_stop_enabled|b|Smooth stop: open the clutch around idle when braking to a stop
+trueshift.general|route_lookahead_enabled|b|Use the navigation route ahead (climbs, tops, junctions)
+trueshift.manual|hint_hold_seconds|n|Seconds a gear chosen with the shift-hint buttons is held
+trueshift.general|tones_enabled|b|Short tone when the gearbox mode changes
+cruise.general|enabled|b|Cruise module (smooth throttle, ACC extras)
+cruise.general|smooth_throttle_enabled|b|Smooth cruise throttle (no bursts after shifts)
+cruise.speed_limit|enabled|b|Follow speed limits with the cruise set speed
+cruise.speed_limit|offset_kmh|n|Set speed = limit plus this (km/h)
+cruise.auto_hold|enabled|b|Auto Hold: stay braked after stopping until you give gas
+cruise.stop_and_go|enabled|b|ACC keeps going in a jam (stop and go)
+cruise.acc|own_controller_enabled|b|Own, smoother ACC speed target
+cruise.acc|distance_key_cycle_up_enabled|b|ACC distance key steps close, middle, far (the game: far, middle, close)
+cruise.bends|enabled|b|Slow down gently before sharp bends
+cruise.junctions|enabled|b|Slow down before junction turns and roundabouts
+cruise.descent|enabled|b|Brake gently ahead of descents to hold the set speed
+cruise.pcc|enabled|b|Carry a little speed into climbs, ease off before tops
+cruise.emergency_hazards|enabled|b|Hazard lights by themselves after an emergency stop
+cruise.set_speed|tap_step_kmh|n|A tap on cruise + / - changes the set speed by this (0 = the game'"'"'s step)
+cruise.set_speed|min_switch_on_speed_kmh|n|Lowest speed at which cruise can be switched on (the game: 30)
+lane.general|mode|c:game_law/model_law|Lane keeping: game_law = the game'"'"'s own, model_law = model-based (experimental)
+lane.general|tone_enabled|b|Tone when lane keeping switches on/off
+crawl.general|speed_kmh|n|Crawl speed (km/h)'
 
 # ---- read the ini: tab separated section, key, value, help (the comment line above the key)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
@@ -83,15 +82,16 @@ short() { echo "$1" | cut -c1-110; }
 answers="$tmp/answers.tsv"; : > "$answers"
 set_answer() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$answers"; }
 
-ask_bool() {  # sec key label help current
-  local ans
+ask_bool() {  # sec key label help current (true/false, or 1/0 in an old ini)
+  local ans cur=0
+  case "$5" in true|1|on|yes|True|TRUE) cur=1 ;; esac
   if [ $ui = plain ]; then
     printf '\n%s\n  (%s)\n' "$3" "$4"
-    read -r -p "  on? [$( [ "$5" = 0 ] && echo y/N || echo Y/n )] " ans
-    case "$ans" in [yYjJ]*) ans=1 ;; [nN]*) ans=0 ;; *) ans=$5 ;; esac
+    read -r -p "  on? [$( [ $cur = 0 ] && echo y/N || echo Y/n )] " ans
+    case "$ans" in [yYjJ]*) ans=true ;; [nN]*) ans=false ;; *) ans=$( [ $cur = 1 ] && echo true || echo false ) ;; esac
     set_answer "$1" "$2" "$ans"
   else
-    if dlg $( [ "$5" = 0 ] && echo --defaultno ) --title "$1" --yesno "$3\n\n$4\n\nOn?" 18 76; then set_answer "$1" "$2" 1; else set_answer "$1" "$2" 0; fi
+    if dlg $( [ $cur = 0 ] && echo --defaultno ) --title "$1" --yesno "$3\n\n$4\n\nOn?" 18 76; then set_answer "$1" "$2" true; else set_answer "$1" "$2" false; fi
   fi
 }
 ask_num() {  # sec key label help current
@@ -129,14 +129,15 @@ if [ $ui != plain ]; then dlg --title "DazDrive setup" --msgbox "Walks through t
 off_sections=" "
 while IFS='|' read -r -u 3 sec key kind label; do
   [ -z "$sec" ] && continue
-  case "$off_sections" in *" $sec "*) [ "$key" != enabled ] && continue ;; esac
+  mod=${sec%%.*}
+  case "$off_sections" in *" $mod "*) { [ "$key" = enabled ] && [ "$sec" = "$mod.general" ]; } || continue ;; esac
   cur=$(get "$sec" "$key" 3); help=$(get "$sec" "$key" 4)
   case "$kind" in
     b) ask_bool "$sec" "$key" "$label" "$help" "$cur" ;;
     n) ask_num "$sec" "$key" "$label" "$help" "$cur" ;;
     c:*) ask_choice "$sec" "$key" "$label" "$help" "$cur" "${kind#c:}" ;;
   esac
-  if [ "$key" = enabled ] && [ "$(awk -F'\t' -v s="$sec" '$1==s && $2=="enabled" {v=$3} END{print v}' "$answers")" = 0 ]; then off_sections="$off_sections$sec "; fi
+  if [ "$key" = enabled ] && [ "$sec" = "$mod.general" ] && [ "$(awk -F'\t' -v s="$sec" '$1==s && $2=="enabled" {v=$3} END{print v}' "$answers")" = false ]; then off_sections="$off_sections$mod "; fi
 done 3<<< "$Q"
 
 # ---- write: the base with the answers filled in (comments stay)

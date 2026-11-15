@@ -15,18 +15,24 @@
 // retarder first), not in m/s2. A hold at a standstill (hill start, Auto Hold) has no deceleration to express, and the only
 // conversion the code knows is the AEB's fit on 26-30 t logs (0.4 + 10 r / (mass / 30 t) m/s2, trimmed by a slow loop on
 // the measured deceleration), too rough to sit between every module and the brake. The ini keys in 0..1 stay what they are.
+// The brake channel (core/brake.cpp, [brake] channel 1) is the way to m/s2: its requesters ask a deceleration, it converts what
+// the service brake has to give with the learned gain (else that fit) and posts it here as owner ACT_CHAN, with its own ramps.
 #include "suite.h"
 #include "game.h"
+#include "vehicle.h"
+#include "vclass.h"
 #include <math.h>
 #include <string.h>
+static volatile int s_air_exempt;   // the brake channel serves an urgent ask with the service brake: the low-air pause lets it through, like the AEB (act_air_exempt)
+void act_air_exempt(int on) { s_air_exempt = on; }
 
-// Fields of game_actor (1.60, cruise-re notes § 4) the layer writes.
-enum { A_REQ = 0x17c };   // the brake request: 0..1, slewed by the game, zeroes the merged throttle while > 0 (neutral-exit-re notes § 3.1)
+// The brake request: 0..1, slewed by the game, zeroes the merged throttle while > 0 (neutral-exit-re notes § 3.1).
+// The offset is per-layout (L->a_req): 1.60 = 0x17c, 1.61 = 0x1e4.
 
-static const char *const k_owner[ACT_N] = { "cruise", "hill start", "Auto Hold", "bend", "ACC", "AEB", "rollover guard", "crawl", "launch control", "retarder (deceleration)", "retarder (mass)", "deceleration assist", "low-speed owner" };
-static_assert(ACT_N == 13, "one initializer per owner below");
+static const char *const k_owner[ACT_N] = { "cruise", "hill start", "Auto Hold", "bend", "ACC", "AEB", "rollover guard", "crawl", "launch control", "retarder (deceleration)", "retarder (mass)", "deceleration assist", "low-speed owner", "brake channel" };
+static_assert(ACT_N == 14, "one initializer per owner below");
 static act_wish W[ACT_N] = { { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 },
-                             { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 } };
+                             { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 }, { 0, 0, 1, 1, 1 } };
 float g_air_min_psi = 75;
 float g_air_from_truck;          // [core] air_from_truck
 float g_retarder_hook;           // [core] retarder_hook
@@ -52,13 +58,19 @@ static char *act_player_inner(char *ga)
     char *gb = *(char **)(ga + L->a_gearbox);
     if (!gb || !mem_readable(gb + L->s_inner, 8)) return NULL;
     char *in = *(char **)(gb + L->s_inner);
-    return in && mem_readable(in + 0x1444, 4) ? in : NULL;   // (the demand the stub reads)
+    return in && mem_readable(in + L->i_retarder, 4) ? in : NULL;   // (the demand the stub reads)
 }
+static int s_ret_owner = -1;   // the owner whose factor is the lowest, -1 = nobody holds the retarder (the log names it when it changes)
 static void act_retarder_merge(char *ga)
 {
-    float f = 1.0f;
-    for (int o = 0; o < ACT_N; o++) if (W[o].ret < f) f = W[o].ret;
+    float f = 1.0f; int who = -1;
+    for (int o = 0; o < ACT_N; o++) if (W[o].ret < f) { f = W[o].ret; who = o; }
     g_ret_scale = f;
+    if (who != s_ret_owner) {   // P7: the merged factor says who holds the retarder down (the owner tag was shown only by traces)
+        if (who >= 0) logv(2, "Actuator: retarder torque factor %.2f held by %s", f, k_owner[who]);
+        else logv(2, "Actuator: retarder torque factor back to the game's own (was held by %s)", s_ret_owner >= 0 ? k_owner[s_ret_owner] : "?");
+        s_ret_owner = who;
+    }
     char *in = act_player_inner(ga);
     if (s_rs.inner != in) s_rs.inner = NULL;
     s_rs.scale = in ? f : 1.0f;
@@ -74,6 +86,7 @@ static int s_air_low;            // brake air low: our requests paused
 static double s_br_at;           // time of the last write (slew)
 static int s_hill_was, s_hold_was, s_aeb_was;   // hill start / Auto Hold / the AEB was asking at the last write (they ramp by themselves)
 static int s_dec_was;            // the deceleration assist led at the last write (it ramps by itself)
+static int s_chan_was;           // the brake channel led at the last write (it shapes its own ramps, core/brake.cpp)
 static const float k_dec_slew = 20.0f;  // request per second: only a backstop above the assist's own ramps (its steps at a shift, up to max_brake 0.6, come within 0.03 s: the brake's own lag of ~0.15 s is the slew)
 static unsigned char s_thr_pass;     // Auto Hold alone holds the brake: the driver's throttle still reaches the engine (patch of the game's 0x17c throttle gate)
 static unsigned char s_hazard_mute;  // our request must not switch the hazards on (game rule for 0x17c > 0)
@@ -89,11 +102,13 @@ void act_brake_write(char *g)
     float want = fmaxf(fmaxf(fmaxf(fmaxf(fmaxf(fmaxf(hill, hold), bend), crawl), acc), aeb), low);
     float dec = W[ACT_DECEL].brake;   // the deceleration assist (modules/decel.cpp): shapes its own ramps, see the branch below
     if (dec > 0) want = fmaxf(want, dec);
-    float *req = (float *)(g + A_REQ);
+    float chan = W[ACT_CHAN].brake;   // the brake channel ([brake] channel 1): jerk-limited by itself, like the assist
+    if (chan > 0) want = fmaxf(want, chan);
+    float *req = (L && L->a_req) ? (float *)(g + L->a_req) : NULL;   // no layout: nothing to write (the retarder factors still merge below)
     // Save the air (Damien 11-10: the tank ran empty): no brake requests of ours while the pressure is low; a
-    // request that holds still (hill start) is kept, it uses no new air.
+    // request that holds still (hill start) is kept, it uses no new air. A light vehicle (hydraulic brakes) has no air tank: no gating.
     float pause_psi = air_pause_psi();
-    if (T.air_warning || (T.air_psi > 1 && T.air_psi < pause_psi)) {
+    if (vprof()->air_brakes && (T.air_warning || (T.air_psi > 1 && T.air_psi < pause_psi))) {
         if (!s_air_low) {
             logline("Actuator: brake air low (%.0f psi): our braking paused", T.air_psi);
             if (fabsf(T.speed) * 3.6f > 10)  // standing after a start or a teleport the tank is simply still filling
@@ -102,13 +117,16 @@ void act_brake_write(char *g)
         s_air_low = 1;
     } else if (s_air_low && T.air_psi > pause_psi + 15) { s_air_low = 0; logline("Actuator: brake air back (%.0f psi)", T.air_psi); }
     // the AEB is never paused: it brakes with what is left (and holds its request steady instead of pulsing)
-    if (s_air_low && hill <= 0 && hold <= 0 && aeb <= 0) want = 0;
+    // (review 30-10: nor the brake channel's urgent asks, the ACC's and the limit line's emergencies: they brake with what is left too)
+    if (s_air_low && hill <= 0 && hold <= 0 && aeb <= 0 && !s_air_exempt) want = 0;
     // the assist leads when its wish is the biggest one; it closes a loop on the measured deceleration, where the 0.05 dead band
     // below would be a limit cycle and the 0.25 / 0.6 per second slews far too slow for a gap of 0.2 s (it ramps by itself)
     int dec_lead = dec > 0 && want > 0 && dec >= want - 1e-6f, dec_done = s_dec_was && !dec_lead;
     s_dec_was = dec_lead;
+    int chan_lead = !dec_lead && chan > 0 && want > 0 && chan >= want - 1e-6f, chan_done = s_chan_was && !chan_lead;
+    s_chan_was = chan_lead;
     // a small change is not worth a new brake application (each one costs air): hold it. Auto Hold shapes its own ramp.
-    if (hold <= 0 && aeb <= 0 && !dec_lead && want > 0 && s_req_ours > 0 && fabsf(want - s_req_ours) < 0.05f) want = s_req_ours;
+    if (hold <= 0 && aeb <= 0 && !dec_lead && !chan_lead && want > 0 && s_req_ours > 0 && fabsf(want - s_req_ours) < 0.05f) want = s_req_ours;
     // soft onset and release (Damien: subtler, smoother); the hill-start hold comes at once
     {
         double now = wall_s(), dt = now - s_br_at;  // the hill-start hold lets go at once too (else it fights the driver's gas)
@@ -124,6 +142,10 @@ void act_brake_write(char *g)
             if (dt > 0 && dt < 0.5) { float lim = k_dec_slew * (float)dt; want = fminf(fmaxf(want, s_req_ours - lim), s_req_ours + lim); }
         }
         else if (dec_done && want <= 0) { }                             // ... and its last step to 0 is its own
+        else if (chan_lead) {                                          // the brake channel: up with the assist's wide backstop (an urgent ask must not wait 4 s),
+            if (dt > 0 && dt < 0.5) { float up = k_dec_slew * (float)dt; want = fminf(fmaxf(want, s_req_ours - 0.6f * (float)dt), s_req_ours + up); }
+        }                                                              // down at the generic 0.6/s (also when it takes over from a request that was letting go)
+        else if (chan_done && want <= 0) { }                            // ... and its last step to 0 is its own
         else if (dt > 0 && dt < 0.5) {
             float up = acc > 0 || low > 0 ? 1.0f : 0.25f;  // following a lead or holding a stop behind one: firm enough, still ramped (no valve dump)
             float lo = s_req_ours - 0.6f * (float)dt, hi = s_req_ours + up * (float)dt, asked = want;
@@ -135,15 +157,15 @@ void act_brake_write(char *g)
         }
     }
     if (want > 0) {
-        if (*req < want || *req == s_req_ours) *req = want;
+        if (req && (*req < want || *req == s_req_ours)) *req = want;
         s_req_ours = want;
     } else if (s_req_ours > 0) {
-        if (*req == s_req_ours) *req = 0;
+        if (req && *req == s_req_ours) *req = 0;
         s_req_ours = 0;
     }
-    s_hazard_mute = s_req_ours > 0 && *req <= s_req_ours;  // a stronger request (the game's AEB) keeps its hazards
+    s_hazard_mute = s_req_ours > 0 && req && *req <= s_req_ours;  // a stronger request (the game's AEB) keeps its hazards
     // the driver's gas reaches the engine while only the Auto Hold asks (it lets go as the torque builds)
-    s_thr_pass = s_hazard_mute && hold > 0 && hill <= 0 && bend <= 0 && crawl <= 0;
+    s_thr_pass = s_hazard_mute && hold > 0 && hill <= 0 && bend <= 0 && crawl <= 0 && chan <= 0;
     // who brakes (for the log and the incident files): the owner with the biggest wish, named when it changes
     {
         int owner = -1;
@@ -166,7 +188,7 @@ static void release_request()
 {
     if (s_req_ours > 0) {
         char *ga = game_actor_safe();
-        if (ga) { float *req = (float *)(ga + A_REQ); if (*req == s_req_ours) *req = 0; }
+        if (ga) { float *req = L && L->a_req ? (float *)(ga + L->a_req) : NULL; if (req && *req == s_req_ours) *req = 0; }
     }
     s_req_ours = 0;
     s_hazard_mute = 0;
@@ -191,9 +213,39 @@ void act_hook(int phase, void (*fn)(act_tick *))
 int act_hooked() { return s_hooked; }
 void act_thr_base(float v) { s_base = v; }
 
+static float s_game_pedal = NAN;
+static double s_game_pedal_at = -1e9;
+float act_game_pedal() { return wall_s() - s_game_pedal_at < 0.5 ? s_game_pedal : NAN; }
+
+// Who holds the merged throttle (P7: every merged value names its owner when it changes, not only in the traces). The binding one: the owner of the floor
+// that raised the base, else the owner of the smallest cap that held it, else the first scale under 1; none = the base went through. One line per change of
+// (owner, kind), level 2, and not more often than every 0.5 s (a cap that flickers around the value it binds at is one decision).
+enum { THK_NONE, THK_FLOOR, THK_CAP, THK_SCALE };
+static int s_thr_owner = -1, s_thr_kind = THK_NONE;
+static double s_thr_log_at = -1e9;
+static void act_thr_note(float base, float out)
+{
+    int who = -1, kind = THK_NONE;
+    float r = base, fl = 0;
+    for (int o = 0; o < ACT_N; o++) if (W[o].floor > 0 && W[o].floor > r && W[o].floor > fl) { fl = W[o].floor; who = o; kind = THK_FLOOR; }
+    if (kind == THK_FLOOR) r = fl;
+    float cp = 1.0f; int cw = -1;
+    for (int o = 0; o < ACT_N; o++) if (W[o].cap < 1 && W[o].cap < cp) { cp = W[o].cap; cw = o; }
+    if (cw >= 0 && cp < r) { who = cw; kind = THK_CAP; r = cp; }
+    if (kind == THK_NONE) for (int o = 0; o < ACT_N; o++) if (W[o].scale < 1 && r > 0) { who = o; kind = THK_SCALE; break; }
+    if (who == s_thr_owner && kind == s_thr_kind) return;
+    double now = wall_s();
+    if (now - s_thr_log_at < 0.5) return;   // (the change is logged at the next tick it still stands)
+    static const char *const kn[] = { "none", "floor", "cap", "scale" };
+    if (kind != THK_NONE) logv(2, "Actuator: throttle %.2f (base %.2f) held by %s (%s)", out, base, k_owner[who], kn[kind]);
+    else logv(2, "Actuator: throttle %.2f = the base (was held by %s)", out, s_thr_owner >= 0 ? k_owner[s_thr_owner] : "?");
+    s_thr_owner = who; s_thr_kind = kind; s_thr_log_at = now;
+}
+
 static float act_stub(void *ga, float dt, float pedal)
 {
     act_tick a = { (char *)ga, dt, pedal, NAN, NAN };
+    s_game_pedal = pedal; s_game_pedal_at = wall_s();
     s_base = NAN;
     for (int i = 0; i < s_n[ACT_PRE]; i++) s_fn[ACT_PRE][i](&a);
     a.stock = o_cruise(ga, dt, pedal);
@@ -203,9 +255,10 @@ static float act_stub(void *ga, float dt, float pedal)
     else act_retarder_merge(NULL);
     // the throttle: the base (the game's, or what Cruise posted), then every floor, then every cap, then every scale
     float r = s_base == s_base ? s_base : a.stock;
+    const float base = r;
     for (int o = 0; o < ACT_N; o++) if (W[o].floor > 0 && W[o].floor > r) r = W[o].floor;
-    for (int o = 0; o < ACT_N; o++) if (W[o].cap < 1) r = fminf(r, W[o].cap);
-    for (int o = 0; o < ACT_N; o++) if (W[o].scale != 1) r *= W[o].scale;
+    r = act_thr_apply(r);   // (suite.h: the caps, then the scales; act_thr_limit() is the same merge for r = 1)
+    act_thr_note(base, r);
     a.thr = r;
     for (int i = 0; i < s_n[ACT_DONE]; i++) s_fn[ACT_DONE][i](&a);
     return r;
@@ -216,7 +269,6 @@ static float act_stub(void *ga, float dt, float pedal)
 // (game_patch_clutch_floor, 1.60 only) makes that copy our value for the player's vehicle while s_cf.inner is set and leaves
 // every other vehicle alone. The vehicle's own clutch state (the gearbox sequencer, the stop rule) stays as the game has it,
 // unless the owner asks for a mirror: the smooth start does, so Auto Hold, TrueShift and the sequencer read its value too.
-enum { V_CLUTCH = 0x142c };   // the vehicle's clutch, 0 = closed .. 1 = open
 static clutch_floor s_cf;     // read by the drivetrain hook: player vehicle + our value
 static int s_clutch_in;
 volatile float g_clutch_ours = __builtin_nanf("");
@@ -227,15 +279,15 @@ void act_clutch(char *inner, float v, int mirror)
     s_cf.floor = v;
     s_cf.inner = inner;
     g_clutch_ours = inner ? v : NAN;
-    if (mirror && inner && mem_readable(inner + V_CLUTCH, 4)) *(volatile float *)(inner + V_CLUTCH) = v;
+    if (mirror && inner && L && L->i_clutch && mem_readable(inner + L->i_clutch, 4)) *(volatile float *)(inner + L->i_clutch) = v;
 }
 // The game's own clutch until the owner posts again; the value and g_clutch_ours stay (the owner is still deciding this frame).
 void act_clutch_release() { s_cf.inner = NULL; }
 // The vehicle's own clutch value, once (the smooth start hands a closed clutch back when it is over); 1 = written.
 int act_clutch_vehicle(char *inner, float v)
 {
-    if (!inner || !mem_readable(inner + V_CLUTCH, 4)) return 0;
-    *(volatile float *)(inner + V_CLUTCH) = v;
+    if (!inner || !L || !L->i_clutch || !mem_readable(inner + L->i_clutch, 4)) return 0;
+    *(volatile float *)(inner + L->i_clutch) = v;
     return 1;
 }
 
@@ -247,8 +299,7 @@ int act_clutch_vehicle(char *inner, float v)
 static bool s_ret_in;
 bool act_retarder_hooked() { return s_ret_in; }
 // The pattern ends at the torque read after the curve call; the demand read is the 8 bytes at +7 (unique in the exe too).
-static const char k_ret_pat[] = "48 8B BF D0 04 00 00 F3 0F 10 80 44 14 00 00 E8 ?? ?? ?? ?? F3 44 0F 10 87 A8 00 00 00";
-enum { RET_READ_AT = 7 };
+// The demand offset is per-layout (L->i_retarder), so the pattern string is built at start.
 
 // ---------------------------------------------------------------- hooks (m_core, config.cpp)
 
@@ -257,22 +308,31 @@ int act_gate_ok() { return s_gate_in; }
 
 void act_start()
 {
-    // The clutch copy (1.60 only; Creep's crawl and smooth start post their clutch value through it).
-    if (L && !strcmp(L->name, "1.60")) {
-        uintptr_t cs = game_scan("8B 83 2C 14 00 00 89 86 30 03 00 00");
+    // The clutch copy (Creep's crawl and smooth start post their clutch value through it); per-layout clutch offset.
+    // 1.62: the first drive crashed inside this hook's stub (game.crash.txt 06-11 17:46, return address = the copy site + 5):
+    // off on 1.62 until the drivetrain's copy is re-derived (crawl and smooth start are off with it).
+    if (L && L->i_clutch && game_is_162()) logline("Actuator: no clutch hook on 1.62 (crashed on the first drive, not re-derived yet): no crawl, no smooth start");
+    else if (L && L->i_clutch) {
+        char cp[64];
+        snprintf(cp, sizeof cp, "8B 83 %02X %02X %02X %02X 89 86 %02X 03 00 00", L->i_clutch & 0xff, (L->i_clutch >> 8) & 0xff,
+                 (L->i_clutch >> 16) & 0xff, (L->i_clutch >> 24) & 0xff, game_is_162() ? 0x38 : 0x30);   // drive+0x330 (1.62: +0x338)
+        uintptr_t cs = game_scan(cp);
         if (!cs) logline("Actuator: clutch copy not found: no crawl, no smooth start");
         else if (!game_patch_clutch_floor(cs, &s_cf)) logline("Actuator: clutch hook failed: no crawl, no smooth start");
         else { s_clutch_in = 1; logline("Actuator: clutch hook in place at %p", (void *)cs); }
-    } else logline("Actuator: no clutch hook (1.60 only): no crawl, no smooth start");
-    // The retarder demand read of the drivetrain (1.60 only, off by default): our factor scales the retarder torque.
-    if (g_retarder_hook >= 0.5f && L && !strcmp(L->name, "1.60")) {
-        uintptr_t rs = game_scan(k_ret_pat);
+    } else logline("Actuator: no clutch hook (no clutch offset): no crawl, no smooth start");
+    // The retarder demand read of the drivetrain (off by default): our factor scales the retarder torque.
+    if (g_retarder_hook >= 0.5f && L && L->i_retarder) {
+        char rp[96];
+        snprintf(rp, sizeof rp, "48 8B BF D0 04 00 00 F3 0F 10 80 %02X %02X %02X %02X E8 ?? ?? ?? ?? F3 44 0F 10 87 A8 00 00 00",
+                 L->i_retarder & 0xff, (L->i_retarder >> 8) & 0xff, (L->i_retarder >> 16) & 0xff, (L->i_retarder >> 24) & 0xff);
+        uintptr_t rs = game_scan(rp);
         if (!rs) logline("Actuator: retarder demand read not found: retarder scale unavailable");
-        else if (!game_patch_retarder(rs + RET_READ_AT, &s_rs)) logline("Actuator: retarder hook failed: retarder scale unavailable");
-        else { s_ret_in = true; logline("Actuator: retarder hook in place at %p", (void *)(rs + RET_READ_AT)); }
-    } else if (g_retarder_hook >= 0.5f) logline("Actuator: no retarder hook (1.60 only): retarder scale unavailable");
-    // The cruise fn call in the game's pedal code (cruise-re notes; the pattern ends at the E8 of the call).
-    uintptr_t h = game_scan("48 8B CB F3 44 0F 11 83 E4 1C 00 00 F3 45 0F 5F C3 41 0F 28 D0 E8");
+        else if (!game_patch_retarder(rs + 7, &s_rs)) logline("Actuator: retarder hook failed: retarder scale unavailable");
+        else { s_ret_in = true; logline("Actuator: retarder hook in place at %p", (void *)(rs + 7)); }
+    } else if (g_retarder_hook >= 0.5f) logline("Actuator: no retarder hook (no retarder offset): retarder scale unavailable");
+    // The cruise fn call in the game's pedal code (cruise-re notes; the pattern ends at the E8 of the call). Per-layout.
+    uintptr_t h = game_scan(L->pat_actuator);
     uintptr_t site = h ? h + 21 : 0;
     if (site) o_cruise = (cruise_fn)(site + 5 + (intptr_t) * (const int32_t *)(site + 1));
     if (site && game_patch_call(site, (void *)act_stub)) {
@@ -284,12 +344,12 @@ void act_start()
     }
     // Our brake request (bends, hill start, crawl) is > 0 for a while; the game's auto-hazard rule (neutral-exit-re notes § 3)
     // would switch the hazards on every time (ts3d). Its compare is skipped while only we ask.
-    uintptr_t hz = game_scan("85 C0 74 17 F6 87 D0 01 00 00 10 75 0E 44 0F 2F 8F 7C 01 00 00 73 04 B2 01");
+    uintptr_t hz = game_scan(L->pat_hazard);
     if (hz && game_patch_cf0_if(hz + 13, 8, &s_hazard_mute)) { s_haz_in = 1; logline("Actuator: our brake requests leave the hazards alone"); }
     else logline("Actuator: hazard rule not found: braking for bends / hill start / crawl may switch the hazards on");
     // Auto Hold: the game zeroes the merged throttle while the brake request is > 0. Skip that one compare while only
     // Auto Hold holds, so the pedal builds torque against the brake and the release can follow it (autohold-acc notes).
-    uintptr_t gt = game_scan("0F 2F CF 76 ?? 83 BB 50 01 00 00 02 75 ?? 0F 2F BB 7C 01 00 00 72 0A F3 0F 11 81 24 14");
+    uintptr_t gt = game_scan(L->pat_gate);
     if (gt && game_patch_cf0_if(gt + 14, 7, &s_thr_pass)) { s_gate_in = 1; logline("Actuator: throttle gate in place (the pedal reaches the engine while only Auto Hold holds)"); }
     else logline("Actuator: throttle gate not found: Auto Hold lets go at the pedal's pace only (no drive feedback)");
 }
@@ -306,12 +366,13 @@ void act_stop()
 void act_reset(int level, const char *why)
 {
     (void)why;
-    s_aeb_was = 0; s_hill_was = s_hold_was = s_dec_was = 0; s_br_at = 0;
+    s_aeb_was = 0; s_hill_was = s_hold_was = s_dec_was = s_chan_was = 0; s_br_at = 0;
     release_request();
     for (int o = 0; o < ACT_N; o++) W[o].ret = 1.0f;
     g_ret_scale = 1.0f;
     s_rs.inner = NULL; s_rs.scale = 1.0f;
     s_log_owner = -1; s_log_at = 0;
+    s_thr_owner = -1; s_thr_kind = THK_NONE; s_ret_owner = -1;
     if (level >= RESET_HARD) s_air_low = 0;
 }
 

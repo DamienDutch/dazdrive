@@ -9,7 +9,7 @@ labels: bug
 
 **Setup**
 - DazDrive version (first lines of `plugins\dazdrive\dazdrive.log`):
-- ETS2 version (Steam beta temporary_1_60?):
+- ETS2 version (Options or the main menu, bottom corner):
 - Truck, engine and gearbox (mods?):
 - Trailer: yes / no. Navigation route active: yes / no.
 - Steering wheel (make and model) and its force feedback settings in the game. Windows, or Linux with Proton?

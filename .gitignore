@@ -6,19 +6,44 @@ plugin/suite/
 plugin/src/
 plugin/test.cfg
 plugin/dazdrive/core/preset_standard.inc
+plugin/dazdrive/core/preset_standard_ini.inc
 plugins_off/
 tools/sim/sim
 tools/sim/sim_creep
 tools/sim/sim_cruise
+tools/sim/sim_speed
+tools/sim/sim_cruise_layers
+tools/sim/sim_roll
 tools/sim/sim_lane
 tools/sim/sim_lowspeed
 tools/sim/sim_pedal
 tools/sim/sim_pedalmix
+tools/sim/sim_p6table
 tools/sim/sim_retarder
 tools/sim/sim_decel
 tools/sim/sim_display
 tools/sim/sim_brake
+tools/sim/sim_brake_channel
 tools/sim/sim_traffic
+tools/sim/sim_blindspot
+tools/sim/sim_input
+tools/sim/sim_pathframe
+tools/sim/sim_cutin
+tools/sim/sim_axle
+tools/sim/sim_lights
+tools/sim/sim_cab
+tools/sim/sim_ebrake
+tools/sim/sim_pmsweep
+tools/sim/sim_w
+tools/sim/sim_pcc
+tools/sim/test_planner
+tools/sim/eval_planner
+tools/sim/test_route_profile
+tools/sim/test_brakehook
+tools/sim/test_ts_neutral
+tools/sim/test_er1
+tools/sim/test_bands
+tools/sim/results/
 tools/sim-0.2/
 __pycache__/
 
@@ -30,6 +55,8 @@ release/setup-preview/
 # Ride logs and test data
 runs/
 *.csv
+# one sim fixture: speed and lateral acceleration of the 24-10 rollover, no position (sim_roll section 11)
+!tools/sim/fixtures/rsc_2410.csv
 
 # Local-only files (also in .git/info/exclude): notes for Claude, the dev-only HA hook, personal tools
 CLAUDE.md
@@ -40,5 +67,25 @@ plugin/dazdrive/core/dev.cpp
 plugin/dazdrive/core/dev.h
 tools/import_runs.py
 
-# phone dashboard (Damien only, a separate Python process; not part of a release)
-dash/
+# phone dashboard (Damien only, a separate Python process; not part of a release): the code is tracked (28-10), not the signing key or builds
+dash/android/dazdash.keystore
+dash/android/*.apk
+dash/android/*.idsig
+dash/__pycache__/
+dash/udp_test/
+
+# sim_pcc route files made from ride logs (tools/sim/route_from_log.py): ride data, not in git
+tools/sim/routes/
+# frozen sim binaries of running sweeps (sweep_pcc.py / sweep_acc.py)
+tools/sim/frozen/
+tools/sim/test_ini_names
+
+# sim test binaries rebuilt by run_all.sh
+tools/sim/test_ahead
+tools/sim/test_intent
+tools/sim/test_expect
+tools/sim/test_wish
+tools/sim/sim_p5table
+tools/sim/sim_p6table
+tools/sim/results/*.csv
+tools/sim/sim_promises

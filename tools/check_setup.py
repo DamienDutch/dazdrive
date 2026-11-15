@@ -26,14 +26,16 @@ fails = list(out["fails"])
 def values(text):
     return [l for l in text.splitlines() if l and not l.startswith("#")]
 rec = [e for e in gen_ini.ERAS if e.get("recommended")][0]
+_, _, by_new = gen_ini.names()
 expect, sec = [], None
 for l in values(standard):
     if l.startswith("["):
         sec = l[1:-1]
     elif "=" in l:
         k = l.split("=", 1)[0]
-        if k in rec["over"].get(sec, {}):
-            l = f"{k}={gen_ini.fmt(rec['over'][sec][k])}"
+        r = by_new[(sec, k)]   # the era's overrides are keyed by the internal (module, key)
+        if r["old_key"] in rec["over"].get(r["module"], {}):
+            l = f"{k}={gen_ini.fmt_value(r, rec['over'][r['module']][r['old_key']])}"
     expect.append(l)
 if out["rec"] != rec["id"]:
     fails.append(f"page recommends {out['rec']}, gen_ini {rec['id']}")

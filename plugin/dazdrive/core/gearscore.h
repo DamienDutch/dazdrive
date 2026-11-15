@@ -32,11 +32,14 @@
 //   stay_bonus   the current gear gets a small bonus: no flip-flopping on near-equal scores.
 //
 // time_obj (choice_objective 1): when the score says "up", the gear to shift up to is the one that gains a speed step soonest instead:
-//   time(g)      the shift now, then the speed from v_after up to v + dv (dv = 5 km/h, or more: what the current gear still has up to the
-//                top of the window) at a(g) = the demanded acceleration, capped at what the gear gives at full throttle; at the top of the
-//                window one gear up (a shift: k_shift x shift_time without pull, and the speed lost in it). The next shift of the gear it ends
-//                in counts for the part of that gear's range the step used up (no jump where a shift falls just outside the step).
-//                Shift seconds count k_shift times (per mode: Eco skips most, Power least). A skip may win by saving a shift although it
+//   time(g)      the shift now, then the speed from v_after up to where the truck is going (v_target: the cruise's set speed, the road's
+//                limit, the truck's limiter; unknown: v + dv, dv = 5 km/h or what the current gear still has up to the top of the window) at
+//                a(g) = the demanded acceleration, capped at what the gear gives at full throttle; at each gear's upshift point (up_g) one gear
+//                up (a shift: shift_time without pull, and the speed lost in it). The next shift of the gear it ends in counts for the part of
+//                that gear's range the step used up (no jump where a shift falls just outside the step). The shift seconds are the engine's own
+//                (29-10: in the game a shift loses its shift_time and nothing more, Renault 1.1-1.25 s, Scania 0.81-0.88 s; the per-mode weights
+//                that counted them 1.3 to 5 times made up for a model that saw too few shifts ahead, and went). Staying in the gear of now
+//                is a choice too. A skip may win by saving a shift although it
 //                pulls less, as long as it gives a_min at full throttle (when at least that is asked; else the whole demand, as before). The
 //                gear we are in may be short the same way (no flip back after the skip). The window, the floor and the rpm cost stand.
 //                Staying to wait for a skip that lands a little later (this gear still under the window's top by then) is one of the choices.
@@ -44,6 +47,7 @@
 #pragma once
 #include "vehicle.h"
 #include <math.h>
+#include <string.h>
 
 struct gs_cfg {
     float comfort;     // share of the full-throttle force above which the gas cost climbs (per mode)
@@ -62,7 +66,6 @@ struct gs_cfg {
     float pull;        // 0, or the pedal when it is near the floor: the pull asked is at least this share of the strongest gear in the window
     int time_obj;      // 1 = an upshift goes to the gear that gains speed soonest (see above), 0 = to the best score
     float a_min;       // time_obj: m/s2 a gear that is short of the demand must still give at full throttle (only when at least this much is asked)
-    float k_shift;     // time_obj: a second in a shift counts this many seconds of driving
     float floor_idle_frac;   // with floor_pw: the floor is at least idle + this share of (plateau - idle) (0 = the power term alone)
     float floor_pw;    // > 0: the floor is the lowest rpm with this share of the peak power (gs_power_rpm) instead of plateau + floor, also checked right after an upshift (0 where floor is 0)
     int cross;         // 1 = each gear's window top is the power crossover to the next gear where that lies above the top of the power range (a firm pedal, Power / Normal)
@@ -70,9 +73,30 @@ struct gs_cfg {
     float up_pt;       // > 0: the mode's upshift point (rpm): revs over it get expensive fast (w_over); 0 = off
     float w_over;      // weight of that cost (0 = off)
     float w_land;      // weight of the landing cost: a gear that sits just above the floor under load pays (0 = off)
+    float pw_t;        // > 0: the lowest rpm that still gives power_target_frac of the peak power (gs_power_rpm). At a firm pedal (pw_k) the window's top per gear is the rpm
+                       // that lands in the next gear on it (never the engine's power range top and never above it), so a flat power curve is not chased up to its peak
+    float pw_k;        // 0..1: how far the demand has moved the shift points to the power range (TrueShift's pw_k); the window top follows it
+    float floor_plat;  // > 0: the floor of floor_pw is at most this share of the start of the torque plateau (a motor with full torque from 1000 rpm gets a floor at the plateau, not 1020 from a power share); the idle share stays its lower bound
+    float cr_tq;       // > 0: cruise reserve: at a light load the floor and the window's lower edge move down to the lowest rpm where the torque is still this share of the peak torque
+                       // (never under idle + 250); fades out as the power asked rises from cr_u0 to cr_u1 of the power available. 0 = off
+    float cr_w;        // weight of the cruise cost: at a light, steady load revs above that cruise rpm cost this much per span from idle to the plateau (the top gear that fits wins)
+    float cr_u0, cr_u1;
+    float cr_band;     // > 0: the cruise rpm (and the floor of the cruise reserve) is at least idle + this share of (plateau - idle): a band per mode, the same feel in rpm on every truck
+    float cr_fres;     // > 0: the cruise reserve also checks this force (N): holding the speed on the steepest grade of the hill memory (a rolling road keeps the gear under the top)
+    float cr_res;      // > 0: the cruise cost's reserve: a gear needing over this share of its full-throttle pull (to + 0.25) loses its cruise advantage
+    float v_target;    // > 0: m/s the truck is heading for (the cruise's set speed, else the road's limit): time_obj follows the speed up to it, every shift
+                       // on the way counted; 0 = not known (then a step of the current gear's range, the shifts after it shared out by the part used)
+    float wish_s0, wish_s1;   // > 0: the torque pedal's wish drives the throttle (modules/pedal.cpp: it compensates at low revs, a gear needing little of its full-throttle
+                       // force still delivers the wish). A gear whose share of that force is under wish_s0 needs no floor (it stands on the window's lower edge, the
+                       // smooth-running limit: idle + 0.6 x (plateau - idle)); over wish_s1 the floor is as without the wish; smooth between. The landing cost (a
+                       // price on the gears just above the floor) is not touched: it prices a skip the same with and without the wish
+    float up_g[33];    // > 0: the rpm where TrueShift shifts gear g up at this demand (its upshift point); time_obj follows the speed with these, as the
+                       // truck will shift (the window's top where 0). A model that held every gear to the window's top saw too few shifts ahead and
+                       // took single steps at a part pedal (sim 29-10, the V8 at 18 t, pedal 0.5 in Power: 7-8-9-10-11-12, five shifts)
 };
 
 enum { GS_MAX = 32 };
+static_assert(sizeof(((gs_cfg *)0)->up_g) / sizeof(float) == GS_MAX + 1, "up_g holds one rpm per gear");
 
 struct gs_term {
     int g;             // the gear
@@ -112,17 +136,32 @@ static inline float gs_power_rpm(float share, float idle)
     float pk = V.peak_pw;
     if (!(pk > 0)) for (float r = idle; r <= lim; r += 5) pk = fmaxf(pk, curve_factor(&V.eng, r) * r);
     float want = fminf(share, 1.0f) * pk - 1e-3f;
-    for (float r = idle; r <= lim; r += 5) if (curve_factor(&V.eng, r) * r >= want) return r;
-    return idle;
+    float best_r = idle, best_p = -1;
+    for (float r = idle; r <= lim; r += 5) {
+        float p = curve_factor(&V.eng, r) * r;
+        if (p >= want) return r;
+        if (p > best_p) { best_p = p; best_r = r; }
+    }
+    // (none reached it: the peak sits between two samples of this grid, which starts at the idle - a Crown Victoria at idle 823 missed its
+    // peak at 4500 by 1 of 4320 and the share 1 came back as the idle itself: the whole power range collapsed to its floor; the best sample is the answer)
+    return best_r;
 }
 
 // The floor of choice_floor_power*: the higher of the lowest rpm with that share of the peak power and a distance above idle that is a share of
 // the engine's own span (idle + frac x (plateau - idle)), so an engine with a high plateau does not get a floor that sits close to idle.
 // frac 0 = the power term alone. (floor_idle_frac)
-static inline float gs_floor_rpm(float share, float idle, float frac)
+static inline float gs_floor_rpm(float share, float idle, float frac, float plat = 0)
 {
     float r = gs_power_rpm(share, idle);
+    if (plat > 0) r = fminf(r, plat * V.plateau);   // (the power share asks for more than the torque plateau does: the plateau's start is enough)
     return frac > 0 ? fmaxf(r, idle + frac * fmaxf(0.0f, V.plateau - idle)) : r;
+}
+
+// The lowest rpm (from idle up) where the torque is at least this share of its peak: the engine's reserve for a steady drive
+static inline float gs_torque_rpm(float share, float idle)
+{
+    for (float r = idle; r <= V.eng.rpm_limit; r += 5) if (curve_factor(&V.eng, r) >= share - 1e-3f) return r;
+    return idle;
 }
 
 // The power crossover of gear g to g + 1: the rpm in g where the engine's power equals the power in g + 1 at the rpm it lands at after the shift
@@ -142,18 +181,18 @@ static inline float gs_cross_rpm(int g, float v, float base, float lim)
 // time_obj: seconds from v0 in gear g (just shifted into) to v_t at the demanded acceleration a_d, capped per gear at full throttle; at the
 // window's top hi one gear up, which costs k shift times and the speed f_res loses in it. The next shift of the last gear counts for the
 // share of that gear's range used up. A gear that gives under 0.02 m/s2 counts as 0.02 (it is slow, not impossible).
-static inline float gs_gain_time(int g, int n, float v0, float v_t, float a_d, float f_res, float hi, float k, float ts)
+static inline float gs_gain_time(int g, int n, float v0, float v_t, float a_d, float f_res, const float *hi, float ts)
 {
     const float m = V.mass;
-    float tt = k * ts, v = v0, v_in = v0;
+    float tt = ts, v = v0, v_in = v0;
     for (int i = 0; i < 2000 && v < v_t; i++) {
-        if (g < n && vehicle_rpm_at(g, v) >= hi) { g++; tt += k * ts; v = fmaxf(0.5f, v - f_res / m * ts); v_in = v; continue; }
+        if (g < n && vehicle_rpm_at(g, v) >= hi[g]) { g++; tt += ts; v = fmaxf(0.5f, v - f_res / m * ts); v_in = v; continue; }
         float a = fmaxf(0.02f, fminf(a_d, (vehicle_force_at(g, v, 1.0f) - f_res) / m)), step = fminf(0.25f, v_t - v);
         tt += step / a;
         v += step;
     }
-    float vh = g < n ? vehicle_kmh_at(g, hi) / 3.6f : 0;
-    if (vh > v_in + 0.1f) tt += k * ts * fminf(1, fmaxf(0, (v - v_in) / (vh - v_in)));
+    float vh = g < n ? vehicle_kmh_at(g, hi[g]) / 3.6f : 0;
+    if (vh > v_in + 0.1f) tt += ts * fminf(1, fmaxf(0, (v - v_in) / (vh - v_in)));
     return tt;
 }
 
@@ -173,8 +212,28 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
     if (coast) need = 0;
     // the window's top: the top of the power range, never above 93 % of the limit (the rpm cost, not the window, keeps the revs down)
     float fpeak = gs_peak_force(v);
+    // cruise reserve: at a light load the window's lower edge and the floor may sit as low as the lowest rpm that still has the torque in hand
+    float w_light = 0, r_cr = 0;
+    if (c.cr_tq > 0 && fpeak > 1) {
+        w_light = 1 - gs_smooth(c.cr_u0, c.cr_u1, fminf(1, need / fpeak));
+        r_cr = fmaxf(gs_torque_rpm(c.cr_tq, idle), idle + 250);
+        if (c.cr_band > 0) r_cr = fmaxf(r_cr, idle + c.cr_band * fmaxf(0, plateau - idle));   // cruise_band: the mode's own cruise rpm, a share of the way idle -> plateau
+        float lo_cr = fmaxf(r_cr - c.hyst, idle + 150);
+        if (lo_cr < o->lo) o->lo += (lo_cr - o->lo) * w_light;
+    }
     for (int g = 1; g <= n; g++) o->hi_g[g] = fminf(V.eng.range[R_POWER][1], 0.93f * lim);
     if (c.cross) for (int g = 1; g < n; g++) o->hi_g[g] = fmaxf(o->hi_g[g], gs_cross_rpm(g, v, o->hi_g[g], lim));
+    // power_target_frac: the top of a gear is where the next gear lands on the lowest rpm that still gives the share of the peak power. Only as far
+    // as the truck is free to accelerate in that next gear (what it gives at full throttle over the resistance, from 0.15 to 0.40 m/s2): a truck that
+    // struggles up a climb keeps its gear to the power crossover, an early shift only costs it speed there
+    if (c.pw_t > 0 && c.pw_k > 0)
+        for (int g = 1; g < n; g++) {
+            float r0 = vehicle_rpm_at(g, v), r1 = vehicle_rpm_at(g + 1, v);
+            if (!(r0 > 1 && r1 > 1)) continue;
+            float w_cap = c.pw_k * gs_smooth(0.15f, 0.40f, (vehicle_force_at(g + 1, v, 1.0f) - f_res) / fmaxf(1.0f, m));
+            float cap = fmaxf(c.pw_t * r0 / r1, o->lo + 200);
+            o->hi_g[g] = o->hi_g[g] + (fminf(o->hi_g[g], cap) - o->hi_g[g]) * w_cap;
+        }
     o->hi = o->hi_g[cur];
     int span = 1 + (c.skips_up > 0 ? c.skips_up : 0), span_dn = 1 + (c.skips > 0 ? c.skips : 0);
     int span_later = 1 + (c.skips_later > 0 ? c.skips_later : 0);
@@ -200,11 +259,16 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
     // shift (hence the hysteresis too). The caller sets floor 0 where the window must stay low (coasting for a while, engine brake).
     // (floor_pw: the lowest rpm with that share of the peak power instead; a gear up must stand on it right after the shift as well, and
     // the route's cap holds the look ahead of a gear up, so a skip does not rest on a speed the route says the truck will not reach)
-    float r_min = c.floor_pw > 0 ? gs_floor_rpm(c.floor_pw, idle, c.floor_idle_frac) : c.floor > 0 ? plateau + c.floor : 0, v_floor = v + a_d * 3 * c.horizon;
+    float r_min = c.floor_pw > 0 ? gs_floor_rpm(c.floor_pw, idle, c.floor_idle_frac, c.floor_plat) : c.floor > 0 ? plateau + c.floor : 0, v_floor = v + a_d * 3 * c.horizon;
+    if (r_min > 0 && w_light > 0 && r_cr < r_min) r_min += (r_cr - r_min) * w_light;
     float v_floor_up = c.v_cap > 0 ? fminf(v_floor, fmaxf(c.v_cap, 0.5f)) : v_floor;
     // (the hysteresis a gear up must stand above the floor: the plateau floor has it; the power floor is the driver's own number, a gear lands on it as it is)
     const float f_hyst = c.floor_pw > 0 ? 0.0f : c.hyst;
     const bool now_up = r_min > 0 && c.floor_pw > 0;          // a gear up is checked at the speed of now and right after the shift too
+    // with the torque pedal's wish: the floor of a gear fades out as its share of the full-throttle force falls (the reserve it keeps for the
+    // next push is its own share, not the revs); never under the window's lower edge. wish_k = 1 without the wish (or a gear that needs most of its pull)
+    auto wish_k = [&](float share) { return c.wish_s1 > 0 ? gs_smooth(c.wish_s0, c.wish_s1, share) : 1.0f; };
+    auto rmin_g = [&](float share) { float k = wish_k(share); return r_min > 0 && k < 1.0f ? fminf(r_min, o->lo) + (r_min - fminf(r_min, o->lo)) * k : r_min; };
     float u = fpeak > 1 ? fminf(1, need / fpeak) : 1;         // demanded power over the power available at this speed
     // a gear that is held for a long time (the speed hardly changes) pays its revs for longer than one the speed runs away from: up to 4 times
     float hold = 1 + 3 * (1 - gs_smooth(0.02f, 0.3f, a_d));
@@ -219,9 +283,18 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
         float f1 = vehicle_force_at(g, vg, 1.0f);
         float fn = need * (g > cur ? 1 + c.learn_res : 1);
         t->share = f1 > 1 ? fn / f1 : 9;
+        // the hill memory (cr_fres): at a light, steady load a gear UP must also hold the speed on the steepest climb of the last stretch, within
+        // what its share allows, so a rolling road does not take it up at every crest only to bring it down on the next rise (sim 29-10, the V8
+        // at 18 t on +-1 %: 14 -> 13 -> 14 every 25 s). Holding a gear and shifting down are not touched
+        // (with a margin of 15 % of what the remembered climb asks over the load of now: the gear up must hold it with room to spare, or the
+        // next rise takes it out again at the same line it went up on; on a road that is flat now and was flat before there is nothing to add)
+        if (g > cur && c.cr_fres > 0 && w_light > 0 && f1 > 1) {
+            float fm = c.cr_fres + 0.15f * fmaxf(0.0f, c.cr_fres - need);
+            t->share = fmaxf(t->share, w_light * fm * (1 + c.learn_res) / f1);
+        }
         bool in = t->rpm >= o->lo + (g > cur ? c.hyst : 0) && t->rpm <= o->hi_g[g] - (g < cur ? c.hyst : 0) &&
-                  (g == cur && !c.floor_cur ? true : t->rpm * ((g > cur ? v_floor_up : v_floor) / vg) >= r_min + (g > cur ? f_hyst : 0)) &&
-                  (g <= cur || !now_up || (t->rpm >= r_min && vehicle_rpm_at(g, v) >= r_min));
+                  (g == cur && !c.floor_cur ? true : t->rpm * ((g > cur ? v_floor_up : v_floor) / vg) >= rmin_g(t->share) + (g > cur ? f_hyst : 0)) &&
+                  (g <= cur || !now_up || (t->rpm >= rmin_g(t->share) && vehicle_rpm_at(g, v) >= rmin_g(t->share)));
         t->in = in;
         // time_obj: when at least a_min is asked, the gear we are in and a gear up may also be short if at full throttle they still give a_min:
         // the truck still gains speed usefully; the gas cost stays at that of share 1 (flat out), the time to gain speed weighs the pull it lacks
@@ -233,6 +306,15 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
         t->gas = x * x;
         float xh = fmaxf(0, t->rpm - plateau) / fmaxf(1, o->hi_g[g] - plateau), xl = fmaxf(0, plateau - t->rpm) / fmaxf(1, plateau - idle);
         t->rpmc = c.w_rpm * hold * (xh * xh + u * xl * xl);
+        // cruise cost: a light load at a steady speed (a cruise, a level road) is best in the highest gear that has the torque in hand, so revs over that
+        // cruise rpm cost, in proportion to how light and how steady the load is (not while accelerating or coasting)
+        // A gear that holds the load only with little reserve (it needs over 60-85 % of its own full-throttle pull) gets no such advantage: it
+        // pays as if its revs were far over the cruise rpm. The reserve is torque against weight: a strong engine with a light load keeps its
+        // overdrive, a weak one at 44 t does not lug in it (sim 29-10: Eco at 44 t, DC13 370 / DTI11 380, throttle over 0.8 under the plateau)
+        if (c.cr_w > 0 && w_light > 0 && !coast)
+            t->rpmc += c.cr_w * w_light * (1 - gs_smooth(0.02f, 0.08f, a_d)) *
+                       fmaxf(fminf(1.5f, fmaxf(0, t->rpm - r_cr) / fmaxf(1, plateau - idle)), c.cr_res > 0 ? 1.5f * gs_smooth(c.cr_res, c.cr_res + 0.25f,
+                             fmaxf(t->share, c.cr_fres > 0 && f1 > 1 ? c.cr_fres * (g > cur ? 1 + c.learn_res : 1) / f1 : 0.0f)) : 0.0f);   // (the reserve against the hill memory too)
         // landing cost: while the truck is asked to accelerate, a gear that sits just above the floor (the lowest rpm the window gives) pays, in
         // proportion to the power asked (u) and to how much speed is asked (a_d, from 0.05 to 0.4 m/s2): cruising, holding a speed and coasting
         // make it nothing (ride 7: the cruise at 83 km/h is meant to sit in 12 at 990 rpm; a climb is the lugging term's and the floor's). The zone is the whole way from the floor up to the upshift point (the
@@ -275,14 +357,18 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
     // the step up would give meanwhile (Eco, with its dearer shifts, waits most). Only while at least a_min is asked: holding a speed
     // or creeping up to it, the score alone decides (the time to gain speed means little there)
     if (c.time_obj && o->best > cur && !coast && a_d >= c.a_min) {
+        float hu[GS_MAX + 1];   // where each gear will be shifted up: the upshift point the caller gives, never over the window's top
+        for (int g = 0; g <= GS_MAX; g++) hu[g] = g <= n && c.up_g[g] > 0 ? fminf(c.up_g[g], o->hi_g[g]) : o->hi_g[g];
         float v_s[GS_MAX + 1] = {}, v_t = v + fmaxf(5 / 3.6f, vehicle_kmh_at(cur, o->hi_g[cur]) / 3.6f - v), loss = f_res / m * ts;
+        if (c.v_target > v_t) v_t = c.v_cap > 0 ? fmaxf(v_t, fminf(c.v_target, c.v_cap)) : c.v_target;   // (to where the truck is going: a skip that saves a shift on the way wins it)
         for (int g = cur + 2; g <= g1; g++) {
             if (o->t[g].ok || o->t[g].rpm > o->hi_g[g]) continue;
             for (float vs = v + 0.25f; vehicle_rpm_at(cur, vs) < o->hi_g[cur] - 50; vs += 0.25f) {
                 float va = fmaxf(0.5f, vs - loss), r = vehicle_rpm_at(g, va), f1 = vehicle_force_at(g, va, 1.0f) / (1 + c.learn_res);
                 float vp = vs + a_d * 3 * c.horizon;
                 if (c.v_cap > 0) vp = fminf(vp, fmaxf(c.v_cap, 0.5f));
-                if (r >= o->lo + c.hyst && r * (vp / va) >= r_min + f_hyst && (!now_up || r >= r_min) && (fminf(need, f1) - f_res) / m >= fminf(c.a_min, a_d)) {
+                float rm = rmin_g(f1 > 1 ? need / f1 : 9.0f);
+                if (r >= o->lo + c.hyst && r * (vp / va) >= rm + f_hyst && (!now_up || r >= rm) && (fminf(need, f1) - f_res) / m >= fminf(c.a_min, a_d)) {
                     v_s[g] = vs; v_t = fmaxf(v_t, vs + 5 / 3.6f);
                     break;
                 }
@@ -293,15 +379,24 @@ static inline void gs_eval(gs_out *o, int cur, int n, float v, float need, float
         for (int g = cur + 1; g <= g1; g++) {
             gs_term *t = &o->t[g];
             if (!t->ok) continue;
-            t->t_gain = gs_gain_time(g, n, v_after, v_t, a_d, f_res, o->hi_g[g], c.k_shift, ts);
+            t->t_gain = gs_gain_time(g, n, v_after, v_t, a_d, f_res, hu, ts);
             float j = c.w_shift * u * t->t_gain + t->rpmc;
             if (j < jb) { jb = j; pick = g; }
+        }
+        // and staying: with the target known, the gear of now may get there without the shift (or with the same shifts later), the shift
+        // now then only costs its seconds (sim 29-10, Volvo D16 750 at 18 t, pedal 0.5 in Power: 12 -> 13 at 76 km/h, 80 the goal)
+        // (the gear of now may run to the window's top: whether to shift before it is what is being asked)
+        if (c.v_target > 0 && o->cur_ok) {
+            float hs[GS_MAX + 1];
+            memcpy(hs, hu, sizeof hs); hs[cur] = o->hi_g[cur];
+            float j = c.w_shift * u * (gs_gain_time(cur, n, v, v_t, a_d, f_res, hs, ts) - ts) + o->t[cur].rpmc;
+            if (j < jb) { jb = j; pick = cur; }
         }
         for (int g = cur + 2; g <= g1 && pick && o->cur_ok; g++) {
             if (!(v_s[g] > 0)) continue;
             float tw = 0;   // in this gear up to v_s
             for (float x = v; x < v_s[g]; x += 0.25f) tw += fminf(0.25f, v_s[g] - x) / fmaxf(0.02f, fminf(a_d, (vehicle_force_at(cur, x, 1.0f) - f_res) / m));
-            float j = c.w_shift * u * (tw + gs_gain_time(g, n, fmaxf(0.5f, v_s[g] - loss), v_t, a_d, f_res, o->hi_g[g], c.k_shift, ts)) + o->t[cur].rpmc;
+            float j = c.w_shift * u * (tw + gs_gain_time(g, n, fmaxf(0.5f, v_s[g] - loss), v_t, a_d, f_res, hu, ts)) + o->t[cur].rpmc;
             if (j < jb) { jb = j; pick = cur; o->wait = g; }
         }
         if (pick && pick != o->best) { o->second = o->best; o->best = pick; }

@@ -3,7 +3,8 @@ DazDrive @VERSION@
 
 One plugin for Euro Truck Simulator 2 that makes the game's own systems behave more like the real
 thing. It adds nothing to the screen and changes nothing in your save: it only adjusts how the
-automatic gearbox, the cruise control, the lane assist and the low-speed clutch behave.
+automatic gearbox, the cruise control, the lane assist, the brakes and the low-speed clutch behave,
+and at a standstill it can set the parking brake and stop the engine.
 Remove the DLL and everything is stock again.
 
 Project page:   https://github.com/DamienDutch/dazdrive
@@ -24,26 +25,17 @@ PLEASE READ FIRST
 WHICH GAME
 ----------
 
-ETS2 only, and only the Steam beta branch temporary_1_60 (ETS2 1.60). The regular Steam version
-(1.61) is NOT supported yet. To switch: Steam > right-click Euro Truck Simulator 2 > Properties >
-Betas > pick temporary_1_60. No access code is needed. Steam then downloads the older build (a few
-GB); you are on it when the library shows [temporary_1_60] behind the game's name.
+ETS2 1.62, the regular Steam version. No beta branch needed. DazDrive writes nothing into profiles
+or saves.
 
-A save made with a newer game version may not load in an older one, so copy your profile folder
-(Documents\Euro Truck Simulator 2) somewhere safe first. If your profile is missing or will not load
-on 1.60, make a new profile for the test. Your normal profile is untouched and is back when you set
-the beta to "None" again. DazDrive writes nothing into profiles or saves.
-
-Mods: map and truck mods are fine as long as they work on 1.60 (ProMods: the version made for 1.60).
-Only another automatic-gearbox plugin conflicts (see KNOWN LIMITS).
+Mods: map and truck mods are fine. Only another automatic-gearbox plugin conflicts (see KNOWN
+LIMITS).
 
 On any other version the plugin should find nothing to hook and do nothing. It says so in
 plugins\dazdrive\dazdrive.log and in the game's own game.log.txt. That is not a guarantee, though.
-If Steam ever drops the beta branch, the game goes to 1.61 and DazDrive goes quiet: the dash shows A
-again. That is expected until the 1.61 version is out.
+After a game update DazDrive may go quiet (the dash shows A again) until a new version is out.
 
-American Truck Simulator is not supported in this release: the plugin logs "not supported" and
-stays inactive.
+American Truck Simulator 1.62 loads it too, but it is barely tested there. Use ETS2 for now.
 
 Multiplayer:
 - Singleplayer is what it is made for.
@@ -55,7 +47,6 @@ Multiplayer:
 INSTALL (2 minutes)
 -------------------
 
-0. Put the game on the Steam beta temporary_1_60 (see above).
 1. Close the game.
 2. Unzip this file.
 3. Copy what is inside the "plugins" folder of the zip into <ETS2>\bin\win_x64\plugins\
@@ -71,11 +62,12 @@ INSTALL (2 minutes)
    control and emergency braking switched on there too: DazDrive uses their radar.
 5. Start the game. Every start shows a warning about plugins ("advanced SDK features"): click OK,
    that is normal.
-6. Check it works: the gear display on the dashboard shows D (or E / S) instead of A, and
+6. Check it works: the gear display on the dashboard shows D (or E / P) instead of A, and
    plugins\dazdrive\dazdrive.log has a line with "applied". Nothing else appears on screen. Still A?
    Read WHICH GAME.
 
-That is all: the included dazdrive.ini is the standard preset (see WHAT IS ON BY DEFAULT).
+That is all: the included dazdrive.ini is the standard preset, the developer's own setup (see WHAT
+IS ON BY DEFAULT).
 
 Updating: close the game, then copy the new files over the old ones. That replaces your
 dazdrive.ini, so keep a copy of yours first and put it back, or make a new one with the setup page.
@@ -90,10 +82,11 @@ SETTINGS: THE SETUP PAGE
 
 - Open plugins\dazdrive\dazdrive-setup.html in any browser (works offline, installs nothing).
 - It walks you through it step by step. First it asks for your current dazdrive.ini: open it and
-  you only change what you want. Then pick how smart your truck is (~1995, ~2000, ~2010, ~2015,
-  ~2020 or 2024), switch single features and, if you like, fine-tune each module: Presets (a few
-  good choices), Advanced (a handful of easy controls) or Custom (every raw setting). There is no
-  button setup: DazDrive uses the keys you already bound in the game (see CONTROLS).
+  you only change what you want. Then keep the DazDrive setup (the ini in this zip) or pick how
+  smart your truck is (~1995, ~2000, ~2010, ~2015, ~2020 or 2024), switch single features and, if
+  you like, fine-tune each module: Presets (a few good choices), Advanced (a handful of easy
+  controls) or Custom (every raw setting). There is no button setup: DazDrive uses the keys you
+  already bound in the game (see CONTROLS).
 - Press "Save dazdrive.ini", take it from your Downloads and put it next to the page
   (overwrite the old one).
 - Restart the game.
@@ -102,34 +95,41 @@ SETTINGS: THE SETUP PAGE
 WHAT IS ON BY DEFAULT
 ---------------------
 
-The dazdrive.ini in this zip matches the year "~2010 (Modern)" on the setup page. The stage says how
-much a feature has been driven: stable = tested a lot; beta = light testing, not confirmed
-yet; experimental = not proven yet.
+The dazdrive.ini in this zip is the developer's own setup: the "DazDrive" tile on the setup page. For
+the earlier, more careful standard, pick the ~2010 year there. The stage says how much a feature has
+been driven: stable = tested a lot; beta = light testing, not confirmed yet; experimental = not
+proven yet. The standard setup has some beta and experimental features on.
 
 Short names: ACC = adaptive cruise control, AEB = automatic emergency braking, ISA = intelligent
 speed assistance (following the speed limits), PCC = predictive cruise control.
 
 ON in the included ini
-  TrueShift (the gearbox)        stable
+  TrueShift (the gearbox)        beta (rewritten in 0.7)
+  Torque pedal                   beta (new in 0.7)
   Eco-roll                       stable
   Smooth stop                    stable
   SteadyCruise                   stable
   Downhill speed control         stable
-  Hill start assist              stable
+  Hill start assist              stable (not used while Auto Hold is on)
   Emergency stop signal          stable
   AEB (emergency braking)        stable
-  Rollover protection            beta
+  ACC (DazDrive's own)           beta
+  Stop & Go                      beta
+  Auto Hold                      beta
+  Follow speed limits (ISA)      beta
+  Smooth start                   experimental
+  Deceleration assist            beta
+  Brake pedal                    experimental
+  Start-stop and parking brake   experimental
+  Lane keeping with the cruise   experimental
+  Adjustable speed limiter       experimental
 
 OFF in the included ini (switch on with the setup page; the year that turns it on is in brackets)
+  Rollover protection            beta           (~2010)
   Gearbox looks ahead            stable         (~2015)
   Cruise looks ahead (PCC)       stable         (~2015)
   Slow for bends                 beta           (~2020)
-  ACC                            beta           (~2015)
-  Stop & Go                      beta           (~2015)
-  Auto Hold                      beta           (~2015)
-  Follow speed limits (ISA)      beta           (2024)
   Crawl mode                     experimental   (~2020)
-  Smooth start                   experimental   (switch on with the setup page only)
   JunctionSense                  experimental   (~2020)
   Lane centering                 experimental   (~2020)
 
@@ -141,52 +141,87 @@ Every module can be switched off in dazdrive.ini.
 
 TrueShift (gearbox)
   The game's automatic shifts like a real truck automatic: it picks the gear from engine torque,
-  load, grade and the route ahead instead of fixed rpm. Lower rpm when it can, learns when an
-  upshift does not pull, skips gears when the box is slow, kickdown, engine brake and retarder
-  aware, clutch opens near idle when you brake to a stop (Smooth stop). Modes Eco, Normal (D),
-  Power, M (manual: every shift is yours, like Volvo or Mercedes; a warning tone when the wheels
+  load and grade instead of fixed rpm. Lower rpm when it can, skips gears only when it pays off,
+  kickdown, engine brake and retarder aware, clutch opens near idle when you brake to a stop (Smooth
+  stop). Modes Eco (diesel first), Normal (D, in between), Power (time first), M (manual: every shift is yours, like Volvo or Mercedes; a warning tone when the wheels
   push the engine over its limit). Eco-roll puts it in neutral on gentle descents with the pedal
   released; with the cruise on it rolls only with "Cruise looks ahead" (the ~2015 year), which knows
   how long the roll lasts. With "Gearbox looks ahead" it also uses the navigation route to pick gears
   for climbs and tops.
 
+Torque pedal
+  The throttle asks for a share of what the truck can pull at this speed: half throttle is half of
+  what it can pull, loaded or empty, in any gear. Not with the cruise on, not in reverse.
+
 Cruise
   SteadyCruise: a calm cruise throttle (no bursts after shifts, no hunting). Extras, each with its
   own switch: cruise looks ahead (PCC), slowing for bends, JunctionSense (junctions and
   roundabouts, from the navigation route), downhill speed control (engine brake and retarder hold
-  the set speed), emergency stop signal, hill start assist, AEB, ACC with Stop & Go, Auto Hold and
-  following the speed limits (ISA).
+  the speed on descents), emergency stop signal, hill start assist, AEB, ACC with Stop & Go, Auto
+  Hold and following the speed limits (ISA).
   - Cruise + / -: a tap changes the set speed by 5 km/h, holding it steps 1 km/h at a time. A lower
     set speed is reached by easing down.
-  - ACC distances: 1 = 1.0 s, 2 = 1.25 s, 3 = 1.5 s. It follows the vehicle ahead smoothly, brakes
-    early and stays calm when someone cuts in. With Stop & Go it also stops behind a stopping
-    vehicle and drives off with it by itself (the "Real truck" preset on the setup page asks for
-    resume or the throttle after a longer stop instead).
-  - AEB: warning tones, then partial braking, then full braking. It replaces the game's own
-    emergency braking, which empties the brake air. It needs the game's radar, so leave an ACC
-    distance, blind spot or emergency braking switched on in the game's options.
-  - Rollover protection (beta): when the truck starts to sway in a bend (a growing sideways swing,
-    also when you drive by hand) a tone, then no throttle, then a soft or firm brake until it is
-    calm again. It does not judge a single bend by a fixed limit.
+  - Lowest speeds: the cruise can be switched on from 5 km/h (the game: 30), and the set speed
+    never goes below 20 km/h.
+  - ACC distances: 1 = 0.9 s, 2 = 1.15 s, 3 = 1.4 s (the "Dutch" preset on the setup page; its other
+    presets are wider). It follows the vehicle ahead smoothly, brakes early and stays calm when
+    someone cuts in. With Stop & Go it also stops behind a stopping vehicle and drives off with it
+    by itself after a stop under 2 s; after a longer stop, press resume or the throttle.
+  - AEB: warning tones, then firm braking to a stop behind the vehicle ahead. It steps in by the
+    deceleration it would take to stop short of it, so you stay in charge until late (mode
+    required_deceleration in [cruise.aeb]; time_to_collision gives warning, partial and full braking
+    by time instead). It replaces the game's own emergency braking, which empties the brake air. It
+    needs the game's radar, so leave an ACC distance, blind spot or emergency braking switched on in
+    the game's options.
+  - Rollover protection (beta, off in the included ini): when the truck starts to sway in a bend (a
+    growing sideways swing, also when you drive by hand) a tone, then no throttle, then a soft or
+    firm brake until it is calm again. It does not judge a single bend by a fixed limit.
   - Emergency stop signal: the hazards flash after braking very hard from above 50 km/h, go off
     again if you brake softer before the stop, and stay on after a full stop.
-  - Auto Hold: stays braked after a stop until you give gas.
-  - ISA: the cruise set speed follows the signs (plus 3 km/h). Setting the speed keeps your current
-    speed, resume goes to the limit. On or off is remembered.
+  - Auto Hold: stays braked after a stop until you give gas. After 60 s the parking brake goes on
+    and the service brake lets go (no air spent); gas or resume releases it.
+  - ISA: the cruise set speed follows the signs (plus 3 km/h). It starts on in the included ini.
+    Setting the speed keeps your current speed, resume goes to the limit. On or off is remembered.
+  - Speed limiter (experimental, comes with the "layers" cruise engine, on in the included ini):
+    three quick presses of the cruise on/off key switch the cruise into an adjustable speed limiter,
+    three more switch back. The pedal drives, the throttle is held so the speed settles on the limit,
+    and it never brakes. + and - step the limit.
+
+Braking
+  Deceleration assist: a retarder or engine-brake lever step is a share of what the truck can brake
+  now (step k of n is k/n of it, the top step is all of it), and the service brake adds what they
+  lack, also across gearbox shifts. Stop assist: when you lift off at low speed and the gearbox opens
+  the clutch, the truck rolls out to a stop on its own resistance (on a descent the brake only keeps
+  the speed from rising) and Auto Hold holds it there.
+  Brake pedal (experimental): the pedal asks for a deceleration, linear over the travel and the same
+  at any load; the first part brakes with the retarder, the service brake adds the rest. It learns
+  the truck's brakes first; until then the pedal is the game's.
 
 Lane
-  Lane centering that sways less. Mode 0 leaves the game's assist alone, mode 2 is a calmer law
-  that learns how your wheel responds (experimental). It steers while the cruise control is on:
-  switching the cruise on switches it on, like a travel assist. Keep your hands near the wheel: it
-  is an assistant, not an autopilot.
+  Lane keeping with the cruise: in the included ini the game steers as always, but only while the
+  cruise control is on. The lane key with the cruise off switches the cruise on (at the speed limit;
+  without a known limit, at the last set speed or your speed) and lane keeping with it. The cruise
+  going off (key, brake, AEB, a junction) switches lane keeping off. Resume or set alone leave it
+  off. needs_cruise_enabled=false in [lane.activation] gives the game's own behavior back.
+  Lane centering that sways less (experimental, off): mode 0 leaves the game's steering alone, mode 2
+  is a calmer law that learns how your wheel responds. Keep your hands near the wheel: it is an
+  assistant, not an autopilot.
 
 Creep
   Crawl / maneuver mode: in gears 1, 2 and R the clutch slips at idle so the truck crawls by
   itself, the brake lowers the speed, the throttle asks for a bit more.
-  Smooth start (experimental, off): when you pull away in a forward gear from a standstill, DazDrive
-  closes the clutch itself. The engine rises to a speed that follows the pedal, the clutch slips to
-  hold it until the wheels catch up, then closes gently. A shift, lifting off, the brake or about
-  14 km/h ends it and the game takes over. Works with or without crawl mode.
+  Smooth start (experimental, on in the included ini): when you pull away in a forward gear from a
+  standstill, DazDrive closes the clutch itself. The engine rises to a speed that follows the
+  pedal, the clutch slips to hold it until the wheels catch up, then closes gently. A shift, lifting
+  off, the brake or about 14 km/h ends it and the game takes over. Works with or without crawl mode.
+
+Standstill
+  Start-stop (experimental): while Auto Hold holds the truck at a standstill, the engine switches
+  off after 3 s. It starts again by itself on the throttle, when the vehicle ahead drives off, when
+  the air runs low, or after 3 minutes at the latest.
+  Automatic parking brake (experimental): switch the engine off while standing and the parking
+  brake goes on; it comes off when you drive off.
+  Both press the game's own controls.
 
 
 EDITING THE INI BY HAND
@@ -205,7 +240,7 @@ game (Options > Controls), on a keyboard, a wheel or a controller. Check that th
 the Controls list for "Cruise" and "Adaptive"), otherwise the part that needs them does nothing
 (everything else keeps working):
 
-  Cruise control: on/off, + and -, resume   Needed for every cruise feature (SteadyCruise, ACC, AEB, ...)
+  Cruise control: on/off, + and -, resume   Needed for every cruise feature (SteadyCruise, ACC, AEB, lane keeping, ...)
   Adaptive Cruise Control Mode              Changes the ACC distance; held for a second: speed-limit
                                             following (ISA) on/off. Without it: no distance change, no ISA switch
   Adaptive Automatic Transmission Mode      Steps the gearbox mode Eco / Normal / Power / M; held at a
@@ -215,28 +250,31 @@ the Controls list for "Cruise" and "Adaptive"), otherwise the part that needs th
 
 - Gearbox mode: the game's own key for the adaptive automatic ("Adaptive Automatic Transmission
   Mode") steps Eco / Normal / Power / M. TrueShift follows it. A shift hint (up or down) is an
-  ordinary hint: the gear it picks is held for 10 s (hint_hold_s).
-- Speed-limit following (ISA, beta): it starts off. While driving, hold the game's ACC distance key
-  ("Adaptive Cruise Control Mode") for about a second to switch it on or off. A rising or falling
-  pair of tones tells you which way it went, the distance stays as it was, and the choice is
-  remembered. If your cruise speed suddenly follows the signs, you held that key: hold it again.
+  ordinary hint: the gear it picks is held for 10 s (hint_hold_seconds in [trueshift.manual]).
+- Speed-limit following (ISA, beta): it starts on in the included ini. While driving, hold the
+  game's ACC distance key ("Adaptive Cruise Control Mode") for about a second to switch it off or on.
+  A falling or rising pair of tones tells you which way it went, the distance stays as it was, and
+  the choice is remembered. If your cruise speed suddenly stops following the signs, you held that
+  key: hold it again.
 - Crawl mode (if enabled in the setup page): at a standstill hold the game's gearbox-mode key for
   about a second.
+- Speed limiter (experimental): three quick presses of the cruise on/off key switch between the
+  cruise and the speed limiter (see "Cruise" above). Pressed by accident? Press it three times again.
 - Cruise + / - and the ACC distance key: see "Cruise" above. Nothing else needs a button.
 
 DASHBOARD LETTERS AND TONES
 ---------------------------
 
 The plugin writes a letter on the dashboard's gear indicator and plays short, quiet tones
-(tones=0 in the [trueshift] section silences the mode tones, dash_letter=0 stops the mode letter,
-tone=0 in [lane] the lane tones).
+(tones_enabled=false in [trueshift.general] silences the mode tones, dashboard_letter_enabled=false
+there stops the mode letter, tone_enabled=false in [lane.general] the lane tones).
 
 Letters
-  D / E / S / M   Gearbox mode: Normal / Eco / Power (Sport) / Manual (A in reverse)
+  D / E / P / M   Gearbox mode: Normal / Eco / Power / Manual (A in reverse)
   1 / 2 / 3       ACC distance just chosen: close / medium / far (for 1.5 s).
-                  C = plain cruise, ACC off. acc_letter=1 shows A instead
+                  C = plain cruise, ACC off. dashboard_letter=letter_a in [cruise.acc] shows A instead
   I / X           Speed-limit following (ISA) on / off (1.5 s). X also for crawl and lane off
-  L               Lane centering switched on (1.5 s)
+  L               Lane keeping switched on (1.5 s)
   C               Crawl mode is on (steady)
   B               Auto Hold / hill hold is braking (steady)
 
@@ -245,7 +283,7 @@ Tones
   low / middle / rising pair / two equal bells    Gearbox mode Eco / Normal / Power / M
   one, two or three soft tones (slide down: off)  ACC distance close / medium / far (off)
   rising / falling pair of bells                  Feature switched on / off
-                                                  (speed-limit following, lane centering, crawl)
+                                                  (speed-limit following, lane keeping, crawl)
   three short pips                                AEB warning; also the rollover protection's tone
   a quick run of alternating pulses               AEB is braking (faster and harsher when it brakes fully)
   one steady tone (M mode)                        The wheels push the engine over its limit: shift up
@@ -254,13 +292,13 @@ Tones
 KNOWN LIMITS
 ------------
 
-- ETS2 on the Steam beta temporary_1_60 only. A game update can stop the plugin from finding its
+- ETS2 1.62 only. A game update can stop the plugin from finding its
   hooks; it should then log why and do nothing (nothing is changed in the game's files).
 - Route features (predictive shifting, bends, junctions, roundabouts, descents) need an active
   navigation route. Without one the plugin falls back to the live grade and stays careful.
   Roundabout detection is a heuristic and not perfect.
 - Lane centering mode 2 is experimental and only tuned on one truck/wheel; the standard
-  preset keeps the game's own.
+  preset keeps the game's own steering.
 - Trucks the plugin cannot model are left to the game's own automatic, with a line in the log:
   electric trucks, 1-2 gear drivelines, torque-converter automatics (it notices when the engine
   rpm does not follow the road speed). Engines with a second torque curve (multi-torque mods) work
@@ -295,8 +333,8 @@ log of the previous session is kept as dazdrive.prev.log, so you do not have to 
 before you start the game again.
 
 If something felt wrong but there is no incident file, say so in the issue: that is useful to know
-too. The betas ship with "Bug hunt" on (log_level=2 and trace=1 in [trueshift], [cruise] and
-[creep]), so the .csv files in the same folder (trueshift.csv, cruise.csv, lane.csv, creep.csv)
+too. The betas ship with "Bug hunt" on (level=traces in [core.logging] and csv_trace_enabled=true in
+[trueshift.general], [cruise.general] and [crawl.general]), so the .csv files in the same folder (trueshift.csv, cruise.csv, lane.csv, creep.csv)
 already have the data: zip them and send them along (a few MB each). The first full release will
 ship with logging quiet; "Quiet" under Logging on the setup page does that now.
 
